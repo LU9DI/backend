@@ -12,3 +12,4 @@ export async function checkQuota(plan, type) {
     await db.run(`INSERT INTO usage (plan, month, ${type}) VALUES (?, ?, 1)
      ON CONFLICT(plan, month) DO UPDATE SET ${type} = ${type} + 1`, [plan, month]);
 }
+

@@ -1,12 +1,6 @@
 /**
- * Recuperação de senha por e-mail + cadastro de senha/e-mail no trial.
- *
- * Rotas:
- *   POST /api/auth/forgot-password  { cnpj?, email? }
- *   POST /api/auth/reset-password   { token, nova_senha }
- *   POST /api/auth/register-trial-user  (opcional se trial já criou empresa)
- *
- * Também exporta ensureAuthColumns e createUsuarioForEmpresa para uso no trial.
+ * Recuperação de senha por e-mail (clientes / empresas).
+ * A conta ADMIN do SaaS NÃO usa este fluxo — ver adminPasswordReset.ts.
  */
 import type { Express, Request, Response } from 'express';
 import type { Database } from 'sqlite';
@@ -14,6 +8,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
 import { enviarEmail, smtpConfigured } from './mailer.js';
+import { validarSenhaEmpresa } from './passwordPolicy.js';
 
 const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(
   /\/$/,
@@ -28,6 +23,13 @@ function emailValido(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+function isAdminAccount(usuario: any): boolean {
+  if (!usuario) return false;
+  const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
+  const email = String(usuario.email || '').toLowerCase();
+  return usuario.empresa_id === 'admin' || email === adminMail;
+}
+
 export async function ensureAuthColumns(db: Database) {
   const cols = (await db.all(`PRAGMA table_info(usuarios)`)).map((c: any) => c.name);
   if (!cols.includes('email')) {
@@ -36,7 +38,7 @@ export async function ensureAuthColumns(db: Database) {
   try {
     await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios(email)`);
   } catch {
-    /* pode falhar se houver nulls duplicados — ok */
+    /* ok */
   }
 
   await db.exec(`
@@ -52,7 +54,6 @@ export async function ensureAuthColumns(db: Database) {
   `);
 }
 
-/** Cria usuário dono/admin da empresa (trial ou pós-checkout). */
 export async function createUsuarioForEmpresa(
   db: Database,
   opts: {
@@ -66,7 +67,9 @@ export async function createUsuarioForEmpresa(
   await ensureAuthColumns(db);
   const email = opts.email.trim().toLowerCase();
   if (!emailValido(email)) throw new Error('E-mail inválido.');
-  if (opts.senha.length < 6) throw new Error('A senha deve ter pelo menos 6 caracteres.');
+
+  const pol = validarSenhaEmpresa(opts.senha);
+  if (!pol.ok) throw new Error(pol.error);
 
   const existenteEmail = await db.get('SELECT id FROM usuarios WHERE email = ?', [email]);
   if (existenteEmail) throw new Error('Este e-mail já está em uso.');
@@ -94,7 +97,6 @@ const resetLimiter = rateLimit({
 });
 
 export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
-  /** Solicita e-mail com link de redefinição */
   app.post('/api/auth/forgot-password', forgotLimiter, async (req: Request, res: Response) => {
     try {
       const db = getDb();
@@ -105,7 +107,6 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
         .trim()
         .toLowerCase();
 
-      // Resposta genérica (não revela se existe conta)
       const okMsg =
         'Se os dados estiverem corretos, você receberá um e-mail com instruções para redefinir a senha.';
 
@@ -115,7 +116,15 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
       } else if (cnpj.length === 14) {
         usuario = await db.get('SELECT * FROM usuarios WHERE cnpj = ?', [cnpj]);
       } else {
-        return res.status(400).json({ error: 'Informe o e-mail ou o CNPJ cadastrado.' });
+        return res.status(400).json({ error: 'Informe o e-mail cadastrado.' });
+      }
+
+      if (usuario && isAdminAccount(usuario)) {
+        return res.json({
+          success: true,
+          message:
+            'Contas administrativas usam recuperação protegida em /admin/login (chave do servidor).',
+        });
       }
 
       if (!usuario || !usuario.email) {
@@ -124,7 +133,7 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
 
       const token = crypto.randomBytes(32).toString('hex');
       const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-      const expira = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1h
+      const expira = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
       await db.run(
         `INSERT INTO password_resets (id, usuario_id, token_hash, expira_em, usado)
@@ -161,7 +170,6 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
     }
   });
 
-  /** Define nova senha com token do e-mail */
   app.post('/api/auth/reset-password', resetLimiter, async (req: Request, res: Response) => {
     try {
       const token = String(req.body.token || '').trim();
@@ -170,8 +178,10 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
       if (!token || token.length < 20) {
         return res.status(400).json({ error: 'Token inválido.' });
       }
-      if (nova.length < 6) {
-        return res.status(400).json({ error: 'A nova senha deve ter pelo menos 6 caracteres.' });
+
+      const pol = validarSenhaEmpresa(nova);
+      if (!pol.ok) {
+        return res.status(400).json({ error: pol.error });
       }
 
       const db = getDb();
@@ -192,6 +202,13 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
         return res.status(400).json({ error: 'Link expirado. Solicite uma nova recuperação.' });
       }
 
+      const usuario = await db.get('SELECT * FROM usuarios WHERE id = ?', [row.usuario_id]);
+      if (usuario && isAdminAccount(usuario)) {
+        return res.status(403).json({
+          error: 'Use /admin/login para redefinir a senha do administrador.',
+        });
+      }
+
       const hash = await bcrypt.hash(nova, 12);
       await db.run('UPDATE usuarios SET senha_hash = ? WHERE id = ?', [hash, row.usuario_id]);
       await db.run('UPDATE password_resets SET usado = 1 WHERE id = ?', [row.id]);
@@ -203,3 +220,4 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
     }
   });
 }
+

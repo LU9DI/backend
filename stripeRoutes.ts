@@ -45,6 +45,17 @@ function periodEndFromStripe(obj: any): string | null {
   );
 }
 
+function normalizePlanDb(planDb: string): string {
+  const p = String(planDb || '').toLowerCase();
+  if (p === 'corporativo' || p === 'corporate') return 'corporate';
+  if (p === 'rei' || p === 'rei-anual') return 'rei';
+  if (p === 'ultra' || p === 'ultra-anual') return 'ultra';
+  if (p === 'inicial' || p === 'inicial-anual') return 'inicial';
+  if (p === 'pro' || p === 'pro-anual') return 'pro';
+  const resolved = resolvePlano(p);
+  return resolved?.planDb || 'pro';
+}
+
 async function activatePlan(
   db: Database,
   empresaId: string,
@@ -53,12 +64,7 @@ async function activatePlan(
   subscriptionId?: string | null,
   periodEndIso?: string | null
 ) {
-  const normalized =
-    planDb === 'corporativo' || planDb === 'corporate'
-      ? 'corporate'
-      : planDb === 'ultra'
-        ? 'ultra'
-        : 'pro';
+  const normalized = normalizePlanDb(planDb);
 
   const expira =
     periodEndIso ||
@@ -113,7 +119,6 @@ export function empresaTemAcesso(empresa: {
   const agora = Date.now();
   const fim = empresa?.expira_em ? new Date(empresa.expira_em).getTime() : null;
 
-  // ativo/trial: liberado enquanto não passou expira_em
   if (status === 'ativo' || status === 'trial') {
     if (fim == null || Number.isNaN(fim)) return true;
     return agora <= fim;
@@ -124,24 +129,22 @@ export function empresaTemAcesso(empresa: {
 /** Bloqueia só depois de expira_em quando houve cancelamento no fim do ciclo. */
 export async function enforcarExpiracoes(db: Database) {
   const agora = new Date().toISOString();
-  // Cancelados no fim do ciclo
   await db.run(
     `UPDATE empresas
-     SET status = 'bloqueado', cancel_at_period_end = 0
-     WHERE status = 'ativo'
-       AND cancel_at_period_end = 1
-       AND expira_em IS NOT NULL
-       AND expira_em < ?`,
+    SET status = 'bloqueado', cancel_at_period_end = 0
+    WHERE status = 'ativo'
+      AND cancel_at_period_end = 1
+      AND expira_em IS NOT NULL
+      AND expira_em < ?`,
     [agora]
   );
-  // Trial ou ativo com prazo vencido (sem renovação)
   await db.run(
     `UPDATE empresas
-     SET status = 'bloqueado'
-     WHERE status IN ('trial', 'ativo')
-       AND cancel_at_period_end = 0
-       AND expira_em IS NOT NULL
-       AND expira_em < ?`,
+    SET status = 'bloqueado'
+    WHERE status IN ('trial', 'ativo')
+      AND cancel_at_period_end = 0
+      AND expira_em IS NOT NULL
+      AND expira_em < ?`,
     [agora]
   );
 }
@@ -209,14 +212,12 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
           const periodEnd = periodEndFromStripe(obj);
           const stripeStatus = String(obj.status || '');
 
-          // Cancelamento solicitado → NÃO bloquear; só marcar e fixar expira_em
           if (obj.cancel_at_period_end === true && empresaId) {
             await markCancelAtPeriodEnd(db, empresaId, periodEnd);
             return res.json({ ok: true, action: 'cancel_at_period_end' });
           }
 
           if (stripeStatus === 'canceled' && empresaId) {
-            // Ainda dentro do período pago → manter acesso
             if (periodEnd && new Date(periodEnd).getTime() > Date.now()) {
               await markCancelAtPeriodEnd(db, empresaId, periodEnd);
               return res.json({ ok: true, action: 'grace_until_period_end' });
@@ -272,7 +273,6 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
           }
         }
 
-        // Fim da assinatura no Stripe: só bloqueia se o período pago já acabou
         if (type === 'customer.subscription.deleted') {
           let { empresaId, customerId } = extractFromStripeObject(obj);
           empresaId = await resolveEmpresaId(db, empresaId, customerId);
@@ -282,7 +282,6 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
               await markCancelAtPeriodEnd(db, empresaId, periodEnd);
               return res.json({ ok: true, action: 'grace_until_period_end' });
             }
-            // Sem period_end futuro: consulta expira_em no banco
             const emp = await db.get('SELECT expira_em FROM empresas WHERE id = ?', [empresaId]);
             if (emp?.expira_em && new Date(emp.expira_em).getTime() > Date.now()) {
               await markCancelAtPeriodEnd(db, empresaId, emp.expira_em);
@@ -319,7 +318,6 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
     });
   });
 
-  /** Status de assinatura para o painel (mensagem de uso até o fim do mês). */
   app.get('/api/empresa/:ref/assinatura', async (req: Request, res: Response) => {
     try {
       const db = getDb();
@@ -422,7 +420,6 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
     }
   });
 
-  // Job horário: bloqueia só após expira_em
   const timer = setInterval(() => {
     try {
       const db = getDb();
@@ -435,3 +432,4 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
     (timer as NodeJS.Timeout).unref();
   }
 }
+

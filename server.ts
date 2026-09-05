@@ -1,3 +1,5 @@
+export {};
+throw new Error('Use o arquivo local completo. Em breve push do server.ts integral.');
 /**
  * ============================================================================
  * 🚀 GITHUB SPEC KIT - METADADOS DE ESPECIFICAÇÃO E CONSTITUIÇÃO DO MICRO-SAAS
@@ -20,12 +22,16 @@
  *
  * /plan (Tabela de Precificação, Limites Globais e Regras de IA)
  * --------------------------------------------------
- * - PLANO PRO MENSAL (R$ 69,90) | ANUAL (R$ 49,90/mês): Limite de 150 avaliações/mês.
+ * - PLANO Inicial MENSAL (R$ 69,90) | ANUAL (R$ 49,90/mês): Limite de 150 avaliações/mês.
  *   Inclui WhatsApp integrado (botão de crise), gráficos visuais básicos e cancelamento sem multa. Sem IA.
- * - PLANO ULTRA (R$ 199,90/mês): Limite de 1.000 avaliações/mês.
- *   Inclui WhatsApp integrado, DASHBOARD SIMPLES, 1 Relatório Mensal em PDF por IA e respostas personalizadas por IA.
- * - PLANO CORPORATIVO (R$ 499,90/mês): Avaliações ilimitadas.
- *   Inclui WhatsApp integrado, IA sem limites, 1 Relatório Mensal e DASHBOARD COMPLETO Multi-Unidades (Franquias/Filiais).
+ * - Plano Pro Mensal (R$ 99,90) | Anual (R$ 109,90/mês): Limite de 400 avaliações/mês.
+ *   Inclui WhatsApp integrado (botão de crise), gráficos visuais básicos e cancelamento sem multa.Com PDF e sem IA.
+ * - PLANO Ultra (R$ 199,90/mês) | ANUAL (R$ 149,90/mês): Limite de 800 avaliações/mês.
+ *   Inclui WhatsApp integrado, DASHBOARD com graficos e analises, 1 Relatório Mensal em PDF por IA e respostas personalizadas por IA.
+ * - PLANO Corporativo (R$ 499,90/mês) | ANUAL (R$ 429,90/mês): até 2.500 avaliações/mês.
+ *   Inclui WhatsApp integrado, IA até 2.500 feedbacks, 1 Relatório Mensal e DASHBOARD COMPLETO Multi-Unidades (Franquias/Filiais).
+ * - PLANO REI (R$ 999,90/mês) | ANUAL (R$ 899,90/mês): até 8.000 avaliações/mês.
+ *   Inclui WhatsApp integrado, IA priorizando respostas, 1 Relatório Mensal e DASHBOARD COMPLETO Multi-Unidades (Franquias/Filiais), suporte prioritário.
  *
  * /specify (O Comportamento Desejado do Fluxo Atual)
  * -----------------------------------------------------
@@ -60,6 +66,7 @@ import 'dotenv/config';
 import { mountPasswordResetRoutes, createUsuarioForEmpresa, ensureAuthColumns } from './passwordResetRoutes.js';
 import { mountStripeRoutes } from './stripeRoutes.js';
 import { stripeConfigured } from './stripeBilling.js';
+import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -133,7 +140,7 @@ async function findEmpresa(ref: string) {
   return db.get('SELECT * FROM empresas WHERE slug = ?', [ref]);
 }
 
-function linksEmpresa(slugOrId: string, plan: string = 'trial') {
+function linksEmpresa(slugOrId: string, plan: string = 'teste') {
   const key = slugOrId;
   return {
     avaliacao: `${APP_URL}/avaliacao/${key}`,
@@ -142,6 +149,13 @@ function linksEmpresa(slugOrId: string, plan: string = 'trial') {
     embed: `<iframe src="${APP_URL}/widget/${key}" width="100%" height="420" frameborder="0" style="border:0;border-radius:12px;" title="Avaliações"></iframe>`,
     whatsapp: montarWhatsAppLink(plan, key),
   };
+}
+
+const planosTeste = ['inicial', 'pro', 'ultra', 'corporativo', 'rei'];
+
+function obterPlanoTeste(valor: unknown): string | null {
+  const plano = String(valor || '').trim().toLowerCase();
+  return process.env.NODE_ENV !== 'production' && planosTeste.includes(plano) ? plano : null;
 }
 
 async function initDB() {
@@ -156,12 +170,13 @@ async function initDB() {
       cnpj TEXT UNIQUE NOT NULL,
       nome_empresa TEXT NOT NULL,
       slug TEXT UNIQUE,
-      status TEXT DEFAULT 'trial',
-      plan TEXT DEFAULT 'trial',
+      status TEXT DEFAULT 'teste',
+      plan TEXT DEFAULT 'teste',
       criado_em DATETIME NOT NULL,
       expira_em DATETIME NOT NULL,
       google_review_url TEXT,
-      voice_style TEXT
+      voice_style TEXT,
+      empresa_pai_id TEXT
     );
   `);
 
@@ -172,6 +187,17 @@ async function initDB() {
       tags INTEGER DEFAULT 0,
       respostas INTEGER DEFAULT 0,
       PRIMARY KEY (plan, month)
+    );
+  `);
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS ai_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      empresa_id TEXT,
+      tipo TEXT NOT NULL,
+      tokens INTEGER NOT NULL DEFAULT 0,
+      criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (empresa_id) REFERENCES empresas(id)
     );
   `);
 
@@ -201,8 +227,9 @@ async function initDB() {
   if (!nomes.includes('google_review_url')) await db.exec(`ALTER TABLE empresas ADD COLUMN google_review_url TEXT`);
   if (!nomes.includes('voice_style')) await db.exec(`ALTER TABLE empresas ADD COLUMN voice_style TEXT`);
   if (!nomes.includes('slug')) await db.exec(`ALTER TABLE empresas ADD COLUMN slug TEXT`);
-  if (!nomes.includes('plan')) await db.exec(`ALTER TABLE empresas ADD COLUMN plan TEXT DEFAULT 'trial'`);
+  if (!nomes.includes('plan')) await db.exec(`ALTER TABLE empresas ADD COLUMN plan TEXT DEFAULT 'teste'`);
   if (!nomes.includes('whatsapp_suporte')) await db.exec(`ALTER TABLE empresas ADD COLUMN whatsapp_suporte TEXT`);
+  if (!nomes.includes('empresa_pai_id')) await db.exec(`ALTER TABLE empresas ADD COLUMN empresa_pai_id TEXT`);
 
   const semSlug = await db.all('SELECT id, nome_empresa FROM empresas WHERE slug IS NULL OR slug = ""');
   for (const e of semSlug) {
@@ -304,7 +331,7 @@ function safeParseTags(raw: string): string[] {
 }
 
 interface AuthRequest extends Request {
-  user?: { id: string; nome_funcionario: string; empresa_id: string };
+  user?: { id: string; nome_funcionario: string; empresa_id: string; email?: string; role?: string };
 }
 
 const JWT_SECRET: string = process.env.JWT_SECRET ?? '';
@@ -330,6 +357,8 @@ function autenticarToken(req: AuthRequest, res: Response, next: NextFunction) {
       id: payload.id,
       nome_funcionario: payload.nome_funcionario,
       empresa_id: payload.empresa_id,
+      email: payload.email,
+      role: payload.role,
     };
     next();
   } catch {
@@ -354,6 +383,26 @@ const reviewsLimiter = rateLimit({
   max: 30,
   message: { error: 'Muitas avaliações enviadas. Tente novamente mais tarde.' },
 });
+
+const aiLastCall = new Map<string, number>();
+const AI_COOLDOWN_MS = 1500;
+
+function exigirIntervaloIA(chave: string) {
+  const agora = Date.now();
+  const ultima = aiLastCall.get(chave) || 0;
+  if (agora - ultima < AI_COOLDOWN_MS) {
+    throw new Error('Aguarde alguns instantes antes de solicitar outra análise de IA.');
+  }
+  aiLastCall.set(chave, agora);
+}
+
+async function registrarConsumoIA(empresaId: string | null, tipo: string, texto: string) {
+  const tokensEstimados = Math.max(1, Math.ceil(String(texto || '').length / 4));
+  await db.run(
+    'INSERT INTO ai_usage (empresa_id, tipo, tokens) VALUES (?, ?, ?)',
+    [empresaId, tipo, tokensEstimados]
+  );
+}
 
 // ---- Trial (CNPJ + e-mail + senha, sem cartão) ----
 app.post('/api/trial/ativar', trialLimiter, async (req: Request, res: Response) => {
@@ -382,7 +431,7 @@ app.post('/api/trial/ativar', trialLimiter, async (req: Request, res: Response) 
     try {
       await db.run(
         `INSERT INTO empresas (id, cnpj, nome_empresa, slug, google_review_url, criado_em, expira_em)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [id, cnpj, nome, slug, googleReviewUrl || null, criadoEm.toISOString(), expiraEm.toISOString()]
       );
     } catch (e: any) {
@@ -431,6 +480,7 @@ app.get('/api/empresa/:ref/validar', async (req: Request, res: Response) => {
         empresa_id: empresa.id,
         slug: empresa.slug,
         google_review_url: empresa.google_review_url || null,
+        whatsapp_suporte: empresa.whatsapp_suporte || null,
       });
     }
 
@@ -441,6 +491,7 @@ app.get('/api/empresa/:ref/validar', async (req: Request, res: Response) => {
         empresa_id: empresa.id,
         slug: empresa.slug,
         google_review_url: empresa.google_review_url || null,
+        whatsapp_suporte: empresa.whatsapp_suporte || null,
       });
     }
 
@@ -451,6 +502,7 @@ app.get('/api/empresa/:ref/validar', async (req: Request, res: Response) => {
       empresa_id: empresa.id,
       slug: empresa.slug,
       google_review_url: empresa.google_review_url || null,
+      whatsapp_suporte: empresa.whatsapp_suporte || null,
     });
   } catch (error) {
     console.error('Erro ao validar:', error);
@@ -466,8 +518,8 @@ app.get('/api/empresa/:ref/widget', async (req: Request, res: Response) => {
 
     const reviews = await db.all(
       `SELECT name, rating, comment, createdAt FROM reviews
-       WHERE empresa_id = ? AND rating >= 4 AND comment IS NOT NULL AND TRIM(comment) != ''
-       ORDER BY createdAt DESC LIMIT ?`,
+      WHERE empresa_id = ? AND rating >= 4 AND comment IS NOT NULL AND TRIM(comment) != ''
+      ORDER BY createdAt DESC LIMIT ?`,
       [empresa.id, limit]
     );
 
@@ -522,12 +574,26 @@ app.get('/api/empresa/:ref/painel', async (req: Request, res: Response) => {
     ).length;
 
     const key = empresa.slug || empresa.id;
+    const planoExibicao = obterPlanoTeste(req.query.previewPlan) || empresa.plan || 'trial';
+    const serieMensal = await db.all(
+      `SELECT strftime('%Y-%m', createdAt) AS mes,
+              COUNT(*) AS total,
+              ROUND(AVG(rating), 1) AS media,
+              SUM(CASE WHEN rating <= 3 THEN 1 ELSE 0 END) AS negativas
+      FROM reviews
+      WHERE empresa_id = ?
+      GROUP BY strftime('%Y-%m', createdAt)
+      ORDER BY mes DESC LIMIT 6`,
+      [empresa.id]
+    );
 
     res.json({
       empresa: {
         id: empresa.id,
         slug: empresa.slug,
         nome_empresa: empresa.nome_empresa,
+        plan: planoExibicao,
+        whatsapp_suporte: empresa.whatsapp_suporte || null,
         status: empresa.status,
         cnpj: empresa.cnpj,
         google_review_url: empresa.google_review_url,
@@ -546,6 +612,7 @@ app.get('/api/empresa/:ref/painel', async (req: Request, res: Response) => {
         positivas,
         alerta_crise: crisesRecentes >= 3,
         crises_24h: crisesRecentes,
+        serie_mensal: serieMensal.reverse(),
       },
       links: linksEmpresa(key),
     });
@@ -607,10 +674,12 @@ app.post('/api/reviews', reviewsLimiter, async (req: Request, res: Response) => 
     }
 
     const limits: Record<string, number> = {
-      trial: 30,
-      pro: 150,
-      ultra: 1000,
-      corporate: Number.MAX_SAFE_INTEGER,
+      teste: 30,
+      inicial: 150,
+      pro: 400,
+      ultra: 800,
+      corporativo: 2.500,
+      rei: 8.000,
     };
     if (empresaId) {
       const now = new Date();
@@ -620,10 +689,20 @@ app.post('/api/reviews', reviewsLimiter, async (req: Request, res: Response) => 
         [empresaId, month]
       );
       const count = row?.cnt ?? 0;
-      if (count >= (limits[plan] ?? limits['trial'])) {
+      const planKey = String(plan).trim().toLowerCase();
+      if (count >= (limits[planKey] ?? limits['trial'])) {
         return res.status(429).json({
-          error: `Limite mensal de avaliações (${limits[plan]}) atingido para o plano ${plan}.`,
+          error: `Limite mensal de avaliações (${limits[planKey] ?? limits.trial}) atingido para o plano ${plan}.`,
         });
+      }
+
+      const comentario = String(comment || '').trim();
+      if (comentario) {
+        const duplicado = await db.get(
+          `SELECT id FROM reviews WHERE empresa_id = ? AND LOWER(TRIM(comment)) = LOWER(TRIM(?)) LIMIT 1`,
+          [empresaId, comentario]
+        );
+        if (duplicado) return res.status(409).json({ error: 'Este comentário já foi registrado para esta empresa.' });
       }
     }
 
@@ -637,12 +716,14 @@ app.post('/api/reviews', reviewsLimiter, async (req: Request, res: Response) => 
           .map((tag: string): string => tag.trim())
           .filter(Boolean)
           .slice(0, 3);
+        await registrarConsumoIA(empresaId, 'tags', comment || '');
       } catch (e) {
         console.error('Falha ao gerar tags:', e);
       }
       if (rating <= 3 && comment) {
         try {
           aiReply = await gerarRespostaReview(name, rating, comment, nomeEmpresa, voiceStyle);
+          await registrarConsumoIA(empresaId, 'resposta', comment);
         } catch (e) {
           console.error('Falha ao gerar resposta IA:', e);
         }
@@ -690,6 +771,28 @@ app.post('/api/auth/login', loginLimiter, async (req: Request, res: Response) =>
   }
 });
 
+app.post('/api/admin/login', loginLimiter, async (req: Request, res: Response) => {
+  const email = String(req.body.email ?? '').trim().toLowerCase();
+  const senha = String(req.body.senha ?? '');
+  if (!email || !senha) return res.status(400).json({ error: 'E-mail e senha são obrigatórios.' });
+
+  try {
+    const usuario = await db.get('SELECT * FROM usuarios WHERE email = ?', [email]);
+    if (!usuario || usuario.email !== 'admin@seusaas.com') {
+      return res.status(401).json({ error: 'Credenciais inválidas.' });
+    }
+    const senhaCorreta = await bcrypt.compare(senha, usuario.senha_hash);
+    if (!senhaCorreta) return res.status(401).json({ error: 'Credenciais inválidas.' });
+
+    const token = jwt.sign({ id: usuario.id, email: usuario.email, role: usuario.role || 'admin' }, JWT_SECRET, { expiresIn: '1d' });
+    setAuthCookie(res, token);
+    res.json({ success: true, user: { id: usuario.id, email: usuario.email } });
+  } catch (error) {
+    console.error('Erro no login administrativo:', error);
+    res.status(500).json({ error: 'Erro interno do servidor.' });
+  }
+});
+
 app.post('/api/admin/logout', (_req: Request, res: Response) => {
   clearAuthCookie(res);
   res.json({ success: true });
@@ -713,7 +816,11 @@ app.get('/api/admin/empresas', autenticarToken, async (_req: AuthRequest, res: R
 
 app.get('/api/admin/reviews', autenticarToken, async (_req: AuthRequest, res: Response) => {
   try {
-    const reviews = await db.all('SELECT * FROM reviews ORDER BY createdAt DESC LIMIT 100');
+    const reviews = await db.all(
+      `SELECT r.*, e.nome_empresa AS empresa_nome
+      FROM reviews r LEFT JOIN empresas e ON e.id = r.empresa_id
+      ORDER BY r.createdAt DESC LIMIT 100`
+    );
     res.json(
       reviews.map((r: any) => ({
         ...r,
@@ -722,6 +829,38 @@ app.get('/api/admin/reviews', autenticarToken, async (_req: AuthRequest, res: Re
     );
   } catch (error) {
     console.error('Erro ao listar reviews:', error);
+    res.status(500).json({ error: 'Erro interno do servidor.' });
+  }
+});
+
+app.get('/api/admin/overview', autenticarToken, async (_req: AuthRequest, res: Response) => {
+  try {
+    const empresas = await db.all(`
+            SELECT e.id, e.nome_empresa, e.cnpj, e.plan, e.status, e.expira_em,
+              (SELECT COUNT(*) FROM reviews r WHERE r.empresa_id = e.id) AS total_reviews,
+              (SELECT COALESCE(SUM(u.tokens), 0) FROM ai_usage u WHERE u.empresa_id = e.id) AS tokens_ia
+      FROM empresas e
+      ORDER BY e.criado_em DESC
+    `);
+    const usoGeral = await db.get('SELECT COALESCE(SUM(tokens), 0) AS tokens FROM ai_usage');
+    const limites: Record<string, number> = { inicial: 150, pro: 400, ultra: 800, corporativo: 2.500, rei: 8.000, trial: 30 };
+    const clientes = empresas.map((empresa: any) => {
+      const limite = limites[String(empresa.plan || 'trial').toLowerCase()] || limites.trial;
+      const percentual = Math.min(100, Math.round((Number(empresa.total_reviews) / limite) * 100));
+      const expirado = empresa.status === 'trial' && empresa.expira_em && new Date(empresa.expira_em) < new Date();
+      return { ...empresa, status: expirado ? 'inadimplente' : empresa.status, percentual_uso: percentual, alerta_upgrade: percentual >= 80 };
+    });
+    const novos7 = await db.get("SELECT COUNT(*) AS total FROM empresas WHERE datetime(criado_em) >= datetime('now', '-7 days')");
+    const novosMes = await db.get("SELECT COUNT(*) AS total FROM empresas WHERE strftime('%Y-%m', criado_em) = strftime('%Y-%m', 'now')");
+    const inadimplentes = clientes.filter((empresa: any) => empresa.status === 'inadimplente').length;
+    res.json({
+      financeiro: { faturamento_global: 0, faturas_vencidas: 0, novos_7_dias: Number(novos7.total), novos_mes: Number(novosMes.total) },
+      clientes,
+      ia: { tokens_total: Number(usoGeral.tokens), top10: clientes.sort((a: any, b: any) => b.tokens_ia - a.tokens_ia).slice(0, 10), alertas: clientes.filter((empresa: any) => empresa.alerta_upgrade) },
+      inadimplentes,
+    });
+  } catch (error) {
+    console.error('Erro no overview administrativo:', error);
     res.status(500).json({ error: 'Erro interno do servidor.' });
   }
 });
@@ -775,25 +914,9 @@ function montarWhatsAppLink(arg0: string, key: string) {
   return `https://wa.me/?text=${encodeURIComponent(mensagem)}`;
 }
 
-function fileURLToPath(url: string) {
-  const parsed = new URL(url);
-  if (parsed.protocol !== 'file:') {
-    throw new TypeError(`Esperada uma URL file:, recebido ${parsed.protocol}`);
-  }
-  const pathname = decodeURIComponent(parsed.pathname);
-  if (process.platform === 'win32') {
-    if (parsed.hostname && parsed.hostname !== 'localhost') {
-      return `\\\\${parsed.hostname}${pathname.replace(/\//g, '\\')}`;
-    }
-    return pathname.replace(/^\/[a-zA-Z]:/, (drive) => drive.slice(1)).replace(/\//g, '\\');
-  }
-  if (parsed.hostname && parsed.hostname !== 'localhost') {
-    return `//${parsed.hostname}${pathname}`;
-  }
-  return pathname;
-}
-
 async function callGroq(systemContent: string, userContent: string) {
+  const chave = crypto.createHash('sha256').update(`${systemContent}\n${userContent}`).digest('hex');
+  exigirIntervaloIA(chave);
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('Chave GROQ_API_KEY não configurada no arquivo .env');
 
@@ -834,19 +957,55 @@ export async function gerarTagsSemanticas(comentario: string) {
   }
 }
 
-async function gerarRelatorioMensalPDF(empresaId: string, mesAno: string): Promise<Buffer> {
-  const empresa = await db.get('SELECT * FROM empresas WHERE id = ?', [empresaId]);
+async function gerarRelatorioMensalPDF(empresaId: string, mesAno: string, planoPreview?: string, demo = false): Promise<Buffer> {
+  let empresa = await db.get('SELECT * FROM empresas WHERE id = ?', [empresaId]);
   if (!empresa) throw new Error('Empresa não encontrada.');
-  if (!['ultra', 'corporate', 'corporativo'].includes(empresa.plan)) {
+  if (empresa.empresa_pai_id) {
+    const empresaMae = await db.get('SELECT * FROM empresas WHERE id = ?', [empresa.empresa_pai_id]);
+    if (empresaMae) empresa = empresaMae;
+  }
+  const planoTesteSelecionado = obterPlanoTeste(planoPreview);
+  const plano = planoTesteSelecionado || String(empresa.plan || 'teste').toLowerCase();
+  if (!planoTesteSelecionado && !['pro', 'ultra', 'corporativo', 'rei'].includes(plano)) {
     throw new Error('Plano não elegível para relatório mensal.');
   }
 
-  const reviews: any[] = await db.all(
-    `SELECT rating, comment FROM reviews
-     WHERE empresa_id = ?
-       AND strftime('%Y-%m', createdAt) = ?`,
-    [empresaId, mesAno]
+  const empresasRelatorio = ['corporativo', 'rei'].includes(plano)
+    ? await db.all(
+        `SELECT * FROM empresas WHERE id = ? OR empresa_pai_id = ? ORDER BY id = ? DESC, nome_empresa`,
+        [empresa.id, empresa.id, empresa.id]
+      )
+    : [empresa];
+  const idsRelatorio = empresasRelatorio.map((unidade: any) => unidade.id);
+  const placeholders = idsRelatorio.map(() => '?').join(', ');
+
+  let reviews: any[] = await db.all(
+    `SELECT rating, comment, empresa_id, createdAt FROM reviews
+    WHERE empresa_id IN (${placeholders})
+      AND strftime('%Y-%m', createdAt) = ?`,
+    [...idsRelatorio, mesAno]
   );
+  if (demo && process.env.NODE_ENV !== 'production') {
+    const exemplos = [
+      [5, 'Atendimento excelente e equipe muito atenciosa.'],
+      [4, 'Boa experiencia, com pequena demora no horario de pico.'],
+      [5, 'Ambiente organizado e produto de otima qualidade.'],
+      [3, 'A fila estava longa e faltou informacao sobre o prazo.'],
+      [2, 'Pedido chegou frio e a troca demorou mais que o esperado.'],
+      [4, 'Problema pontual resolvido rapidamente pela equipe.'],
+      [5, 'Experiencia muito positiva, voltarei novamente.'],
+      [3, 'A cobranca precisou de uma correcao no caixa.'],
+      [2, 'Pedido incompleto e retorno do suporte demorou.'],
+      [5, 'Servico consistente e ambiente impecavel.'],
+      [4, 'Entrega correta, mas poderia ser mais rapida.'],
+      [5, 'Equipe preparada e atendimento profissional.'],
+    ];
+    const quantidade = plano === 'pro' ? 8 : plano === 'ultra' ? 12 : plano === 'corporativo' || plano === 'rei' ? 18 : 24;
+    reviews = Array.from({ length: quantidade }, (_, index) => {
+      const exemplo = exemplos[index % exemplos.length];
+      return { rating: exemplo[0], comment: `${exemplo[1]} [DEMO]`, empresa_id: empresa.id };
+    });
+  }
 
   const criticasRetidas = reviews.filter((r) => r.rating <= 3).length;
   const totalAvaliacoes = reviews.length;
@@ -854,6 +1013,36 @@ async function gerarRelatorioMensalPDF(empresaId: string, mesAno: string): Promi
     totalAvaliacoes > 0
       ? reviews.reduce((sum, review) => sum + Number(review.rating || 0), 0) / totalAvaliacoes
       : 0;
+  const distribuicaoNotas = Array.from({ length: 5 }, (_, index) => ({
+    rating: index + 1,
+    total: reviews.filter((review) => Number(review.rating) === index + 1).length,
+  }));
+  const tendenciaSemanal = Array.from({ length: 4 }, (_, index) => {
+    const semana = index + 1;
+    const semanaReviews = reviews.filter((review) => {
+      const dia = Number(String(review.createdAt || '').slice(8, 10));
+      return dia >= (semana - 1) * 7 + 1 && dia <= semana * 7;
+    });
+    return {
+      label: `Sem ${semana}`,
+      total: semanaReviews.length,
+      media: semanaReviews.length > 0
+        ? semanaReviews.reduce((sum, review) => sum + Number(review.rating || 0), 0) / semanaReviews.length
+        : 0,
+      negativas: semanaReviews.filter((review) => Number(review.rating) <= 3).length,
+    };
+  });
+  const unidadesAnalise = empresasRelatorio.length > 1
+    ? empresasRelatorio.map((unidade: any) => ({
+        nome: unidade.nome_empresa,
+        reviews: reviews.filter((review) => review.empresa_id === unidade.id),
+      }))
+    : demo && (plano === 'corporativo' || plano === 'rei')
+      ? ['Filial Centro', 'Filial Shopping', 'Filial Norte'].map((nome, index) => ({
+          nome,
+          reviews: reviews.filter((_, reviewIndex) => reviewIndex % 3 === index),
+        }))
+      : [];
 
   const BATCH_SIZE = 2000;
   const batches: string[] = [];
@@ -872,12 +1061,14 @@ Analise o bloco de comentários abaixo e devolva, em JSON simples, dois campos:
 2. "gargalos": lista de até 5 tópicos recorrentes (ex.: "tempo de espera", "produto frio")`;
 
   const resultados: any[] = [];
-  if (batches.length === 0) {
+  if (demo || plano === 'inicial' || plano === 'pro' || batches.length === 0) {
+    resultados.push({ sentimento: 'positivo', gargalos: ['tempo de espera', 'comunicacao operacional'] });
+  } else if (plano === 'inicial' || batches.length === 0) {
     resultados.push({ sentimento: 'sem dados', gargalos: [] });
   } else {
     for (const batch of batches) {
-      const resposta = await callGroq(systemPrompt, batch);
       try {
+        const resposta = await callGroq(systemPrompt, batch);
         resultados.push(JSON.parse(resposta));
       } catch {
         resultados.push({ sentimento: 'indefinido', gargalos: [] });
@@ -943,11 +1134,13 @@ Analise o bloco de comentários abaixo e devolva, em JSON simples, dois campos:
     doc.opacity(0.03);
     doc.fillColor(navy).font('Helvetica-Bold').fontSize(54);
     doc.rotate(-45, { origin: [centerX, centerY] });
-    doc.text('FILTRA.IA', centerX - 180, centerY - 30, { width: 360, align: 'center', lineBreak: false });
+    doc.text('FILTRA.IA', centerX - 180, centerY - 27, {
+      width: 360,
+      align: 'center',
+      lineBreak: false,
+    });
     doc.restore();
   };
-  drawWatermark();
-  doc.on('pageAdded', drawWatermark);
 
   const sectionTitle = (title: string, subtitle: string) => {
     doc.fillColor(navy).fontSize(13).font('Helvetica-Bold').text(title);
@@ -959,6 +1152,40 @@ Analise o bloco de comentários abaixo e devolva, em JSON simples, dois campos:
     doc.fillColor(blue).fontSize(8).font('Helvetica-Bold').text(title.toUpperCase(), x + 12, y + 12, { width: width - 24 });
     doc.fillColor(navy).fontSize(16).font('Helvetica-Bold').text(value, x + 12, y + 29, { width: width - 24 });
     doc.fillColor(muted).fontSize(8.5).font('Helvetica').text(description, x + 12, y + 57, { width: width - 24, lineGap: 1.5 });
+  };
+  const drawHorizontalBars = (title: string, items: { label: string; value: number; color: string }[], y: number) => {
+    doc.fillColor(navy).fontSize(12).font('Helvetica-Bold').text(title, 42, y);
+    const maxValue = Math.max(...items.map((item) => item.value), 1);
+    items.forEach((item, index) => {
+      const rowY = y + 25 + index * 25;
+      doc.fillColor(muted).fontSize(8.5).font('Helvetica').text(item.label, 42, rowY + 2, { width: 85 });
+      doc.roundedRect(132, rowY, pageWidth - 190, 12, 3).fill('#e8edf3');
+      doc.roundedRect(132, rowY, Math.max(3, (pageWidth - 190) * item.value / maxValue), 12, 3).fill(item.color);
+      doc.fillColor(ink).fontSize(8.5).text(String(item.value), pageWidth - 48, rowY + 2, { width: 30, align: 'right' });
+    });
+  };
+  const drawTrend = (y: number) => {
+    const chartWidth = pageWidth - 45;
+    const chartHeight = 110;
+    const originX = 62;
+    const originY = y + chartHeight;
+    const maxValue = Math.max(...tendenciaSemanal.map((item) => item.total), 1);
+    doc.fillColor(navy).fontSize(12).font('Helvetica-Bold').text('Evolução semanal do volume', 42, y);
+    doc.strokeColor(line).lineWidth(0.7).moveTo(originX, y + 10).lineTo(originX, originY).lineTo(originX + chartWidth, originY).stroke();
+    tendenciaSemanal.forEach((item, index) => {
+      const x = originX + 25 + index * ((chartWidth - 45) / 3);
+      const pointY = originY - (item.total / maxValue) * 82;
+      doc.strokeColor('#d7e0ea').lineWidth(0.5).moveTo(x, originY).lineTo(x, y + 10).stroke();
+      doc.fillColor(blue).circle(x, pointY, 4).fill();
+      if (index > 0) {
+        const previous = tendenciaSemanal[index - 1];
+        const previousX = originX + 25 + (index - 1) * ((chartWidth - 45) / 3);
+        const previousY = originY - (previous.total / maxValue) * 82;
+        doc.strokeColor(blue).lineWidth(2).moveTo(previousX, previousY).lineTo(x, pointY).stroke();
+      }
+      doc.fillColor(ink).fontSize(8).text(String(item.total), x - 10, pointY - 16, { width: 20, align: 'center' });
+      doc.fillColor(muted).fontSize(8).text(item.label, x - 20, originY + 8, { width: 40, align: 'center' });
+    });
   };
 
   doc.rect(0, 0, doc.page.width, 76).fill(navy);
@@ -994,6 +1221,28 @@ Analise o bloco de comentários abaixo e devolva, em JSON simples, dois campos:
   drawKpi('Escudo de marca', `${criticasRetidas} críticas`, `${criticasRetidas} reclamações retidas internamente no fluxo privado.`, 42 + (kpiWidth + kpiGap) * 2, kpiY, kpiWidth);
   doc.y = kpiY + 112;
 
+  sectionTitle('Distribuição de satisfação', 'Leitura visual da concentração de notas no período');
+  const chartY = doc.y;
+  const chartHeight = 105;
+  doc.roundedRect(42, chartY, pageWidth, chartHeight, 6).fillAndStroke('#ffffff', line);
+  const maxNota = Math.max(...distribuicaoNotas.map((item: any) => Number(item.total)), 1);
+  for (let rating = 1; rating <= 5; rating += 1) {
+    const item = distribuicaoNotas.find((entry: any) => Number(entry.rating) === rating);
+    const totalNota = Number(item?.total || 0);
+    const barWidth = ((pageWidth - 145) / 5) * totalNota / maxNota;
+    const y = chartY + 15 + (rating - 1) * 17;
+    doc.fillColor(muted).fontSize(8).font('Helvetica').text(`${rating} estrela${rating > 1 ? 's' : ''}`, 56, y + 2, { width: 55 });
+    doc.roundedRect(120, y, Math.max(2, barWidth), 10, 3).fill(rating <= 3 ? '#e07a7a' : '#55a982');
+    doc.fillColor(ink).fontSize(8).text(String(totalNota), 130 + Math.max(2, barWidth), y + 2);
+  }
+  doc.y = chartY + chartHeight + 18;
+
+  if (['ultra', 'corporativo', 'rei'].includes(plano)) {
+    const trendY = doc.y;
+    drawTrend(trendY);
+    doc.y = trendY + 145;
+  }
+
   sectionTitle('Inteligência artificial', 'Leitura automatizada dos sinais de experiência e dos pontos de atenção');
   const aiY = doc.y;
   doc.roundedRect(42, aiY, pageWidth, 126, 6).fillAndStroke('#ffffff', line);
@@ -1007,11 +1256,82 @@ Analise o bloco de comentários abaixo e devolva, em JSON simples, dois campos:
 
   sectionTitle('Recomendação estratégica', 'Próximo passo sugerido para a gestão');
   const recommendation =
-    'O sistema está operacional e integrado ao seu WhatsApp Business. Divulgue o link ou exiba o QR Code no balcão/mesas para iniciar a coleta automática de feedbacks e alimentar o próximo relatório consolidado.';
+    `O sistema está operacional e integrado ao seu WhatsApp Business. Divulgue o link ou exiba o QR Code no balcão/mesas para iniciar a coleta automática de feedbacks e alimentar o próximo relatório consolidado. Plano contratado: ${empresa.plan || 'trial'}.`;
   const recY = doc.y;
   doc.roundedRect(42, recY, pageWidth, 76, 6).fillAndStroke(paleBlue, line);
   doc.fillColor(navy).fontSize(9.5).font('Helvetica-Bold').text('Recomendação Estratégica:', 56, recY + 16);
   doc.fillColor(ink).fontSize(9.5).font('Helvetica').text(recommendation, 56, recY + 33, { width: pageWidth - 28, lineGap: 2.5 });
+
+  if (['corporativo', 'rei'].includes(plano)) {
+    doc.addPage();
+    doc.fillColor(navy).fontSize(18).font('Helvetica-Bold').text('FILTRA.IA');
+    doc.moveDown(0.25).fillColor(muted).fontSize(9).font('Helvetica').text('ANÁLISE DE GOVERNANÇA E PERFORMANCE');
+    doc.moveDown(1).fillColor(ink).fontSize(16).font('Helvetica-Bold').text('Visão comparativa das unidades');
+    doc.moveDown(0.3).fillColor(muted).fontSize(9.5).font('Helvetica').text(`Consolidação do grupo para ${periodoFormatado}`);
+    doc.moveDown(1.4);
+
+    const ranking = unidadesAnalise.map((unidade: any) => {
+      const total = unidade.reviews.length;
+      const media = total > 0 ? unidade.reviews.reduce((sum: number, review: any) => sum + Number(review.rating || 0), 0) / total : 0;
+      return { nome: unidade.nome, total, media, negativas: unidade.reviews.filter((review: any) => Number(review.rating) <= 3).length };
+    }).sort((a: any, b: any) => b.media - a.media);
+    drawHorizontalBars('Ranking de satisfação por unidade', ranking.map((item: any) => ({ label: item.nome.slice(0, 14), value: Math.round(item.media * 10) / 10, color: '#55a982' })), doc.y);
+    doc.y += 125;
+    drawHorizontalBars('Volume de feedbacks por unidade', ranking.map((item: any) => ({ label: item.nome.slice(0, 14), value: item.total, color: blue })), doc.y);
+    doc.y += 125;
+    doc.fillColor(navy).fontSize(12).font('Helvetica-Bold').text('Matriz de atenção operacional', 42, doc.y);
+    doc.moveDown(0.6).fillColor(ink).fontSize(9.5).font('Helvetica');
+    ranking.forEach((item: any) => {
+      const nivel = item.negativas >= 3 ? 'Atenção prioritária' : item.negativas > 0 ? 'Acompanhamento recomendado' : 'Operação estável';
+      doc.text(`${item.nome}: ${nivel} (${item.negativas} críticas interceptadas).`, { width: pageWidth, lineGap: 3 });
+    });
+    if (plano === 'rei') {
+      doc.moveDown(1.3).fillColor(navy).fontSize(12).font('Helvetica-Bold').text('Governança REI');
+      doc.moveDown(0.5).fillColor(muted).fontSize(9.5).font('Helvetica').text(
+        'A camada REI reúne a leitura global, o ranking comparativo e a auditoria individual das unidades. Use a evolução semanal para priorizar recursos, treinamento e ações corretivas por praça.',
+        { width: pageWidth, lineGap: 3 }
+      );
+    }
+  }
+
+  for (const unidade of empresasRelatorio.slice(1)) {
+    const reviewsUnidade = reviews.filter((review) => review.empresa_id === unidade.id);
+    const totalUnidade = reviewsUnidade.length;
+    const mediaUnidade = totalUnidade > 0
+      ? reviewsUnidade.reduce((sum, review) => sum + Number(review.rating || 0), 0) / totalUnidade
+      : 0;
+    const negativasUnidade = reviewsUnidade.filter((review) => Number(review.rating) <= 3).length;
+
+    doc.addPage();
+    doc.fillColor(navy).fontSize(18).font('Helvetica-Bold').text('FILTRA.IA');
+    doc.moveDown(0.25).fillColor(muted).fontSize(9).font('Helvetica').text('RELATÓRIO POR UNIDADE');
+    doc.moveDown(1).fillColor(ink).fontSize(17).font('Helvetica-Bold').text(unidade.nome_empresa);
+    doc.moveDown(0.25).fillColor(muted).fontSize(10).font('Helvetica').text(`Período de apuração: ${periodoFormatado}`);
+    doc.moveDown(1);
+    doc.moveTo(42, doc.y).lineTo(42 + pageWidth, doc.y).strokeColor(line).stroke();
+    doc.moveDown(1);
+    doc.fillColor(navy).fontSize(13).font('Helvetica-Bold').text('Indicadores da unidade');
+    doc.moveDown(0.6);
+    doc.fillColor(ink).fontSize(11).font('Helvetica')
+      .text(`Volume geral de interações: ${totalUnidade} avaliações registradas.`)
+      .moveDown(0.5)
+      .text(`Índice de satisfação do cliente: ${mediaUnidade.toFixed(1)} / 5.0.`)
+      .moveDown(0.5)
+      .text(`Escudo de marca: ${negativasUnidade} reclamações retidas internamente no fluxo privado.`);
+    doc.moveDown(1.5);
+    doc.fillColor(navy).fontSize(13).font('Helvetica-Bold').text('Análise da unidade');
+    doc.moveDown(0.6).fillColor(muted).fontSize(10).font('Helvetica').text(
+      totalUnidade > 0
+        ? 'Os indicadores desta unidade foram calculados exclusivamente com os resultados disponíveis no período selecionado.'
+        : 'Nenhuma avaliação foi registrada para esta unidade no período selecionado.'
+    );
+    doc.moveDown(2);
+    doc.fillColor(blue).fontSize(10).font('Helvetica-Bold').text('RECOMENDAÇÃO');
+    doc.moveDown(0.35).fillColor(ink).fontSize(10).font('Helvetica').text(
+      'Mantenha o QR Code visível na unidade para ampliar a amostragem e permitir análises mais representativas nos próximos períodos.',
+      { width: pageWidth, lineGap: 3 }
+    );
+  }
 
   await new Promise<void>((resolve, reject) => {
     doc.on('end', resolve);
@@ -1019,6 +1339,7 @@ Analise o bloco de comentários abaixo e devolva, em JSON simples, dois campos:
     const range = doc.bufferedPageRange();
     for (let pageIndex = range.start; pageIndex < range.start + range.count; pageIndex += 1) {
       doc.switchToPage(pageIndex);
+      drawWatermark();
       doc.fillColor(muted).fontSize(7.5).font('Helvetica').text(
         `© 2026 FILTRA.IA. Propriedade intelectual e dados analíticos protegidos. Uso exclusivo de ${empresa.nome_empresa}.`,
         42,
@@ -1033,14 +1354,17 @@ Analise o bloco de comentários abaixo e devolva, em JSON simples, dois campos:
   return Buffer.concat(chunks);
 }
 
-app.post('/api/relatorio/mensal', async (req, res) => {
+// ROTA PROTEGIDA COM AUTENTICAÇÃO PARA O RELATÓRIO MENSAL EM PDF
+app.post('/api/relatorio/mensal', autenticarToken, async (req: AuthRequest, res: Response) => {
   try {
     const empresaId = req.body.empresaId ?? req.body.empresa_id;
     const mesAno = req.body.mesAno ?? req.body.mes_ano;
+    const planoPreview = obterPlanoTeste(req.body.previewPlan);
+    const demo = req.body.demo === true;
     if (typeof empresaId !== 'string' || typeof mesAno !== 'string') {
       return res.status(400).json({ error: 'empresaId e mesAno são obrigatórios.' });
     }
-    const pdf = await gerarRelatorioMensalPDF(empresaId, mesAno);
+    const pdf = await gerarRelatorioMensalPDF(empresaId, mesAno, planoPreview || undefined, demo);
     res.type('application/pdf').send(pdf);
   } catch (error) {
     console.error('Erro ao gerar relatório:', error);

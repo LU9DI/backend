@@ -42,11 +42,11 @@ async function main() {
     .replace(/^-+|-+$/g, '')
     .slice(0, 48) || 'empresa';
   const criadoEm = new Date().toISOString();
-  const expiraEm = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 dias de trial
+  const expiraEm = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 7 dias de teste
 
   await db.run(
     `INSERT INTO empresas (id, cnpj, nome_empresa, slug, status, plan, criado_em, expira_em) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [empresaId, EXAMPLE_CNPJ, EXAMPLE_NOME_EMPRESA, slug, 'trial', 'trial', criadoEm, expiraEm]
+    [empresaId, EXAMPLE_CNPJ, EXAMPLE_NOME_EMPRESA, slug, 'teste', 'teste', criadoEm, expiraEm]
   );
   console.log('✅  Empresa criada com id', empresaId);
 
@@ -67,3 +67,4 @@ main().catch((e) => {
   console.error('❌ Erro ao executar seed:', e);
   process.exit(1);
 });
+
