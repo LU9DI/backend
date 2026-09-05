@@ -1,11 +1,11 @@
 /**
- * Painel admin — métricas, faturamento, gestão de planos, status n8n.
+ * Painel admin — métricas, faturamento, gestão de planos, status n8n, Stripe, CSV.
  */
 import type { Express, Response } from 'express';
 import { getDb } from '../lib/db.js';
 import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { PLANOS, type PlanDb } from '../stripeBilling.js';
+import { listStripeInvoices } from '../lib/stripeInvoices.js';
 
 const PRECO_MENSAL: Record<string, number> = {
   inicial: 69.9,
@@ -33,6 +33,12 @@ function requireAdmin(req: AuthRequest, res: Response): boolean {
     return false;
   }
   return true;
+}
+
+function csvEscape(v: unknown): string {
+  const s = v == null ? '' : String(v);
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
 }
 
 export function mountAdminDashboardRoutes(app: Express) {
@@ -78,12 +84,10 @@ export function mountAdminDashboardRoutes(app: Express) {
       for (const e of pagos) {
         const plan = String(e.plan || '').toLowerCase();
         const preco = PRECO_MENSAL[plan] || 0;
-        // anual: MRR = preço mensal equivalente já na tabela display
         mrr += preco;
         porPlano[plan] = (porPlano[plan] || 0) + 1;
       }
 
-      // tokens por empresa (top 10)
       const tokenRows = await db.all(
         `SELECT empresa_id, SUM(tokens) as total_tokens, COUNT(*) as eventos
          FROM ai_usage
@@ -185,13 +189,80 @@ export function mountAdminDashboardRoutes(app: Express) {
           total_tokens: tokMap.get(e.id) || 0,
           atrasado,
           mrr_estimado: PRECO_MENSAL[String(e.plan || '').toLowerCase()] || 0,
+          painel_path: `/painel/${e.slug || e.id}`,
         };
       });
       res.json(out);
     })
   );
 
-  /** Cancelar plano (teste ou pago) — bloqueia acesso. */
+  app.get(
+    '/api/admin/empresas.csv',
+    autenticarToken,
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+      if (!requireAdmin(req, res)) return;
+      const db = getDb();
+      await ensureAdminColumns(db);
+      const rows = await db.all(`SELECT * FROM empresas ORDER BY criado_em DESC LIMIT 2000`);
+      const tokensByEmp = await db.all(
+        `SELECT empresa_id, SUM(tokens) as total_tokens FROM ai_usage GROUP BY empresa_id`
+      );
+      const tokMap = new Map(
+        (tokensByEmp || []).map((t: any) => [t.empresa_id, Number(t.total_tokens || 0)])
+      );
+
+      const header = [
+        'id',
+        'nome_empresa',
+        'cnpj',
+        'slug',
+        'status',
+        'plan',
+        'billing_cycle',
+        'criado_em',
+        'expira_em',
+        'total_tokens',
+        'google_review_url',
+        'whatsapp_suporte',
+      ];
+      const lines = [header.join(',')];
+      for (const e of rows || []) {
+        lines.push(
+          [
+            e.id,
+            e.nome_empresa,
+            e.cnpj,
+            e.slug,
+            e.status,
+            e.plan,
+            e.billing_cycle || 'month',
+            e.criado_em,
+            e.expira_em,
+            tokMap.get(e.id) || 0,
+            e.google_review_url,
+            e.whatsapp_suporte,
+          ]
+            .map(csvEscape)
+            .join(',')
+        );
+      }
+      const body = '\uFEFF' + lines.join('\n');
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="empresas-filtra.csv"');
+      res.send(body);
+    })
+  );
+
+  app.get(
+    '/api/admin/stripe/invoices',
+    autenticarToken,
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+      if (!requireAdmin(req, res)) return;
+      const result = await listStripeInvoices(40);
+      res.json(result);
+    })
+  );
+
   app.post(
     '/api/admin/empresas/:id/cancelar',
     autenticarToken,
@@ -230,7 +301,6 @@ export function mountAdminDashboardRoutes(app: Express) {
     })
   );
 
-  /** Renovar / estender: month | year | dias número */
   app.post(
     '/api/admin/empresas/:id/renovar',
     autenticarToken,
@@ -285,7 +355,6 @@ export function mountAdminDashboardRoutes(app: Express) {
     })
   );
 
-  /** Status discreto das integrações (n8n / maps / wpp). */
   app.get(
     '/api/admin/integracoes',
     autenticarToken,
@@ -312,7 +381,7 @@ export function mountAdminDashboardRoutes(app: Express) {
               : undefined,
           });
           clearTimeout(t);
-          n8n_ok = r.ok || r.status === 404 || r.status === 405; // endpoint existe
+          n8n_ok = r.ok || r.status === 404 || r.status === 405;
           n8n_detail = `HTTP ${r.status}`;
         } catch (e: any) {
           n8n_ok = false;
@@ -354,7 +423,7 @@ export function mountAdminDashboardRoutes(app: Express) {
           detalhe: mapsKey
             ? 'Chave de API presente no .env'
             : Number(comGoogle?.c || 0) > 0
-              ? 'Sem chave global; há links Google nas empresas (captação manual/n8n)'
+              ? 'Sem chave global; há links Google nas empresas'
               : 'Sem chave e nenhum link Google cadastrado',
         },
         whatsapp: {

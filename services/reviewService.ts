@@ -33,7 +33,6 @@ export type ReviewInput = {
   website?: string;
   is_test?: boolean;
   ip?: string;
-  /** WhatsApp do cliente (obrigatório em nota ≤ 3) para o empresário contatar. */
   client_whatsapp?: string;
 };
 
@@ -159,13 +158,18 @@ export async function criarReview(
 
   const useAi = !isTest && planTemIA(plan) && aiConfigured();
   const useAiSentiment = useAi && Boolean(comment?.trim());
-  const sentiment = await analisarSentimento(rating, comment || '', useAiSentiment);
+  const sentiment = await analisarSentimento(
+    rating,
+    comment || '',
+    useAiSentiment,
+    empresaId
+  );
 
   if (useAi && rating <= 3 && comment) {
     try {
       const [resposta, tags] = await Promise.all([
-        gerarRespostaReview(name || 'Anônimo', rating, comment, nomeEmpresa),
-        gerarTagsSemanticas(rating, comment),
+        gerarRespostaReview(name || 'Anônimo', rating, comment, nomeEmpresa, undefined, empresaId),
+        gerarTagsSemanticas(rating, comment, empresaId),
       ]);
       aiReply = resposta || null;
       aiTags = tags?.length ? JSON.stringify(tags) : null;
@@ -208,7 +212,6 @@ export async function criarReview(
       slugOrId,
     }).catch((e) => console.warn('push crise:', e?.message || e));
 
-    // E-mail ao empresário (não bloqueia a resposta HTTP)
     emailDaEmpresa(db, empresaId)
       .then(async (email) => {
         if (!email) return;

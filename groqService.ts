@@ -1,8 +1,5 @@
 /**
- * Camada de IA com balanceamento + failover + métricas de latência.
- *
- * AI_LOAD_BALANCE: round_robin | weighted | failover
- * Circuit breaker: AI_CB_FAILURES / AI_CB_COOLDOWN_MS
+ * Camada de IA com balanceamento + failover + métricas de latência + tokens.
  */
 
 import {
@@ -10,6 +7,8 @@ import {
   parseSentimentFromAiJson,
   type SentimentResult,
 } from './lib/sentiment.js';
+import { estimateTokens, recordAiUsage } from './lib/aiUsage.js';
+import { getDb } from './lib/db.js';
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GEMINI_BASE =
@@ -25,6 +24,7 @@ export type AiCallResult = {
   text: string;
   provider: AiProvider;
   latency_ms: number;
+  tokens: number;
 };
 
 let rrIndex = 0;
@@ -231,12 +231,14 @@ function shouldFailover(status: number, body: string): boolean {
   );
 }
 
+type ProviderRaw = { text: string; tokens: number };
+
 async function callGroq(
   system: string,
   user: string,
   maxTokens: number,
   temperature: number
-): Promise<string> {
+): Promise<ProviderRaw> {
   const key = groqKey();
   if (!key) throw new Error('GROQ_API_KEY não configurada');
 
@@ -271,7 +273,11 @@ async function callGroq(
   const data = await response.json();
   const text = data?.choices?.[0]?.message?.content;
   if (!text) throw new Error('Groq retornou resposta vazia');
-  return String(text).trim();
+  const usage = data?.usage;
+  const tokens =
+    Number(usage?.total_tokens) ||
+    estimateTokens(system, user, String(text));
+  return { text: String(text).trim(), tokens };
 }
 
 async function callGemini(
@@ -279,7 +285,7 @@ async function callGemini(
   user: string,
   maxTokens: number,
   temperature: number
-): Promise<string> {
+): Promise<ProviderRaw> {
   const key = geminiKey();
   if (!key) throw new Error('GEMINI_API_KEY não configurada');
 
@@ -314,7 +320,12 @@ async function callGemini(
   const text =
     data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') || '';
   if (!text.trim()) throw new Error('Gemini retornou resposta vazia');
-  return text.trim();
+  const meta = data?.usageMetadata;
+  const tokens =
+    Number(meta?.totalTokenCount) ||
+    Number(meta?.promptTokenCount || 0) + Number(meta?.candidatesTokenCount || 0) ||
+    estimateTokens(system, user, text);
+  return { text: text.trim(), tokens };
 }
 
 async function invokeProvider(
@@ -323,7 +334,7 @@ async function invokeProvider(
   user: string,
   maxTokens: number,
   temperature: number
-): Promise<string> {
+): Promise<ProviderRaw> {
   return provider === 'groq'
     ? callGroq(system, user, maxTokens, temperature)
     : callGemini(system, user, maxTokens, temperature);
@@ -333,7 +344,8 @@ export async function callAI(
   system: string,
   user: string,
   maxTokens = 180,
-  temperature = 0.6
+  temperature = 0.6,
+  opts?: { empresaId?: string | null; tipo?: string }
 ): Promise<AiCallResult> {
   const order = buildAttemptOrder();
   if (!order.length) {
@@ -348,11 +360,25 @@ export async function callAI(
     const provider = order[i];
     const t0 = process.hrtime.bigint();
     try {
-      const text = await invokeProvider(provider, system, user, maxTokens, temperature);
+      const raw = await invokeProvider(provider, system, user, maxTokens, temperature);
       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
       markSuccess(provider, ms);
       if (i > 0) console.warn(`[IA] Fallback: ${provider} (${ms}ms)`);
-      return { text, provider, latency_ms: ms };
+
+      if (opts?.empresaId || opts?.tipo) {
+        try {
+          await recordAiUsage(getDb(), {
+            empresaId: opts.empresaId,
+            tipo: opts.tipo || `ai_${provider}`,
+            tokens: raw.tokens,
+            provider,
+          });
+        } catch {
+          /* db pode não estar pronto em testes isolados */
+        }
+      }
+
+      return { text: raw.text, provider, latency_ms: ms, tokens: raw.tokens };
     } catch (e: any) {
       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
       markFail(provider, e, ms);
@@ -368,9 +394,10 @@ async function callLLM(
   system: string,
   user: string,
   maxTokens = 180,
-  temperature = 0.6
+  temperature = 0.6,
+  opts?: { empresaId?: string | null; tipo?: string }
 ): Promise<string> {
-  const r = await callAI(system, user, maxTokens, temperature);
+  const r = await callAI(system, user, maxTokens, temperature, opts);
   return r.text;
 }
 
@@ -379,7 +406,8 @@ export async function gerarRespostaReview(
   rating: number,
   comment: string,
   nomeEmpresa?: string,
-  exemplosEstilo?: string
+  exemplosEstilo?: string,
+  empresaId?: string | null
 ): Promise<string> {
   const local = nomeEmpresa ? ` do estabelecimento "${nomeEmpresa}"` : '';
 
@@ -392,12 +420,13 @@ export async function gerarRespostaReview(
 
   const prompt = `Cliente: ${nomeCliente || 'Anônimo'}\nNota: ${rating}/5\nComentário: ${comment}\n\nEscreva uma resposta curta para esta avaliação negativa${local}.`;
 
-  return callLLM(system, prompt);
+  return callLLM(system, prompt, 180, 0.6, { empresaId, tipo: 'resposta_review' });
 }
 
 export async function gerarTagsSemanticas(
   rating: number,
-  comment: string
+  comment: string,
+  empresaId?: string | null
 ): Promise<string[]> {
   if (!comment || comment.trim().length < 3) {
     if (rating >= 4) return ['#ExperienciaPositiva'];
@@ -411,7 +440,7 @@ Exemplos: ["#AtendimentoRuim","#ComidaExcelente"]
 Não explique. Apenas o array JSON.`;
 
   const user = `Nota: ${rating}/5\nComentário: ${comment}`;
-  const raw = await callLLM(system, user, 120, 0.3);
+  const raw = await callLLM(system, user, 120, 0.3, { empresaId, tipo: 'tags' });
 
   try {
     const cleaned = raw.replace(/```json|```/g, '').trim();
@@ -427,13 +456,11 @@ Não explique. Apenas o array JSON.`;
   }
 }
 
-/**
- * Sentimento: heurística sempre; IA opcional para refinar texto.
- */
 export async function analisarSentimento(
   rating: number,
   comment: string,
-  useAi: boolean
+  useAi: boolean,
+  empresaId?: string | null
 ): Promise<SentimentResult> {
   const heuristic = analyzeSentimentHeuristic(rating, comment);
 
@@ -447,7 +474,7 @@ Retorne APENAS JSON válido:
 {"sentimento":"positivo"|"neutro"|"negativo","score":número de -1 a 1,"keywords":["até 5 palavras-chave"]}
 Não use markdown.`;
     const user = `Nota: ${rating}/5\nComentário: ${comment}`;
-    const raw = await callLLM(system, user, 100, 0.2);
+    const raw = await callLLM(system, user, 100, 0.2, { empresaId, tipo: 'sentimento' });
     const parsed = parseSentimentFromAiJson(raw);
     if (parsed) return parsed;
   } catch (e: any) {
