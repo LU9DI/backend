@@ -21,6 +21,7 @@ import {
   empresaTemAcesso,
   enforcarExpiracoes,
 } from './services/billingService.js';
+import { logWebhookEvent } from './lib/opsLog.js';
 
 async function ensureStripeColumns(db: Database) {
   const cols = (await db.all(`PRAGMA table_info(empresas)`)).map((c: any) => c.name);
@@ -89,7 +90,6 @@ export function mensagemAcesso(empresa: any): string | null {
   return null;
 }
 
-// re-export para quem importava destas funções aqui
 export { empresaTemAcesso, enforcarExpiracoes };
 
 export function mountStripeRoutes(app: Express, getDb: () => Database) {
@@ -97,16 +97,34 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
     '/api/webhook/stripe',
     express.raw({ type: 'application/json' }),
     async (req: Request, res: Response) => {
+      const db = getDb();
+      let eventType = 'unknown';
       try {
         const sig = req.headers['stripe-signature'] as string | undefined;
         const raw = req.body as Buffer;
         const event = constructStripeEvent(raw, sig);
-        const db = getDb();
         await ensureStripeColumns(db);
         await enforcarExpiracoes(db);
 
         const type = String(event.type || '');
+        eventType = type;
         const obj = event.data?.object || {};
+
+        const done = async (action: string, status: 'ok' | 'ignored' = 'ok') => {
+          await logWebhookEvent(db, {
+            source: 'stripe',
+            event_type: type,
+            status,
+            detail: action,
+            payload_summary: JSON.stringify({
+              id: event.id || null,
+              object: obj?.object || null,
+              customer: obj?.customer || null,
+              status: obj?.status || null,
+            }).slice(0, 400),
+          });
+          return res.json({ ok: true, action });
+        };
 
         if (type === 'customer.subscription.updated') {
           let { empresaId, planDb, customerId, subscriptionId } = extractFromStripeObject(obj);
@@ -116,15 +134,15 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
 
           if (obj.cancel_at_period_end === true && empresaId) {
             await markCancelAtPeriodEnd(db, empresaId, periodEnd);
-            return res.json({ ok: true, action: 'cancel_at_period_end' });
+            return done('cancel_at_period_end');
           }
           if (stripeStatus === 'canceled' && empresaId) {
             if (periodEnd && new Date(periodEnd).getTime() > Date.now()) {
               await markCancelAtPeriodEnd(db, empresaId, periodEnd);
-              return res.json({ ok: true, action: 'grace_until_period_end' });
+              return done('grace_until_period_end');
             }
             await blockEmpresa(db, empresaId);
-            return res.json({ ok: true, action: 'block' });
+            return done('block');
           }
           if (stripeStatus === 'active' && empresaId) {
             const resolved = resolvePlano(planDb || obj.metadata?.plan_db || 'pro');
@@ -136,7 +154,7 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
               subscriptionId,
               periodEnd
             );
-            return res.json({ ok: true, action: 'activate' });
+            return done('activate');
           }
         }
 
@@ -155,7 +173,7 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
             obj.payment_status !== 'paid' &&
             obj.payment_status !== 'no_payment_required'
           ) {
-            return res.json({ ok: true, action: 'pending' });
+            return done('pending', 'ignored');
           }
 
           if (empresaId && (planDb || type === 'invoice.paid')) {
@@ -168,7 +186,7 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
               subscriptionId,
               periodEnd
             );
-            return res.json({ ok: true, action: 'activate' });
+            return done('activate');
           }
         }
 
@@ -179,15 +197,15 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
           if (empresaId) {
             if (periodEnd && new Date(periodEnd).getTime() > Date.now()) {
               await markCancelAtPeriodEnd(db, empresaId, periodEnd);
-              return res.json({ ok: true, action: 'grace_until_period_end' });
+              return done('grace_until_period_end');
             }
             const emp = await db.get('SELECT expira_em FROM empresas WHERE id = ?', [empresaId]);
             if (emp?.expira_em && new Date(emp.expira_em).getTime() > Date.now()) {
               await markCancelAtPeriodEnd(db, empresaId, emp.expira_em);
-              return res.json({ ok: true, action: 'grace_db_expira_em' });
+              return done('grace_db_expira_em');
             }
             await blockEmpresa(db, empresaId);
-            return res.json({ ok: true, action: 'block_period_ended' });
+            return done('block_period_ended');
           }
         }
 
@@ -196,13 +214,23 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
           empresaId = await resolveEmpresaId(db, empresaId, customerId);
           if (empresaId) {
             await blockEmpresa(db, empresaId);
-            return res.json({ ok: true, action: 'block_refund' });
+            return done('block_refund');
           }
         }
 
-        res.json({ ok: true, action: 'ignore' });
+        return done('ignore', 'ignored');
       } catch (e: any) {
         console.error('Stripe webhook:', e.message || e);
+        try {
+          await logWebhookEvent(db, {
+            source: 'stripe',
+            event_type: eventType,
+            status: 'error',
+            detail: e?.message || 'Webhook error',
+          });
+        } catch {
+          /* */
+        }
         res.status(400).json({ error: e.message || 'Webhook error' });
       }
     }

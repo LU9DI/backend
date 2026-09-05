@@ -249,8 +249,7 @@ export async function notificarTrialExpirando(opts: {
 }): Promise<{ ok: boolean }> {
   if (!opts.email) return { ok: false };
   const locale = normLocale(opts.locale);
-  const ref = opts.slug || opts.empresaId || '';
-  const planos = `${APP_URL}/login`;
+  const planos = `${APP_URL}/#planos`;
   const exp = fmtDate(opts.expiraEm, locale);
 
   const subject =
@@ -271,6 +270,132 @@ export async function notificarTrialExpirando(opts: {
       locale === 'en' ? 'Trial ending soon' : 'Trial acabando',
       `<p>O trial de <strong style="color:#fafafa">${opts.nomeEmpresa}</strong> termina em <strong style="color:#fafafa">${exp}</strong> (faltam ${opts.dias} dia(s)).</p>
        <p><a href="${planos}" style="color:#818cf8">Ver planos e continuar</a></p>`
+    ),
+  });
+  return { ok: true };
+}
+
+/**
+ * Assinatura paga expirando em breve (renovação ou cancel_at_period_end).
+ * motivo: 'renovacao' | 'cancelamento'
+ */
+export async function notificarAssinaturaExpirando(opts: {
+  email: string;
+  nomeEmpresa: string;
+  plano?: string;
+  expiraEm: string;
+  dias: number;
+  motivo?: 'renovacao' | 'cancelamento';
+  slug?: string;
+  empresaId?: string;
+  locale?: string;
+}): Promise<{ ok: boolean }> {
+  if (!opts.email) return { ok: false };
+  const locale = normLocale(opts.locale);
+  const ref = opts.slug || opts.empresaId || '';
+  const painel = `${APP_URL}/painel/${ref}`;
+  const planos = `${APP_URL}/#planos`;
+  const exp = fmtDate(opts.expiraEm, locale);
+  const cancelado = opts.motivo === 'cancelamento';
+  const planoLabel = opts.plano || 'atual';
+
+  const subject = cancelado
+    ? locale === 'en'
+      ? `${BRAND} — access ends in ${opts.dias} day(s)`
+      : `${BRAND} — acesso encerra em ${opts.dias} dia(s)`
+    : locale === 'en'
+      ? `${BRAND} — subscription renews in ${opts.dias} day(s)`
+      : `${BRAND} — assinatura renova em ${opts.dias} dia(s)`;
+
+  const text = cancelado
+    ? locale === 'en'
+      ? `You cancelled the plan ${planoLabel} for ${opts.nomeEmpresa}. Access remains until ${exp} (${opts.dias} day(s)).\nRenew: ${planos}`
+      : `Você cancelou o plano ${planoLabel} de ${opts.nomeEmpresa}. O acesso segue até ${exp} (faltam ${opts.dias} dia(s)).\nRenovar: ${planos}`
+    : locale === 'en'
+      ? `The ${planoLabel} plan for ${opts.nomeEmpresa} renews on ${exp} (${opts.dias} day(s)).\nDashboard: ${painel}`
+      : `O plano ${planoLabel} de ${opts.nomeEmpresa} renova em ${exp} (faltam ${opts.dias} dia(s)).\nPainel: ${painel}`;
+
+  await enviarEmail({
+    to: opts.email,
+    subject,
+    text,
+    html: wrapHtml(
+      cancelado
+        ? locale === 'en'
+          ? 'Access ending'
+          : 'Acesso encerrando'
+        : locale === 'en'
+          ? 'Renewal soon'
+          : 'Renovação próxima',
+      cancelado
+        ? `<p>Você cancelou o plano <strong style="color:#fafafa">${planoLabel}</strong> de <strong style="color:#fafafa">${opts.nomeEmpresa}</strong>.</p>
+           <p>O uso permanece liberado até <strong style="color:#fafafa">${exp}</strong> (faltam ${opts.dias} dia(s)).</p>
+           <p><a href="${planos}" style="color:#818cf8">Renovar assinatura</a></p>`
+        : `<p>O plano <strong style="color:#fafafa">${planoLabel}</strong> de <strong style="color:#fafafa">${opts.nomeEmpresa}</strong> renova em <strong style="color:#fafafa">${exp}</strong> (faltam ${opts.dias} dia(s)).</p>
+           <p><a href="${painel}" style="color:#818cf8">Abrir painel</a></p>`
+    ),
+  });
+  return { ok: true };
+}
+
+/**
+ * Acesso já encerrado (trial ou assinatura expirados / bloqueados).
+ * tipo: 'trial' | 'assinatura' | 'cancelamento'
+ */
+export async function notificarAcessoExpirado(opts: {
+  email: string;
+  nomeEmpresa: string;
+  tipo?: 'trial' | 'assinatura' | 'cancelamento';
+  plano?: string;
+  expiraEm?: string;
+  slug?: string;
+  empresaId?: string;
+  locale?: string;
+}): Promise<{ ok: boolean }> {
+  if (!opts.email) return { ok: false };
+  const locale = normLocale(opts.locale);
+  const planos = `${APP_URL}/#planos`;
+  const exp = opts.expiraEm ? fmtDate(opts.expiraEm, locale) : null;
+  const tipo = opts.tipo || 'assinatura';
+
+  const subject =
+    locale === 'en'
+      ? `${BRAND} — access ended for ${opts.nomeEmpresa}`
+      : `${BRAND} — acesso encerrado · ${opts.nomeEmpresa}`;
+
+  const intro =
+    tipo === 'trial'
+      ? locale === 'en'
+        ? `The free trial for ${opts.nomeEmpresa} has ended.`
+        : `O período grátis de ${opts.nomeEmpresa} terminou.`
+      : tipo === 'cancelamento'
+        ? locale === 'en'
+          ? `Access for ${opts.nomeEmpresa} ended after the paid period.`
+          : `O acesso de ${opts.nomeEmpresa} foi encerrado ao fim do período já pago.`
+        : locale === 'en'
+          ? `The subscription for ${opts.nomeEmpresa} has expired.`
+          : `A assinatura de ${opts.nomeEmpresa} expirou.`;
+
+  const text = [
+    intro,
+    exp ? (locale === 'en' ? `Ended on: ${exp}` : `Encerrado em: ${exp}`) : '',
+    opts.plano ? (locale === 'en' ? `Plan: ${opts.plano}` : `Plano: ${opts.plano}`) : '',
+    ``,
+    locale === 'en' ? `Choose a plan to continue: ${planos}` : `Escolha um plano para continuar: ${planos}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  await enviarEmail({
+    to: opts.email,
+    subject,
+    text,
+    html: wrapHtml(
+      locale === 'en' ? 'Access ended' : 'Acesso encerrado',
+      `<p>${intro}</p>
+       ${exp ? `<p>Data: <strong style="color:#fafafa">${exp}</strong></p>` : ''}
+       ${opts.plano ? `<p>Plano: <strong style="color:#fafafa">${opts.plano}</strong></p>` : ''}
+       <p style="margin-top:16px"><a href="${planos}" style="color:#818cf8">Ver planos e reativar</a></p>`
     ),
   });
   return { ok: true };
@@ -312,6 +437,47 @@ export async function notificarPagamentoConfirmado(opts: {
        <p><a href="${painel}" style="color:#818cf8">Abrir painel</a></p>`
     ),
   });
+}
+
+/** Confirmação de cancelamento (acesso até o fim do ciclo pago) */
+export async function notificarCancelamentoAgendado(opts: {
+  email: string;
+  nomeEmpresa: string;
+  plano?: string;
+  expiraEm?: string | null;
+  slug?: string;
+  empresaId?: string;
+  locale?: string;
+}): Promise<{ ok: boolean }> {
+  if (!opts.email) return { ok: false };
+  const locale = normLocale(opts.locale);
+  const planos = `${APP_URL}/#planos`;
+  const exp = opts.expiraEm ? fmtDate(opts.expiraEm, locale) : null;
+  const planoLabel = opts.plano || 'atual';
+
+  const subject =
+    locale === 'en'
+      ? `${BRAND} — cancellation scheduled · ${opts.nomeEmpresa}`
+      : `${BRAND} — cancelamento agendado · ${opts.nomeEmpresa}`;
+
+  const text =
+    locale === 'en'
+      ? `Cancellation confirmed for ${opts.nomeEmpresa} (${planoLabel}).${exp ? ` Access until ${exp}.` : ''}\nNo extra charge next cycle. Renew anytime: ${planos}`
+      : `Cancelamento confirmado para ${opts.nomeEmpresa} (plano ${planoLabel}).${exp ? ` Acesso até ${exp}.` : ''}\nSem cobrança no próximo ciclo. Renove quando quiser: ${planos}`;
+
+  await enviarEmail({
+    to: opts.email,
+    subject,
+    text,
+    html: wrapHtml(
+      locale === 'en' ? 'Cancellation scheduled' : 'Cancelamento agendado',
+      `<p>Cancelamento confirmado para <strong style="color:#fafafa">${opts.nomeEmpresa}</strong> (plano <strong style="color:#fafafa">${planoLabel}</strong>).</p>
+       ${exp ? `<p>Você continua com acesso até <strong style="color:#fafafa">${exp}</strong> — último dia do período já pago.</p>` : ''}
+       <p>Sem cobrança no mês seguinte.</p>
+       <p><a href="${planos}" style="color:#818cf8">Renovar assinatura</a></p>`
+    ),
+  });
+  return { ok: true };
 }
 
 export { smtpConfigured };

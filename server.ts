@@ -19,21 +19,29 @@ import { mountAuthRoutes } from './routes/authRoutes.js';
 import { mountEmpresaRoutes } from './routes/empresaRoutes.js';
 import { mountReviewRoutes } from './routes/reviewRoutes.js';
 import { mountAdminDashboardRoutes } from './routes/adminDashboardRoutes.js';
+import { mountAdminTecnicoRoutes } from './routes/adminTecnicoRoutes.js';
+import { mountTokenMetricsRoutes } from './routes/tokenMetricsRoutes.js';
 import { mountRelatorioRoutes } from './routes/relatorioRoutes.js';
 import { mountPlanSwitchRoutes } from './routes/planSwitchRoutes.js';
 import { mountWebAuthnRoutes } from './routes/webauthnRoutes.js';
 import { mountPushRoutes } from './routes/pushRoutes.js';
 import { mountJobsRoutes } from './routes/jobsRoutes.js';
+import { mountPayPalRoutes } from './routes/paypalRoutes.js';
 import { mountPasswordResetRoutes } from './passwordResetRoutes.js';
 import { mountAdminLoginRoute } from './adminLoginRoute.js';
 import { mountAdminPasswordResetRoutes } from './adminPasswordReset.js';
 import { mountMfaRoutes } from './mfa.js';
 import { mountStripeRoutes } from './stripeRoutes.js';
 import { stripeConfigured } from './stripeBilling.js';
+import { paypalConfigured } from './lib/paypal.js';
 import { aiConfigured, listAiProviders, getAiLoadStats } from './groqService.js';
 import { ensureUnidadesSchema } from './relatorioPdf.js';
 import { ensureWebAuthnSchema, webauthnConfig } from './lib/webauthn.js';
 import { ensurePushSchema, pushConfigured, initWebPush } from './lib/push.js';
+import { ensureAiUsageSchema } from './lib/aiUsage.js';
+import { ensureOpsTables } from './lib/opsLog.js';
+import { ensureRetryQueue, startRetryWorker } from './lib/retryQueue.js';
+import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
 import {
@@ -61,6 +69,7 @@ app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     stripe: stripeConfigured(),
+    paypal: paypalConfigured(),
     ai: aiConfigured(),
     ai_providers: listAiProviders(),
     plan_switch: allowPlanSwitch(),
@@ -132,6 +141,23 @@ async function main() {
   } catch (e) {
     console.warn('ensurePushSchema:', e);
   }
+  try {
+    await ensureAiUsageSchema(getDb());
+  } catch (e) {
+    console.warn('ensureAiUsageSchema:', e);
+  }
+  try {
+    await ensureOpsTables(getDb());
+  } catch (e) {
+    console.warn('ensureOpsTables:', e);
+  }
+  try {
+    await ensureRetryQueue(getDb());
+    registerAllRetryHandlers();
+    startRetryWorker();
+  } catch (e) {
+    console.warn('retry queue:', e);
+  }
 
   await runSentimentBackfillOnBoot();
 
@@ -140,11 +166,14 @@ async function main() {
   mountEmpresaRoutes(app);
   mountReviewRoutes(app);
   mountAdminDashboardRoutes(app);
+  mountAdminTecnicoRoutes(app);
+  mountTokenMetricsRoutes(app);
   mountRelatorioRoutes(app);
   mountPlanSwitchRoutes(app);
   mountWebAuthnRoutes(app);
   mountPushRoutes(app);
   mountJobsRoutes(app);
+  mountPayPalRoutes(app);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
@@ -172,7 +201,10 @@ async function main() {
   console.log(
     `🧪 Troca de plano (teste): ${allowPlanSwitch() ? 'ON' : 'OFF'} — ALLOW_PLAN_SWITCH`
   );
-  console.log(`💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF — defina STRIPE_SECRET_KEY no .env'}`);
+  console.log(`💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'}`);
+  console.log(
+    `💳 PayPal: ${paypalConfigured() ? 'ok (' + (process.env.PAYPAL_MODE || 'sandbox') + ')' : 'OFF — PAYPAL_CLIENT_ID/SECRET'}`
+  );
   app.listen(PORT, () => {
     console.log(`🚀 API Filtra.IA em http://localhost:${PORT}`);
     console.log(`   Health:  http://localhost:${PORT}/api/health`);
