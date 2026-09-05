@@ -220,6 +220,9 @@ export const schemaReview: Schema = {
   },
   empresa_id: { required: false, type: 'string', max: 100 },
   empresa_ref: { required: false, type: 'string', max: 100 },
+  /** Honeypot — deve ficar vazio */
+  website: { required: false, type: 'string', max: 200 },
+  is_test: { required: false, type: 'boolean' },
 };
 
 export const schemaCheckout: Schema = {

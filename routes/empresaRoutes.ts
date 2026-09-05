@@ -2,6 +2,7 @@ import type { Express, Request, Response } from 'express';
 import { getDb, findEmpresa } from '../lib/db.js';
 import { normalizarWhatsapp, linkWhatsapp } from '../lib/whatsapp.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
+import { ensureReviewFraudColumns } from '../lib/reviewFraud.js';
 
 const APP_URL = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
 
@@ -126,8 +127,11 @@ export function mountEmpresaRoutes(app: Express) {
       }
 
       const db = getDb();
+      await ensureReviewFraudColumns(db);
+
       const rows = await db.all(
-        `SELECT id, name, rating, comment, ai_reply, ai_tags, createdAt
+        `SELECT id, name, rating, comment, ai_reply, ai_tags, createdAt,
+                IFNULL(is_test,0) as is_test, fraud_flags, origin
          FROM reviews WHERE empresa_id = ? ORDER BY createdAt DESC LIMIT 500`,
         [empresa.id]
       );
@@ -150,28 +154,33 @@ export function mountEmpresaRoutes(app: Express) {
           ai_reply: r.ai_reply,
           ai_tags: tags,
           createdAt: r.createdAt,
+          is_test: Number(r.is_test) === 1,
+          fraud_flags: r.fraud_flags,
+          origin: r.origin || 'publico',
         };
       });
 
-      const total = reviews.length;
-      const soma = reviews.reduce((s: number, r: any) => s + Number(r.rating || 0), 0);
+      // Métricas oficiais: ignora avaliações de teste
+      const reais = reviews.filter((r) => !r.is_test);
+      const total = reais.length;
+      const soma = reais.reduce((s: number, r: any) => s + Number(r.rating || 0), 0);
       const media = total ? Math.round((soma / total) * 10) / 10 : 0;
-      const negativas = reviews.filter((r: any) => r.rating <= 3).length;
-      const positivas = reviews.filter((r: any) => r.rating >= 4).length;
+      const negativas = reais.filter((r: any) => r.rating <= 3).length;
+      const positivas = reais.filter((r: any) => r.rating >= 4).length;
 
       const dist = [0, 0, 0, 0, 0];
-      for (const r of reviews) {
+      for (const r of reais) {
         const n = Number(r.rating);
         if (n >= 1 && n <= 5) dist[n - 1] += 1;
       }
 
       const ha24h = Date.now() - 24 * 60 * 60 * 1000;
-      const crises_24h = reviews.filter(
+      const crises_24h = reais.filter(
         (r: any) => r.rating <= 2 && new Date(r.createdAt).getTime() >= ha24h
       ).length;
 
       const tagCount: Record<string, number> = {};
-      for (const r of reviews) {
+      for (const r of reais) {
         for (const t of r.ai_tags || []) {
           const k = String(t);
           tagCount[k] = (tagCount[k] || 0) + 1;
@@ -182,7 +191,7 @@ export function mountEmpresaRoutes(app: Express) {
         .slice(0, 8)
         .map(([tag, count]) => ({ tag, count }));
 
-      const serie_14d = serieUltimosDias(reviews, 14);
+      const serie_14d = serieUltimosDias(reais, 14);
 
       const plan = String(empresa.plan || 'trial').toLowerCase();
       const nivel = nivelDashboard(plan);
@@ -216,6 +225,7 @@ export function mountEmpresaRoutes(app: Express) {
           top_tags,
           taxa_positiva: total ? Math.round((positivas / total) * 100) : 0,
           serie_14d,
+          testes_excluidos: reviews.filter((r) => r.is_test).length,
         },
         dashboard: {
           nivel,

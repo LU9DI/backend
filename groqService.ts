@@ -5,6 +5,12 @@
  * Circuit breaker: AI_CB_FAILURES / AI_CB_COOLDOWN_MS
  */
 
+import {
+  analyzeSentimentHeuristic,
+  parseSentimentFromAiJson,
+  type SentimentResult,
+} from './lib/sentiment.js';
+
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GEMINI_BASE =
   process.env.GEMINI_API_BASE ||
@@ -30,7 +36,6 @@ type ProviderStats = {
   cooldownUntil: number;
   lastError?: string;
   lastUsedAt?: number;
-  /** amostras de latência (ms) — sucesso e falha */
   latencySamples: number[];
   latencySum: number;
   latencyCount: number;
@@ -346,22 +351,13 @@ export async function callAI(
       const text = await invokeProvider(provider, system, user, maxTokens, temperature);
       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
       markSuccess(provider, ms);
-      if (i > 0) {
-        console.warn(`[IA] Fallback: ${provider} (${ms}ms)`);
-      } else if (process.env.AI_LOG_LATENCY === '1') {
-        console.log(`[IA] ${provider} ok ${ms}ms`);
-      }
+      if (i > 0) console.warn(`[IA] Fallback: ${provider} (${ms}ms)`);
       return { text, provider, latency_ms: ms };
     } catch (e: any) {
       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
       markFail(provider, e, ms);
       lastError = e;
-      if (i < order.length - 1) {
-        console.warn(
-          `[IA] ${provider} falhou em ${ms}ms (${e?.status || e?.message}) → próximo...`
-        );
-        continue;
-      }
+      if (i < order.length - 1) continue;
     }
   }
 
@@ -391,14 +387,10 @@ export async function gerarRespostaReview(
     'Você responde avaliações negativas de clientes de forma empática, profissional e breve (máximo 3 frases). Peça desculpas quando apropriado e indique que a equipe vai analisar. Não invente políticas ou promessas específicas.';
 
   if (exemplosEstilo && exemplosEstilo.trim().length > 20) {
-    system += `\n\nImite o estilo de escrita do dono do negócio com base nestes exemplos de respostas anteriores dele:\n---\n${exemplosEstilo.slice(0, 1500)}\n---\nMantenha o mesmo tom, vocabulário e formalidade.`;
+    system += `\n\nImite o estilo de escrita do dono do negócio com base nestes exemplos:\n---\n${exemplosEstilo.slice(0, 1500)}\n---`;
   }
 
-  const prompt = `Cliente: ${nomeCliente || 'Anônimo'}
-Nota: ${rating}/5
-Comentário: ${comment}
-
-Escreva uma resposta curta para esta avaliação negativa${local}.`;
+  const prompt = `Cliente: ${nomeCliente || 'Anônimo'}\nNota: ${rating}/5\nComentário: ${comment}\n\nEscreva uma resposta curta para esta avaliação negativa${local}.`;
 
   return callLLM(system, prompt);
 }
@@ -414,12 +406,11 @@ export async function gerarTagsSemanticas(
   }
 
   const system = `Você analisa avaliações de estabelecimentos comerciais.
-Retorne APENAS um JSON array de 1 a 5 tags em português no formato hashtag CamelCase, sem espaços.
-Exemplos válidos: ["#AtendimentoRuim","#ComidaExcelente","#PrecoAlto","#AmbienteAgradavel"]
-Não explique. Não use markdown. Apenas o array JSON.`;
+Retorne APENAS um JSON array de 1 a 5 tags em português no formato hashtag CamelCase.
+Exemplos: ["#AtendimentoRuim","#ComidaExcelente"]
+Não explique. Apenas o array JSON.`;
 
-  const user = `Nota: ${rating}/5
-Comentário: ${comment}`;
+  const user = `Nota: ${rating}/5\nComentário: ${comment}`;
   const raw = await callLLM(system, user, 120, 0.3);
 
   try {
@@ -435,3 +426,35 @@ Comentário: ${comment}`;
     return matches ? matches.slice(0, 5) : [];
   }
 }
+
+/**
+ * Sentimento: heurística sempre; IA opcional para refinar texto.
+ */
+export async function analisarSentimento(
+  rating: number,
+  comment: string,
+  useAi: boolean
+): Promise<SentimentResult> {
+  const heuristic = analyzeSentimentHeuristic(rating, comment);
+
+  if (!useAi || !aiConfigured() || !comment || comment.trim().length < 8) {
+    return heuristic;
+  }
+
+  try {
+    const system = `Analise o sentimento de uma avaliação de cliente em português do Brasil.
+Retorne APENAS JSON válido:
+{"sentimento":"positivo"|"neutro"|"negativo","score":número de -1 a 1,"keywords":["até 5 palavras-chave"]}
+Não use markdown.`;
+    const user = `Nota: ${rating}/5\nComentário: ${comment}`;
+    const raw = await callLLM(system, user, 100, 0.2);
+    const parsed = parseSentimentFromAiJson(raw);
+    if (parsed) return parsed;
+  } catch (e: any) {
+    console.warn('[sentimento IA] fallback heurística:', e?.message || e);
+  }
+
+  return heuristic;
+}
+
+export type { SentimentResult };
