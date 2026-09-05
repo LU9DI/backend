@@ -1,15 +1,19 @@
 /**
- * JWT + cookies de sessão.
- *
- * Produção (Vercel front + Railway API = origens diferentes):
- *   SameSite=None + Secure=true  → cookie viaja em requests cross-site
- *   COOKIE_DOMAIN opcional (ex: .seudominio.com) se front e API forem subdomínios
+ * JWT + cookies de sessão (com rotação de chave).
  */
 import type { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import {
+  requireJwtSecret as _require,
+  signAccessToken,
+  verifyAccessToken,
+  type JwtPayload,
+} from './jwtKeys.js';
 
 export const COOKIE_NAME = 'saas_auth_token';
 const isProd = process.env.NODE_ENV === 'production';
+
+export { signAccessToken, verifyAccessToken };
+export type { JwtPayload };
 
 function cookieBaseOptions() {
   const domain = process.env.COOKIE_DOMAIN?.trim() || undefined;
@@ -26,12 +30,7 @@ function cookieBaseOptions() {
 }
 
 export function requireJwtSecret(): string {
-  const secret = process.env.JWT_SECRET ?? '';
-  if (!secret) {
-    console.error('❌ JWT_SECRET não definido. Defina no backend/.env');
-    process.exit(1);
-  }
-  return secret;
+  return _require();
 }
 
 export function setAuthCookie(res: Response, token: string) {
@@ -44,8 +43,6 @@ export function setAuthCookie(res: Response, token: string) {
 }
 
 export function clearAuthCookie(res: Response) {
-  // clearCookie precisa das MESMAS flags (path, domain, secure, sameSite)
-  // senão o browser não remove o cookie cross-site
   const base = cookieBaseOptions();
   res.clearCookie(COOKIE_NAME, base);
   res.clearCookie('auth_token', base);
@@ -67,7 +64,7 @@ export function autenticarToken(req: AuthRequest, res: Response, next: NextFunct
   const token = extrairToken(req);
   if (!token) return res.status(401).json({ error: 'Token não fornecido.' });
   try {
-    const payload = jwt.verify(token, requireJwtSecret()) as any;
+    const payload = verifyAccessToken(token);
     req.user = {
       id: payload.id,
       nome_funcionario: payload.nome_funcionario,

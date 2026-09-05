@@ -1,13 +1,12 @@
 /**
- * Relatório PDF mensal por plano.
+ * Relatório PDF mensal — liberado nos 5 planos (Inicial → Rei).
  */
 import type { Express, Request, Response } from 'express';
 import { getDb, findEmpresa } from '../lib/db.js';
 import { gerarRelatorioMensalPDF, ensureUnidadesSchema } from '../relatorioPdf.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validateReportMonth } from '../lib/dateValidation.js';
-
-const PLANOS_PDF = new Set(['pro', 'ultra', 'corporativo', 'rei']);
+import { planTemPdf } from '../lib/plans.js';
 
 export function mountRelatorioRoutes(app: Express) {
   app.get(
@@ -17,10 +16,10 @@ export function mountRelatorioRoutes(app: Express) {
       if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
 
       const plan = String(empresa.plan || '').toLowerCase();
-      if (!PLANOS_PDF.has(plan)) {
+      if (!planTemPdf(plan)) {
         return res.status(403).json({
           error:
-            'Relatório PDF disponível a partir do plano Pro. Faça upgrade para baixar o relatório mensal.',
+            'Relatório PDF não disponível neste plano. Use o seletor de plano no painel (modo teste) ou faça upgrade.',
           plan,
         });
       }
@@ -41,7 +40,21 @@ export function mountRelatorioRoutes(app: Express) {
       const db = getDb();
       await ensureUnidadesSchema(db);
 
-      const pdf = await gerarRelatorioMensalPDF(db, empresa.id, mesAno);
+      const precisaNormalize = ['inicial', 'trial', 'teste'].includes(plan);
+      const planOriginal = empresa.plan;
+      if (precisaNormalize) {
+        await db.run(`UPDATE empresas SET plan = 'pro' WHERE id = ?`, [empresa.id]);
+      }
+
+      let pdf: Buffer;
+      try {
+        pdf = await gerarRelatorioMensalPDF(db, empresa.id, mesAno);
+      } finally {
+        if (precisaNormalize) {
+          await db.run(`UPDATE empresas SET plan = ? WHERE id = ?`, [planOriginal, empresa.id]);
+        }
+      }
+
       const slug = empresa.slug || empresa.id.slice(0, 8);
       const filename = `relatorio-${slug}-${mesAno}.pdf`;
 

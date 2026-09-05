@@ -1,5 +1,5 @@
 /**
- * Regras de negócio de avaliações (reviews) + anti-fraude + sentimento.
+ * Regras de negócio de avaliações (reviews) + anti-fraude + sentimento + push.
  */
 import type { Database } from 'sqlite';
 import { getDb, findEmpresa } from '../lib/db.js';
@@ -20,6 +20,7 @@ import {
   softFraudFlags,
   ReviewFraudError,
 } from '../lib/reviewFraud.js';
+import { notifyCrisisReview } from '../lib/push.js';
 
 export type ReviewInput = {
   name?: string;
@@ -91,6 +92,7 @@ export async function criarReview(
   let empresaId: string | null = null;
   let nomeEmpresa: string | undefined;
   let plan = 'trial';
+  let slugOrId: string | undefined;
 
   if (empresaRef) {
     const emp = await findEmpresa(empresaRef);
@@ -98,6 +100,7 @@ export async function criarReview(
     empresaId = emp.id;
     nomeEmpresa = emp.nome_empresa;
     plan = String(emp.plan || emp.status || 'trial').toLowerCase();
+    slugOrId = emp.slug || emp.id;
 
     if (!isTest) {
       checkMemoryRate(ip, empresaId);
@@ -121,7 +124,6 @@ export async function criarReview(
   let aiReply: string | null = null;
   let aiTags: string | null = null;
 
-  // Sentimento: sempre (heurística); IA em planos com IA + comentário
   const useAiSentiment = !isTest && planTemIA(plan) && Boolean(comment?.trim());
   const sentiment = await analisarSentimento(rating, comment || '', useAiSentiment);
 
@@ -162,6 +164,16 @@ export async function criarReview(
       sentiment.source,
     ]
   );
+
+  // Push em avaliação crítica (não bloqueia resposta)
+  if (!isTest && empresaId && rating <= 3) {
+    notifyCrisisReview(db, {
+      empresaId,
+      rating,
+      name: name || undefined,
+      slugOrId,
+    }).catch((e) => console.warn('push crise:', e?.message || e));
+  }
 
   return {
     success: true,

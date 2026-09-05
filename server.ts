@@ -9,8 +9,10 @@ import 'dotenv/config';
 import { assertEnvOrExit } from './lib/env.js';
 import { initDB, getDb } from './lib/db.js';
 import { requireJwtSecret, setAuthCookie, autenticarToken } from './lib/auth.js';
+import { jwtRotationStatus } from './lib/jwtKeys.js';
 import { buildCorsOptions } from './lib/cors.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
+import { requestIdMiddleware, securityHeaders } from './middleware/security.js';
 import { latencyMiddleware, getHttpMetrics } from './lib/metrics.js';
 import { mountTrialRoutes } from './routes/trialRoutes.js';
 import { mountAuthRoutes } from './routes/authRoutes.js';
@@ -18,6 +20,9 @@ import { mountEmpresaRoutes } from './routes/empresaRoutes.js';
 import { mountReviewRoutes } from './routes/reviewRoutes.js';
 import { mountAdminListRoutes } from './routes/adminListRoutes.js';
 import { mountRelatorioRoutes } from './routes/relatorioRoutes.js';
+import { mountPlanSwitchRoutes } from './routes/planSwitchRoutes.js';
+import { mountWebAuthnRoutes } from './routes/webauthnRoutes.js';
+import { mountPushRoutes } from './routes/pushRoutes.js';
 import { mountPasswordResetRoutes } from './passwordResetRoutes.js';
 import { mountAdminLoginRoute } from './adminLoginRoute.js';
 import { mountAdminPasswordResetRoutes } from './adminPasswordReset.js';
@@ -26,6 +31,9 @@ import { mountStripeRoutes } from './stripeRoutes.js';
 import { stripeConfigured } from './stripeBilling.js';
 import { aiConfigured, listAiProviders, getAiLoadStats } from './groqService.js';
 import { ensureUnidadesSchema } from './relatorioPdf.js';
+import { ensureWebAuthnSchema, webauthnConfig } from './lib/webauthn.js';
+import { ensurePushSchema, pushConfigured, initWebPush } from './lib/push.js';
+import { allowPlanSwitch } from './lib/plans.js';
 import {
   backfillSentiment,
   countMissingSentiment,
@@ -36,6 +44,8 @@ const JWT_SECRET = requireJwtSecret();
 
 const app = express();
 app.set('trust proxy', 1);
+app.use(requestIdMiddleware);
+app.use(securityHeaders);
 app.use(cookieParser());
 app.use(latencyMiddleware as any);
 app.use((req, res, next) => {
@@ -51,6 +61,10 @@ app.get('/api/health', (_req, res) => {
     stripe: stripeConfigured(),
     ai: aiConfigured(),
     ai_providers: listAiProviders(),
+    plan_switch: allowPlanSwitch(),
+    jwt: jwtRotationStatus(),
+    webauthn: webauthnConfig(),
+    push: pushConfigured(),
     ai_latency: {
       groq: ai.stats.groq.latency,
       gemini: ai.stats.gemini.latency,
@@ -72,7 +86,6 @@ app.get('/api/metrics', (_req, res) => {
 const PORT = Number(process.env.PORT || 5000);
 
 async function runSentimentBackfillOnBoot() {
-  // BACKFILL_SENTIMENT=0 desliga; default = ligado (heurística, lote 2000)
   if (process.env.BACKFILL_SENTIMENT === '0') {
     console.log('⏭️  Backfill de sentimento desligado (BACKFILL_SENTIMENT=0)');
     return;
@@ -105,6 +118,17 @@ async function main() {
   } catch (e) {
     console.warn('ensureUnidadesSchema:', e);
   }
+  try {
+    await ensureWebAuthnSchema(getDb());
+  } catch (e) {
+    console.warn('ensureWebAuthnSchema:', e);
+  }
+  try {
+    await ensurePushSchema(getDb());
+    initWebPush();
+  } catch (e) {
+    console.warn('ensurePushSchema:', e);
+  }
 
   await runSentimentBackfillOnBoot();
 
@@ -114,6 +138,9 @@ async function main() {
   mountReviewRoutes(app);
   mountAdminListRoutes(app);
   mountRelatorioRoutes(app);
+  mountPlanSwitchRoutes(app);
+  mountWebAuthnRoutes(app);
+  mountPushRoutes(app);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
@@ -126,8 +153,19 @@ async function main() {
 
   const providers = listAiProviders();
   const load = getAiLoadStats();
+  const jwtStat = jwtRotationStatus();
   console.log(
     `🤖 IA: ${providers.length ? providers.join(' + ') : 'OFF'} | balance=${load.mode}`
+  );
+  console.log(
+    `🔐 JWT kid=${jwtStat.kid} keys_verify=${jwtStat.keys_for_verify} previous=${jwtStat.has_previous}`
+  );
+  console.log(
+    `👆 WebAuthn rp=${webauthnConfig().rpId} origin=${webauthnConfig().origin}`
+  );
+  console.log(`🔔 Push: ${pushConfigured() ? 'ON (VAPID)' : 'OFF — npx web-push generate-vapid-keys'}`);
+  console.log(
+    `🧪 Troca de plano (teste): ${allowPlanSwitch() ? 'ON' : 'OFF'} — ALLOW_PLAN_SWITCH`
   );
   console.log(`💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF — defina STRIPE_SECRET_KEY no .env'}`);
   app.listen(PORT, () => {

@@ -3,6 +3,7 @@ import { getDb, findEmpresa } from '../lib/db.js';
 import { normalizarWhatsapp, linkWhatsapp } from '../lib/whatsapp.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { ensureReviewFraudColumns } from '../lib/reviewFraud.js';
+import { planTemPdf, allowPlanSwitch, PLANOS_OFICIAIS, planLabel } from '../lib/plans.js';
 
 const APP_URL = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
 
@@ -10,7 +11,7 @@ function nivelDashboard(plan: string): 'basico' | 'pro' | 'ultra' | 'executivo' 
   const p = String(plan || 'trial').toLowerCase();
   if (p === 'rei' || p === 'corporativo') return 'executivo';
   if (p === 'ultra') return 'ultra';
-  if (p === 'pro') return 'pro';
+  if (p === 'pro' || p === 'inicial') return 'pro';
   return 'basico';
 }
 
@@ -128,7 +129,6 @@ export function mountEmpresaRoutes(app: Express) {
 
       const db = getDb();
       await ensureReviewFraudColumns(db);
-      // colunas de sentimento (idempotente)
       const cols = (await db.all(`PRAGMA table_info(reviews)`)).map((c: any) => c.name);
       if (!cols.includes('sentiment')) await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment TEXT`);
       if (!cols.includes('sentiment_score'))
@@ -193,7 +193,6 @@ export function mountEmpresaRoutes(app: Express) {
         else if (lab === 'negativo') sentimento_mix.negativo += 1;
         else if (lab === 'neutro') sentimento_mix.neutro += 1;
         else {
-          // fallback pela nota se ainda sem coluna preenchida (reviews antigas)
           if (r.rating >= 4) sentimento_mix.positivo += 1;
           else if (r.rating <= 2) sentimento_mix.negativo += 1;
           else sentimento_mix.neutro += 1;
@@ -225,7 +224,7 @@ export function mountEmpresaRoutes(app: Express) {
 
       const plan = String(empresa.plan || 'trial').toLowerCase();
       const nivel = nivelDashboard(plan);
-      const pdf_disponivel = ['pro', 'ultra', 'corporativo', 'rei'].includes(plan);
+      const pdf_disponivel = planTemPdf(plan);
 
       const base = APP_URL.replace(/\/$/, '');
       const ref = empresa.slug || empresa.id;
@@ -263,6 +262,10 @@ export function mountEmpresaRoutes(app: Express) {
         dashboard: {
           nivel,
           pdf_disponivel,
+          plan_switch: allowPlanSwitch(),
+          planos_teste: allowPlanSwitch()
+            ? PLANOS_OFICIAIS.map((p) => ({ key: p, label: planLabel(p) }))
+            : [],
           mostrar_graficos: true,
           mostrar_tendencia: nivel !== 'basico',
           mostrar_tags: nivel === 'ultra' || nivel === 'executivo',

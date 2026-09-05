@@ -2,11 +2,10 @@
  * Regras de autenticação de clientes (empresa).
  */
 import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
 import type { Database } from 'sqlite';
 import type { Response } from 'express';
 import { getDb } from '../lib/db.js';
-import { setAuthCookie, requireJwtSecret } from '../lib/auth.js';
+import { setAuthCookie, signAccessToken } from '../lib/auth.js';
 
 export type LoginInput = {
   cnpj: string;
@@ -51,7 +50,7 @@ export async function loginEmpresa(
     empresa_id: usuario.empresa_id,
   };
 
-  const token = jwt.sign(tokenPayload, requireJwtSecret(), { expiresIn: '1d' });
+  const token = signAccessToken(tokenPayload);
   setAuthCookie(res, token);
 
   return { success: true, token, tokenPayload };

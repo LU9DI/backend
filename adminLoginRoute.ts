@@ -1,20 +1,13 @@
 /**
  * Login do painel administrativo (e-mail + senha [+ MFA se ativo]).
- *
- * POST /api/admin/login { email, senha }
- *   → sem MFA: cookie + { success, token, tokenPayload }
- *   → com MFA: { mfa_required, mfa_token }
- *
- * Em localhost (front :3000 / API :5000) o cookie httpOnly muitas vezes
- * NÃO é enviado em fetch cross-origin. Por isso o `token` também vai no JSON
- * para o front guardar e mandar em Authorization: Bearer.
+ * JWT com rotação de chave (signAccessToken / verifyAccessToken).
  */
 import type { Express, Request, Response } from 'express';
 import type { Database } from 'sqlite';
 import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
 import { ensureMfaColumns, issueMfaChallenge } from './mfa.js';
+import { signAccessToken, verifyAccessToken } from './lib/auth.js';
 
 const adminLoginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -78,24 +71,19 @@ export function mountAdminLoginRoute(
         });
       }
 
-      const token = jwt.sign(
-        {
-          id: usuario.id,
-          nome_funcionario: usuario.nome_funcionario,
-          empresa_id: usuario.empresa_id,
-          role: 'admin',
-          mfa: false,
-        },
-        opts.JWT_SECRET,
-        { expiresIn: '1d' }
-      );
+      const token = signAccessToken({
+        id: usuario.id,
+        nome_funcionario: usuario.nome_funcionario,
+        empresa_id: usuario.empresa_id,
+        role: 'admin',
+      });
 
       opts.setAuthCookie(res, token);
 
       return res.json({
         success: true,
         mfa_required: false,
-        token, // fallback para localhost cross-origin
+        token,
         tokenPayload: {
           id: usuario.id,
           nome_funcionario: usuario.nome_funcionario,
@@ -109,7 +97,6 @@ export function mountAdminLoginRoute(
     }
   });
 
-  /** Sessão atual do admin (cookie ou Bearer) */
   app.get('/api/admin/me', async (req: Request, res: Response) => {
     try {
       const raw =
@@ -123,7 +110,7 @@ export function mountAdminLoginRoute(
         return res.status(401).json({ error: 'Não autenticado.' });
       }
 
-      const decoded = jwt.verify(raw, opts.JWT_SECRET) as any;
+      const decoded = verifyAccessToken(raw);
       if (decoded.role !== 'admin' && decoded.empresa_id !== 'admin') {
         return res.status(403).json({ error: 'Não é admin.' });
       }
@@ -145,4 +132,3 @@ export function mountAdminLoginRoute(
     return res.json({ success: true });
   });
 }
-
