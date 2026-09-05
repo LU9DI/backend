@@ -8,6 +8,7 @@ import {
   ReviewNotFoundError,
   ReviewQuotaError,
   ReviewFraudError,
+  ReviewValidationError,
 } from '../services/reviewService.js';
 import { clientIp } from '../lib/reviewFraud.js';
 
@@ -19,7 +20,6 @@ const reviewsLimiter = rateLimit({
   message: { error: 'Muitas avaliações. Tente mais tarde.' },
 });
 
-/** Limite mais apertado por IP (além do anti-fraude por empresa) */
 const reviewsIpStrict = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 8,
@@ -44,6 +44,11 @@ export function mountReviewRoutes(app: Express) {
           empresa_ref: req.body.empresa_ref ? String(req.body.empresa_ref) : undefined,
           website: req.body.website != null ? String(req.body.website) : undefined,
           is_test: Boolean(req.body.is_test),
+          client_whatsapp: req.body.client_whatsapp
+            ? String(req.body.client_whatsapp)
+            : req.body.whatsapp
+              ? String(req.body.whatsapp)
+              : undefined,
           ip: clientIp(req as any),
         });
         res.status(201).json(result);
@@ -51,7 +56,8 @@ export function mountReviewRoutes(app: Express) {
         if (
           e instanceof ReviewNotFoundError ||
           e instanceof ReviewQuotaError ||
-          e instanceof ReviewFraudError
+          e instanceof ReviewFraudError ||
+          e instanceof ReviewValidationError
         ) {
           return res.status(e.status).json({ error: e.message });
         }

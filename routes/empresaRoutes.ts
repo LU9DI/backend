@@ -3,15 +3,22 @@ import { getDb, findEmpresa } from '../lib/db.js';
 import { normalizarWhatsapp, linkWhatsapp } from '../lib/whatsapp.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { ensureReviewFraudColumns } from '../lib/reviewFraud.js';
-import { planTemPdf, allowPlanSwitch, PLANOS_OFICIAIS, planLabel } from '../lib/plans.js';
+import { planTemPdf, allowPlanSwitch, PLANOS_OFICIAIS, planLabel, isTrialPlan } from '../lib/plans.js';
+import { planTemIA } from '../lib/quota.js';
 
 const APP_URL = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
 
+/**
+ * Níveis de UI do painel.
+ * Trial / teste = executivo (tudo incluso nos 7 dias).
+ */
 function nivelDashboard(plan: string): 'basico' | 'pro' | 'ultra' | 'executivo' {
   const p = String(plan || 'trial').toLowerCase();
+  if (isTrialPlan(p)) return 'executivo';
   if (p === 'rei' || p === 'corporativo') return 'executivo';
   if (p === 'ultra') return 'ultra';
-  if (p === 'pro' || p === 'inicial') return 'pro';
+  if (p === 'pro') return 'pro';
+  // inicial
   return 'basico';
 }
 
@@ -135,11 +142,14 @@ export function mountEmpresaRoutes(app: Express) {
         await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_score REAL`);
       if (!cols.includes('sentiment_source'))
         await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_source TEXT`);
+      if (!cols.includes('client_whatsapp'))
+        await db.exec(`ALTER TABLE reviews ADD COLUMN client_whatsapp TEXT`);
 
       const rows = await db.all(
         `SELECT id, name, rating, comment, ai_reply, ai_tags, createdAt,
                 IFNULL(is_test,0) as is_test, fraud_flags, origin,
-                sentiment, sentiment_score, sentiment_source
+                sentiment, sentiment_score, sentiment_source,
+                client_whatsapp
          FROM reviews WHERE empresa_id = ? ORDER BY createdAt DESC LIMIT 500`,
         [empresa.id]
       );
@@ -154,6 +164,7 @@ export function mountEmpresaRoutes(app: Express) {
             tags = [];
           }
         }
+        const clientWpp = normalizarWhatsapp(r.client_whatsapp);
         return {
           id: r.id,
           name: r.name,
@@ -168,6 +179,8 @@ export function mountEmpresaRoutes(app: Express) {
           sentiment: r.sentiment || null,
           sentiment_score: r.sentiment_score != null ? Number(r.sentiment_score) : null,
           sentiment_source: r.sentiment_source || null,
+          client_whatsapp: clientWpp,
+          client_whatsapp_url: linkWhatsapp(clientWpp),
         };
       });
 
@@ -223,8 +236,11 @@ export function mountEmpresaRoutes(app: Express) {
       const serie_14d = serieUltimosDias(reais, 14);
 
       const plan = String(empresa.plan || 'trial').toLowerCase();
+      const trial = isTrialPlan(plan);
       const nivel = nivelDashboard(plan);
       const pdf_disponivel = planTemPdf(plan);
+      // Trial tem IA; planos pagos seguem planTemIA
+      const tem_ia = trial || planTemIA(plan);
 
       const base = APP_URL.replace(/\/$/, '');
       const ref = empresa.slug || empresa.id;
@@ -251,7 +267,7 @@ export function mountEmpresaRoutes(app: Express) {
           alerta_crise: crises_24h >= 3,
           crises_24h,
           distribuicao: dist,
-          top_tags,
+          top_tags: tem_ia ? top_tags : [],
           taxa_positiva: total ? Math.round((positivas / total) * 100) : 0,
           serie_14d,
           testes_excluidos: reviews.filter((r) => r.is_test).length,
@@ -262,15 +278,24 @@ export function mountEmpresaRoutes(app: Express) {
         dashboard: {
           nivel,
           pdf_disponivel,
+          tem_ia,
+          trial_completo: trial,
           plan_switch: allowPlanSwitch(),
           planos_teste: allowPlanSwitch()
             ? PLANOS_OFICIAIS.map((p) => ({ key: p, label: planLabel(p) }))
             : [],
+          // Gráficos / tendência / tags: trial e planos superiores
           mostrar_graficos: true,
-          mostrar_tendencia: nivel !== 'basico',
-          mostrar_tags: nivel === 'ultra' || nivel === 'executivo',
-          mostrar_crise: nivel !== 'basico',
+          mostrar_tendencia:
+            trial || nivel === 'pro' || nivel === 'ultra' || nivel === 'executivo',
+          mostrar_tags: tem_ia && (trial || nivel === 'ultra' || nivel === 'executivo'),
+          mostrar_crise: true, // alerta de crise disponível em todos
           mostrar_sentimento: true,
+          mostrar_ia_respostas: tem_ia,
+          // Universal em TODOS os planos (incl. inicial/pro e trial):
+          mostrar_whatsapp_cliente: true,
+          mostrar_copiar_resposta: true,
+          whatsapp_crise: true,
         },
         links: {
           avaliacao: `${base}/avaliacao/${ref}`,

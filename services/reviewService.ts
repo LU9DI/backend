@@ -1,5 +1,5 @@
 /**
- * Regras de negócio de avaliações (reviews) + anti-fraude + sentimento + push.
+ * Regras de negócio de avaliações (reviews) + anti-fraude + sentimento + push + e-mail.
  */
 import type { Database } from 'sqlite';
 import { getDb, findEmpresa } from '../lib/db.js';
@@ -21,6 +21,8 @@ import {
   ReviewFraudError,
 } from '../lib/reviewFraud.js';
 import { notifyCrisisReview } from '../lib/push.js';
+import { normalizarWhatsapp } from '../lib/whatsapp.js';
+import { notificarCriticaPrivada, notificarAlertaCrise } from '../lib/notifications.js';
 
 export type ReviewInput = {
   name?: string;
@@ -31,6 +33,8 @@ export type ReviewInput = {
   website?: string;
   is_test?: boolean;
   ip?: string;
+  /** WhatsApp do cliente (obrigatório em nota ≤ 3) para o empresário contatar. */
+  client_whatsapp?: string;
 };
 
 export type ReviewResult = {
@@ -57,6 +61,14 @@ export class ReviewQuotaError extends Error {
   }
 }
 
+export class ReviewValidationError extends Error {
+  status = 400;
+  constructor(message: string) {
+    super(message);
+    this.name = 'ReviewValidationError';
+  }
+}
+
 export { ReviewFraudError };
 
 async function ensureSentimentColumns(db: Database) {
@@ -70,6 +82,17 @@ async function ensureSentimentColumns(db: Database) {
   if (!cols.includes('sentiment_source')) {
     await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_source TEXT`);
   }
+  if (!cols.includes('client_whatsapp')) {
+    await db.exec(`ALTER TABLE reviews ADD COLUMN client_whatsapp TEXT`);
+  }
+}
+
+async function emailDaEmpresa(db: Database, empresaId: string): Promise<string | null> {
+  const row = await db.get(
+    `SELECT email FROM usuarios WHERE empresa_id = ? AND email IS NOT NULL AND email != '' LIMIT 1`,
+    [empresaId]
+  );
+  return row?.email ? String(row.email) : null;
 }
 
 export async function criarReview(
@@ -88,6 +111,16 @@ export async function criarReview(
   const isTest = Boolean(input.is_test);
   const ip = input.ip || '0.0.0.0';
   const ipHash = hashIp(ip);
+
+  let clientWpp: string | null = null;
+  if (!isTest && rating <= 3) {
+    clientWpp = normalizarWhatsapp(input.client_whatsapp);
+    if (!clientWpp) {
+      throw new ReviewValidationError(
+        'Informe seu WhatsApp (DDD + número) para a empresa poder retornar o contato.'
+      );
+    }
+  }
 
   let empresaId: string | null = null;
   let nomeEmpresa: string | undefined;
@@ -124,10 +157,11 @@ export async function criarReview(
   let aiReply: string | null = null;
   let aiTags: string | null = null;
 
-  const useAiSentiment = !isTest && planTemIA(plan) && Boolean(comment?.trim());
+  const useAi = !isTest && planTemIA(plan) && aiConfigured();
+  const useAiSentiment = useAi && Boolean(comment?.trim());
   const sentiment = await analisarSentimento(rating, comment || '', useAiSentiment);
 
-  if (!isTest && rating <= 3 && comment && planTemIA(plan) && aiConfigured()) {
+  if (useAi && rating <= 3 && comment) {
     try {
       const [resposta, tags] = await Promise.all([
         gerarRespostaReview(name || 'Anônimo', rating, comment, nomeEmpresa),
@@ -146,8 +180,8 @@ export async function criarReview(
     `INSERT INTO reviews (
       empresa_id, name, rating, comment, ai_reply, ai_tags,
       is_test, ip_hash, fraud_flags, origin,
-      sentiment, sentiment_score, sentiment_source
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      sentiment, sentiment_score, sentiment_source, client_whatsapp
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       empresaId,
       name || 'Anônimo',
@@ -162,10 +196,10 @@ export async function criarReview(
       sentiment.label,
       sentiment.score,
       sentiment.source,
+      clientWpp,
     ]
   );
 
-  // Push em avaliação crítica (não bloqueia resposta)
   if (!isTest && empresaId && rating <= 3) {
     notifyCrisisReview(db, {
       empresaId,
@@ -173,6 +207,41 @@ export async function criarReview(
       name: name || undefined,
       slugOrId,
     }).catch((e) => console.warn('push crise:', e?.message || e));
+
+    // E-mail ao empresário (não bloqueia a resposta HTTP)
+    emailDaEmpresa(db, empresaId)
+      .then(async (email) => {
+        if (!email) return;
+        await notificarCriticaPrivada({
+          email,
+          nomeEmpresa: nomeEmpresa || 'Empresa',
+          nomeCliente: name || undefined,
+          rating,
+          comment,
+          aiReply,
+          clientWhatsapp: clientWpp,
+          slug: slugOrId,
+          empresaId,
+        });
+
+        const ha24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const row = await db.get(
+          `SELECT COUNT(*) as n FROM reviews
+           WHERE empresa_id = ? AND rating <= 2 AND IFNULL(is_test,0) = 0 AND createdAt >= ?`,
+          [empresaId, ha24h]
+        );
+        const n = Number(row?.n || 0);
+        if (n >= 3) {
+          await notificarAlertaCrise({
+            email,
+            nomeEmpresa: nomeEmpresa || 'Empresa',
+            quantidade: n,
+            slug: slugOrId,
+            empresaId,
+          });
+        }
+      })
+      .catch((e) => console.warn('e-mail crítica:', e?.message || e));
   }
 
   return {
@@ -192,7 +261,7 @@ export async function listarReviews(ref: string, db: Database = getDb()) {
   return db.all(
     `SELECT id, name, rating, comment, ai_reply, ai_tags, createdAt,
             IFNULL(is_test,0) as is_test, fraud_flags, origin,
-            sentiment, sentiment_score, sentiment_source
+            sentiment, sentiment_score, sentiment_source, client_whatsapp
      FROM reviews WHERE empresa_id = ? ORDER BY createdAt DESC LIMIT 100`,
     [emp.id]
   );

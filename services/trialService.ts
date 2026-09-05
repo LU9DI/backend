@@ -6,6 +6,7 @@ import type { Database } from 'sqlite';
 import { getDb, slugify, slugUnico } from '../lib/db.js';
 import { createUsuarioForEmpresa } from '../passwordResetRoutes.js';
 import { normalizarWhatsapp } from '../lib/whatsapp.js';
+import { notificarTrialAtivado } from '../lib/notifications.js';
 
 const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(
   /\/$/,
@@ -19,6 +20,7 @@ export type TrialInput = {
   senha: string;
   google_review_url?: string;
   whatsapp?: string;
+  locale?: string;
 };
 
 export type TrialResult = {
@@ -93,6 +95,16 @@ export async function ativarTrial(input: TrialInput, db: Database = getDb()): Pr
     await db.run('DELETE FROM empresas WHERE id = ?', [id]);
     throw new TrialValidationError(e.message || 'Falha ao criar usuário.');
   }
+
+  // E-mail de boas-vindas (não bloqueia a resposta)
+  notificarTrialAtivado({
+    email,
+    nomeEmpresa: nome,
+    slug,
+    empresaId: id,
+    expiraEm: expiraEm.toISOString(),
+    locale: input.locale,
+  }).catch((e) => console.warn('e-mail trial:', e?.message || e));
 
   return {
     success: true,

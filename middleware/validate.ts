@@ -218,6 +218,9 @@ export const schemaReview: Schema = {
       return null;
     },
   },
+  /** WhatsApp do cliente — exigido em nota ≤ 3 no serviço (validação fina). */
+  client_whatsapp: { required: false, type: 'string', max: 20 },
+  whatsapp: { required: false, type: 'string', max: 20 },
   empresa_id: { required: false, type: 'string', max: 100 },
   empresa_ref: { required: false, type: 'string', max: 100 },
   /** Honeypot — deve ficar vazio */

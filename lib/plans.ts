@@ -14,12 +14,17 @@ export function allowPlanSwitch(): boolean {
   return process.env.NODE_ENV !== 'production';
 }
 
-/** PDF mensal: todos os 5 planos (e trial em modo teste). */
+/** Trial / teste de 7 dias — tudo incluso (IA, PDF, dashboard completo). */
+export function isTrialPlan(plan: string | null | undefined): boolean {
+  const p = String(plan || '').toLowerCase();
+  return p === 'trial' || p === 'teste';
+}
+
+/** PDF mensal: Pro e acima + trial (tudo incluso nos 7 dias). Inicial pago não tem PDF. */
 export function planTemPdf(plan: string | null | undefined): boolean {
   const p = String(plan || '').toLowerCase();
-  if (['inicial', 'pro', 'ultra', 'corporativo', 'rei'].includes(p)) return true;
-  // trial: só se estiver testando planos
-  if ((p === 'trial' || p === 'teste') && allowPlanSwitch()) return true;
+  if (isTrialPlan(p)) return true;
+  if (['pro', 'ultra', 'corporativo', 'rei'].includes(p)) return true;
   return false;
 }
 

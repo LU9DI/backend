@@ -12,8 +12,13 @@ export const PLAN_FEEDBACK_LIMITS: Record<string, number> = {
   rei: 8000,
 };
 
+/**
+ * Respostas/tags de IA: trial (demo), Ultra, Corporativo e Rei.
+ * Inicial e Pro NÃO têm IA (só volume + WPP + gráficos).
+ */
 export function planTemIA(plan: string | null | undefined): boolean {
   const p = String(plan || '').toLowerCase();
+  if (p === 'inicial' || p === 'pro') return false;
   return ['ultra', 'corporativo', 'rei', 'trial', 'teste'].includes(p);
 }
 

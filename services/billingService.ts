@@ -3,7 +3,7 @@
  */
 import type { Database } from 'sqlite';
 import { resolvePlano } from '../stripeBilling.js';
-import { enviarEmail } from '../lib/mailer.js';
+import { notificarPagamentoConfirmado } from '../lib/notifications.js';
 
 function normalizePlanDb(planDb: string): string {
   const p = String(planDb || '').toLowerCase();
@@ -43,25 +43,19 @@ export async function activatePlan(
   }
 
   try {
-    const emp = await db.get('SELECT nome_empresa FROM empresas WHERE id = ?', [empresaId]);
+    const emp = await db.get('SELECT nome_empresa, slug FROM empresas WHERE id = ?', [empresaId]);
     const user = await db.get(
       'SELECT email FROM usuarios WHERE empresa_id = ? AND email IS NOT NULL LIMIT 1',
       [empresaId]
     );
     if (user?.email) {
-      await enviarEmail({
-        to: user.email,
-        subject: `Filtra.IA — plano ${normalized} ativado`,
-        text: [
-          `Olá${emp?.nome_empresa ? ` (${emp.nome_empresa})` : ''},`,
-          '',
-          `Seu plano **${normalized}** foi ativado com sucesso.`,
-          `Validade / próxima renovação: ${new Date(expira).toLocaleDateString('pt-BR')}.`,
-          '',
-          'Acesse o painel para continuar gerenciando suas avaliações.',
-          '',
-          '— Equipe Filtra.IA',
-        ].join('\n'),
+      await notificarPagamentoConfirmado({
+        email: user.email,
+        nomeEmpresa: emp?.nome_empresa || 'Empresa',
+        plano: normalized,
+        expiraEm: expira,
+        slug: emp?.slug,
+        empresaId,
       });
     }
   } catch (e: any) {
