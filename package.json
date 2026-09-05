@@ -9,8 +9,10 @@
     "start": "tsx server.ts",
     "build": "tsc",
     "test": "tsx --test tests/**/*.test.ts",
-    "test:unit": "tsx --test tests/cnpj.test.ts tests/env.test.ts tests/passwordPolicy.test.ts tests/validate.test.ts tests/mfaTotp.test.ts tests/metrics.test.ts",
-    "test:integration": "tsx --test tests/integration.trial.test.ts"
+    "test:unit": "tsx --test tests/cnpj.test.ts tests/env.test.ts tests/passwordPolicy.test.ts tests/validate.test.ts tests/mfaTotp.test.ts tests/metrics.test.ts tests/sentiment.test.ts",
+    "test:integration": "tsx --test tests/integration.trial.test.ts",
+    "backfill:sentiment": "tsx scripts/backfillSentiment.ts",
+    "backfill:sentiment:ai": "tsx scripts/backfillSentiment.ts --ai"
   },
   "keywords": [],
   "author": "",

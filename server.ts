@@ -26,6 +26,10 @@ import { mountStripeRoutes } from './stripeRoutes.js';
 import { stripeConfigured } from './stripeBilling.js';
 import { aiConfigured, listAiProviders, getAiLoadStats } from './groqService.js';
 import { ensureUnidadesSchema } from './relatorioPdf.js';
+import {
+  backfillSentiment,
+  countMissingSentiment,
+} from './services/sentimentBackfill.js';
 
 assertEnvOrExit();
 const JWT_SECRET = requireJwtSecret();
@@ -67,6 +71,33 @@ app.get('/api/metrics', (_req, res) => {
 
 const PORT = Number(process.env.PORT || 5000);
 
+async function runSentimentBackfillOnBoot() {
+  // BACKFILL_SENTIMENT=0 desliga; default = ligado (heurística, lote 2000)
+  if (process.env.BACKFILL_SENTIMENT === '0') {
+    console.log('⏭️  Backfill de sentimento desligado (BACKFILL_SENTIMENT=0)');
+    return;
+  }
+  try {
+    const db = getDb();
+    const missing = await countMissingSentiment(db);
+    if (missing === 0) {
+      console.log('✅ Sentimento: nenhuma review pendente de backfill');
+      return;
+    }
+    const limit = Math.max(1, Number(process.env.BACKFILL_SENTIMENT_LIMIT || 2000));
+    console.log(`🧠 Backfill sentimento: ${missing} pendente(s), processando até ${limit}…`);
+    const r = await backfillSentiment(db, {
+      limit,
+      useAi: process.env.BACKFILL_SENTIMENT_AI === '1',
+    });
+    console.log(
+      `🧠 Backfill sentimento: updated=${r.updated} errors=${r.errors} em ${r.duration_ms}ms`
+    );
+  } catch (e: any) {
+    console.warn('Backfill sentimento (não bloqueia boot):', e?.message || e);
+  }
+}
+
 async function main() {
   await initDB();
   try {
@@ -74,6 +105,8 @@ async function main() {
   } catch (e) {
     console.warn('ensureUnidadesSchema:', e);
   }
+
+  await runSentimentBackfillOnBoot();
 
   mountTrialRoutes(app);
   mountAuthRoutes(app);

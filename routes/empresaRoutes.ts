@@ -128,10 +128,18 @@ export function mountEmpresaRoutes(app: Express) {
 
       const db = getDb();
       await ensureReviewFraudColumns(db);
+      // colunas de sentimento (idempotente)
+      const cols = (await db.all(`PRAGMA table_info(reviews)`)).map((c: any) => c.name);
+      if (!cols.includes('sentiment')) await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment TEXT`);
+      if (!cols.includes('sentiment_score'))
+        await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_score REAL`);
+      if (!cols.includes('sentiment_source'))
+        await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_source TEXT`);
 
       const rows = await db.all(
         `SELECT id, name, rating, comment, ai_reply, ai_tags, createdAt,
-                IFNULL(is_test,0) as is_test, fraud_flags, origin
+                IFNULL(is_test,0) as is_test, fraud_flags, origin,
+                sentiment, sentiment_score, sentiment_source
          FROM reviews WHERE empresa_id = ? ORDER BY createdAt DESC LIMIT 500`,
         [empresa.id]
       );
@@ -157,10 +165,12 @@ export function mountEmpresaRoutes(app: Express) {
           is_test: Number(r.is_test) === 1,
           fraud_flags: r.fraud_flags,
           origin: r.origin || 'publico',
+          sentiment: r.sentiment || null,
+          sentiment_score: r.sentiment_score != null ? Number(r.sentiment_score) : null,
+          sentiment_source: r.sentiment_source || null,
         };
       });
 
-      // Métricas oficiais: ignora avaliações de teste
       const reais = reviews.filter((r) => !r.is_test);
       const total = reais.length;
       const soma = reais.reduce((s: number, r: any) => s + Number(r.rating || 0), 0);
@@ -172,6 +182,26 @@ export function mountEmpresaRoutes(app: Express) {
       for (const r of reais) {
         const n = Number(r.rating);
         if (n >= 1 && n <= 5) dist[n - 1] += 1;
+      }
+
+      const sentimento_mix = { positivo: 0, neutro: 0, negativo: 0 };
+      let scoreSum = 0;
+      let scoreN = 0;
+      for (const r of reais) {
+        const lab = String(r.sentiment || '').toLowerCase();
+        if (lab === 'positivo') sentimento_mix.positivo += 1;
+        else if (lab === 'negativo') sentimento_mix.negativo += 1;
+        else if (lab === 'neutro') sentimento_mix.neutro += 1;
+        else {
+          // fallback pela nota se ainda sem coluna preenchida (reviews antigas)
+          if (r.rating >= 4) sentimento_mix.positivo += 1;
+          else if (r.rating <= 2) sentimento_mix.negativo += 1;
+          else sentimento_mix.neutro += 1;
+        }
+        if (r.sentiment_score != null && Number.isFinite(r.sentiment_score)) {
+          scoreSum += Number(r.sentiment_score);
+          scoreN += 1;
+        }
       }
 
       const ha24h = Date.now() - 24 * 60 * 60 * 1000;
@@ -226,6 +256,9 @@ export function mountEmpresaRoutes(app: Express) {
           taxa_positiva: total ? Math.round((positivas / total) * 100) : 0,
           serie_14d,
           testes_excluidos: reviews.filter((r) => r.is_test).length,
+          sentimento_mix,
+          sentimento_score_medio:
+            scoreN > 0 ? Math.round((scoreSum / scoreN) * 100) / 100 : null,
         },
         dashboard: {
           nivel,
@@ -234,6 +267,7 @@ export function mountEmpresaRoutes(app: Express) {
           mostrar_tendencia: nivel !== 'basico',
           mostrar_tags: nivel === 'ultra' || nivel === 'executivo',
           mostrar_crise: nivel !== 'basico',
+          mostrar_sentimento: true,
         },
         links: {
           avaliacao: `${base}/avaliacao/${ref}`,
