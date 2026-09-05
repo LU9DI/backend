@@ -1,6 +1,12 @@
 /**
  * Recuperação de senha por e-mail (clientes / empresas).
  * A conta ADMIN do SaaS NÃO usa este fluxo — ver adminPasswordReset.ts.
+ *
+ * Segurança do token:
+ * - randomBytes(32), só SHA-256 no banco
+ * - uso único (usado=1)
+ * - expira em 1h
+ * - ao gerar novo token, todos os anteriores do usuário são invalidados
  */
 import type { Express, Request, Response } from 'express';
 import type { Database } from 'sqlite';
@@ -30,6 +36,20 @@ function isAdminAccount(usuario: any): boolean {
   return usuario.empresa_id === 'admin' || email === adminMail;
 }
 
+/** Invalida todos os tokens ainda válidos do usuário (uso único efetivo por “geração”). */
+export async function invalidatePasswordResetTokens(
+  db: Database,
+  usuarioId: string
+): Promise<number> {
+  const result = await db.run(
+    `UPDATE password_resets
+     SET usado = 1
+     WHERE usuario_id = ? AND usado = 0`,
+    [usuarioId]
+  );
+  return Number(result.changes || 0);
+}
+
 export async function ensureAuthColumns(db: Database) {
   const cols = (await db.all(`PRAGMA table_info(usuarios)`)).map((c: any) => c.name);
   if (!cols.includes('email')) {
@@ -52,6 +72,15 @@ export async function ensureAuthColumns(db: Database) {
       FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
     )
   `);
+
+  // Índice para invalidação / lookup por usuário
+  try {
+    await db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_password_resets_usuario ON password_resets(usuario_id, usado)`
+    );
+  } catch {
+    /* ok */
+  }
 }
 
 export async function createUsuarioForEmpresa(
@@ -131,6 +160,9 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
         return res.json({ success: true, message: okMsg });
       }
 
+      // Só o token mais recente permanece válido
+      await invalidatePasswordResetTokens(db, usuario.id);
+
       const token = crypto.randomBytes(32).toString('hex');
       const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
       const expira = new Date(Date.now() + 60 * 60 * 1000).toISOString();
@@ -153,6 +185,7 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
           '',
           link,
           '',
+          'Links anteriores de recuperação foram invalidados.',
           'Se você não solicitou esta alteração, ignore este e-mail.',
           '',
           '— Equipe Filtra.IA',
@@ -199,6 +232,8 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
         return res.status(400).json({ error: 'Link inválido ou já utilizado.' });
       }
       if (new Date(row.expira_em).getTime() < Date.now()) {
+        // marca como usado para não reaparecer em auditorias confusas
+        await db.run('UPDATE password_resets SET usado = 1 WHERE id = ?', [row.id]);
         return res.status(400).json({ error: 'Link expirado. Solicite uma nova recuperação.' });
       }
 
@@ -211,7 +246,10 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
 
       const hash = await bcrypt.hash(nova, 12);
       await db.run('UPDATE usuarios SET senha_hash = ? WHERE id = ?', [hash, row.usuario_id]);
+
+      // Invalida o token usado e qualquer outro residual do usuário
       await db.run('UPDATE password_resets SET usado = 1 WHERE id = ?', [row.id]);
+      await invalidatePasswordResetTokens(db, row.usuario_id);
 
       res.json({ success: true, message: 'Senha atualizada com sucesso. Você já pode entrar.' });
     } catch (e: any) {
@@ -220,4 +258,3 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
     }
   });
 }
-

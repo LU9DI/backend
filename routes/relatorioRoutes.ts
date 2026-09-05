@@ -5,6 +5,7 @@ import type { Express, Request, Response } from 'express';
 import { getDb, findEmpresa } from '../lib/db.js';
 import { gerarRelatorioMensalPDF, ensureUnidadesSchema } from '../relatorioPdf.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
+import { validateReportMonth } from '../lib/dateValidation.js';
 
 const PLANOS_PDF = new Set(['pro', 'ultra', 'corporativo', 'rei']);
 
@@ -24,12 +25,18 @@ export function mountRelatorioRoutes(app: Express) {
         });
       }
 
-      const now = new Date();
-      const mesPadrao = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-      const mesAno = String(req.query.mes || mesPadrao).slice(0, 7);
-      if (!/^\d{4}-\d{2}$/.test(mesAno)) {
-        return res.status(400).json({ error: 'Parâmetro mes inválido. Use YYYY-MM.' });
+      const mesCheck = validateReportMonth(req.query.mes, {
+        defaultToCurrent: true,
+        minYear: 2020,
+        allowFutureMonths: 0,
+      });
+      if (!mesCheck.ok) {
+        return res.status(400).json({
+          error: mesCheck.error,
+          exemplo: '2026-09',
+        });
       }
+      const mesAno = mesCheck.value;
 
       const db = getDb();
       await ensureUnidadesSchema(db);

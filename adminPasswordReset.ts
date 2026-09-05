@@ -6,14 +6,8 @@
  * 2) Exige e-mail do admin + ADMIN_RECOVERY_SECRET (só no servidor)
  * 3) Rate limit rigoroso
  * 4) Token de 30 min, uso único
- * 5) Nova senha: mín. 10 caracteres + número
- *
- * O formulário fica embutido em /admin/login (não em página separada).
- * Link do e-mail: /admin/login?token=...
- *
- * .env:
- *   ADMIN_RECOVERY_SECRET=uma-chave-longa-e-secreta
- *   ADMIN_EMAIL=admin@seusaas.com
+ * 5) Ao gerar novo token, invalida todos os anteriores do admin
+ * 6) Nova senha: mín. 10 caracteres + número
  */
 import type { Express, Request, Response } from 'express';
 import type { Database } from 'sqlite';
@@ -21,7 +15,10 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
 import { enviarEmail, smtpConfigured } from './mailer.js';
-import { ensureAuthColumns } from './passwordResetRoutes.js';
+import {
+  ensureAuthColumns,
+  invalidatePasswordResetTokens,
+} from './passwordResetRoutes.js';
 
 const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(
   /\/$/,
@@ -106,6 +103,9 @@ export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Databas
         return res.json({ success: true, message: okMsg });
       }
 
+      // Invalida tokens anteriores do admin
+      await invalidatePasswordResetTokens(db, usuario.id);
+
       const token = crypto.randomBytes(32).toString('hex');
       const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
       const expira = new Date(Date.now() + 30 * 60 * 1000).toISOString();
@@ -116,7 +116,6 @@ export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Databas
         [crypto.randomUUID(), usuario.id, tokenHash, expira]
       );
 
-      // Mesma página do login admin — não abre rota separada
       const link = `${APP_URL}/admin/login?token=${token}`;
       await enviarEmail({
         to: usuario.email,
@@ -129,6 +128,7 @@ export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Databas
           '',
           link,
           '',
+          'Links anteriores de recuperação foram invalidados.',
           'Se não foi você, altere imediatamente a ADMIN_RECOVERY_SECRET no servidor',
           'e ignore este e-mail.',
           '',
@@ -186,6 +186,7 @@ export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Databas
         return res.status(400).json({ error: 'Link inválido ou já utilizado.' });
       }
       if (new Date(row.expira_em).getTime() < Date.now()) {
+        await db.run('UPDATE password_resets SET usado = 1 WHERE id = ?', [row.id]);
         return res.status(400).json({ error: 'Link expirado. Solicite uma nova recuperação.' });
       }
 
@@ -196,7 +197,9 @@ export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Databas
 
       const hash = await bcrypt.hash(nova, 12);
       await db.run('UPDATE usuarios SET senha_hash = ? WHERE id = ?', [hash, row.usuario_id]);
+
       await db.run('UPDATE password_resets SET usado = 1 WHERE id = ?', [row.id]);
+      await invalidatePasswordResetTokens(db, row.usuario_id);
 
       return res.json({
         success: true,
@@ -208,4 +211,3 @@ export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Databas
     }
   });
 }
-
