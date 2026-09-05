@@ -23,9 +23,16 @@ import { mountMfaRoutes } from './mfa.js';
 import { mountStripeRoutes } from './stripeRoutes.js';
 import { stripeConfigured } from './stripeBilling.js';
 import { aiConfigured, listAiProviders, getAiLoadStats } from './groqService.js';
+import Stripe from 'stripe';
 
-assertEnvOrExit();
-const JWT_SECRET = requireJwtSecret();
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+
+const JWT_SECRET = process.env.JWT_SECRET || 'minha-chave-secreta';
+
+const config = {
+  JWT_SECRET, 
+  stripe
+};
 
 const app = express();
 app.use(cookieParser());
