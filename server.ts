@@ -9,6 +9,7 @@ import 'dotenv/config';
 import { assertEnvOrExit } from './lib/env.js';
 import { initDB, getDb } from './lib/db.js';
 import { requireJwtSecret, setAuthCookie, autenticarToken } from './lib/auth.js';
+import { buildCorsOptions } from './lib/cors.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { latencyMiddleware, getHttpMetrics } from './lib/metrics.js';
 import { mountTrialRoutes } from './routes/trialRoutes.js';
@@ -35,13 +36,14 @@ const config = {
 };
 
 const app = express();
+app.set('trust proxy', 1); // Railway / proxies — Secure cookies atrás de TLS
 app.use(cookieParser());
 app.use(latencyMiddleware as any);
 app.use((req, res, next) => {
   if (req.originalUrl?.startsWith('/api/webhook/stripe')) return next();
   return express.json({ limit: '20kb' })(req, res, next);
 });
-app.use(cors({ origin: true, credentials: true }));
+app.use(cors(buildCorsOptions()));
 
 app.get('/api/health', (_req, res) => {
   const ai = getAiLoadStats();
@@ -60,7 +62,6 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-/** Métricas detalhadas (HTTP por rota + IA) */
 app.get('/api/metrics', (_req, res) => {
   res.json({
     time: new Date().toISOString(),
@@ -95,6 +96,7 @@ async function main() {
     `🤖 IA: ${providers.length ? providers.join(' + ') : 'OFF'} | balance=${load.mode}`
   );
   console.log(`💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF — defina STRIPE_SECRET_KEY no .env'}`);
+  console.log(`🍪 Cookies: sameSite=${process.env.NODE_ENV === 'production' ? 'none' : 'lax'} secure=${process.env.NODE_ENV === 'production'}`);
   app.listen(PORT, () => {
     console.log(`🚀 API Filtra.IA em http://localhost:${PORT}`);
     console.log(`   Health:  http://localhost:${PORT}/api/health`);

@@ -1,11 +1,29 @@
 /**
  * JWT + cookies de sessão.
+ *
+ * Produção (Vercel front + Railway API = origens diferentes):
+ *   SameSite=None + Secure=true  → cookie viaja em requests cross-site
+ *   COOKIE_DOMAIN opcional (ex: .seudominio.com) se front e API forem subdomínios
  */
 import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
 export const COOKIE_NAME = 'saas_auth_token';
 const isProd = process.env.NODE_ENV === 'production';
+
+function cookieBaseOptions() {
+  const domain = process.env.COOKIE_DOMAIN?.trim() || undefined;
+  return {
+    httpOnly: true,
+    secure: isProd || process.env.COOKIE_SECURE === 'true',
+    sameSite: (isProd || process.env.COOKIE_SAMESITE === 'none' ? 'none' : 'lax') as
+      | 'none'
+      | 'lax'
+      | 'strict',
+    path: '/',
+    ...(domain ? { domain } : {}),
+  };
+}
 
 export function requireJwtSecret(): string {
   const secret = process.env.JWT_SECRET ?? '';
@@ -18,19 +36,19 @@ export function requireJwtSecret(): string {
 
 export function setAuthCookie(res: Response, token: string) {
   const opts = {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: (isProd ? 'none' : 'lax') as 'none' | 'lax',
+    ...cookieBaseOptions(),
     maxAge: 24 * 60 * 60 * 1000,
-    path: '/',
   };
   res.cookie(COOKIE_NAME, token, opts);
   res.cookie('auth_token', token, opts);
 }
 
 export function clearAuthCookie(res: Response) {
-  res.clearCookie(COOKIE_NAME, { path: '/' });
-  res.clearCookie('auth_token', { path: '/' });
+  // clearCookie precisa das MESMAS flags (path, domain, secure, sameSite)
+  // senão o browser não remove o cookie cross-site
+  const base = cookieBaseOptions();
+  res.clearCookie(COOKIE_NAME, base);
+  res.clearCookie('auth_token', base);
 }
 
 export function extrairToken(req: Request): string | null {

@@ -1,5 +1,9 @@
-node_modules
-# Keep environment variables out of version control
+node_modules/
 .env
-
+.env.local
 /generated/prisma
+*.db
+*.sqlite
+prisma/dev.db
+dist/
+coverage/
