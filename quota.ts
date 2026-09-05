@@ -1,27 +1,32 @@
-// Quota enforcement — limites oficiais de feedbacks/mês
-// Inicial 150 | Pro 400 | Ultra 800 | Corporativo 2500 | Rei 80000
-import { db } from './server.js';
+/** Limites de feedbacks/mês e cotas de IA. */
+import { getDb } from './lib/db.js';
 import { getCurrentMonth } from './planUtils.js';
 
 export const PLAN_FEEDBACK_LIMITS: Record<string, number> = {
   trial: 30,
+  teste: 30,
   inicial: 150,
   pro: 400,
   ultra: 800,
   corporativo: 2500,
-  rei: 80000,
+  rei: 8000,
 };
 
-/** Limite mensal de feedbacks/avaliações do plano */
-export function getFeedbackLimit(plan: string): number {
-  return PLAN_FEEDBACK_LIMITS[String(plan || 'teste').toLowerCase()] ?? PLAN_FEEDBACK_LIMITS.teste;
+/** Planos com sugestão de resposta / tags por IA */
+export function planTemIA(plan: string | null | undefined): boolean {
+  const p = String(plan || '').toLowerCase();
+  return ['ultra', 'corporativo', 'rei', 'trial', 'teste'].includes(p);
 }
 
-/** Verify IA usage quota for a given plan and type (tags or respostas) */
+export function getFeedbackLimit(plan: string): number {
+  const key = String(plan || 'trial').toLowerCase();
+  return PLAN_FEEDBACK_LIMITS[key] ?? PLAN_FEEDBACK_LIMITS.trial;
+}
+
 export async function checkQuota(plan: string, type: 'tags' | 'respostas'): Promise<void> {
+  const db = getDb();
   const month = getCurrentMonth();
   const row = await db.get(`SELECT ${type} FROM usage WHERE plan = ? AND month = ?`, [plan, month]);
-  // Rei e Corporativo: teto alto de IA; demais planos proporcional aos feedbacks
   const limit =
     plan === 'rei' || plan === 'corporativo'
       ? 20000
@@ -38,3 +43,13 @@ export async function checkQuota(plan: string, type: 'tags' | 'respostas'): Prom
   );
 }
 
+export async function contarReviewsMes(empresaId: string): Promise<number> {
+  const db = getDb();
+  const mes = getCurrentMonth();
+  const row = await db.get(
+    `SELECT COUNT(*) as c FROM reviews
+     WHERE empresa_id = ? AND substr(createdAt, 1, 7) = ?`,
+    [empresaId, mes]
+  );
+  return Number(row?.c || 0);
+}

@@ -1,9 +1,5 @@
 /**
  * Rotas Stripe isoladas.
- * Política de cancelamento (assinatura mensal):
- * - Pode cancelar a qualquer momento.
- * - O acesso permanece até o fim do período já pago (current_period_end).
- * - Só então o status passa a bloqueado (após expira_em).
  */
 import type { Express, Request, Response } from 'express';
 import type { Database } from 'sqlite';
@@ -17,6 +13,7 @@ import {
   resolvePlano,
   listPlanosPublicos,
 } from './stripeBilling.js';
+import { validateBody, schemaCheckout } from './middleware/validate.js';
 
 async function ensureStripeColumns(db: Database) {
   const cols = (await db.all(`PRAGMA table_info(empresas)`)).map((c: any) => c.name);
@@ -65,10 +62,8 @@ async function activatePlan(
   periodEndIso?: string | null
 ) {
   const normalized = normalizePlanDb(planDb);
-
   const expira =
-    periodEndIso ||
-    new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    periodEndIso || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
   await db.run(
     `UPDATE empresas SET status = 'ativo', plan = ?, expira_em = ?, cancel_at_period_end = 0 WHERE id = ?`,
@@ -85,7 +80,6 @@ async function activatePlan(
   }
 }
 
-/** Cancelamento solicitado: mantém status ativo até expira_em. */
 async function markCancelAtPeriodEnd(
   db: Database,
   empresaId: string,
@@ -118,7 +112,6 @@ export function empresaTemAcesso(empresa: {
   const status = String(empresa?.status || '');
   const agora = Date.now();
   const fim = empresa?.expira_em ? new Date(empresa.expira_em).getTime() : null;
-
   if (status === 'ativo' || status === 'trial') {
     if (fim == null || Number.isNaN(fim)) return true;
     return agora <= fim;
@@ -126,7 +119,6 @@ export function empresaTemAcesso(empresa: {
   return false;
 }
 
-/** Bloqueia só depois de expira_em quando houve cancelamento no fim do ciclo. */
 export async function enforcarExpiracoes(db: Database) {
   const agora = new Date().toISOString();
   await db.run(
@@ -206,8 +198,7 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
         const obj = event.data?.object || {};
 
         if (type === 'customer.subscription.updated') {
-          let { empresaId, planDb, customerId, subscriptionId } =
-            extractFromStripeObject(obj);
+          let { empresaId, planDb, customerId, subscriptionId } = extractFromStripeObject(obj);
           empresaId = await resolveEmpresaId(db, empresaId, customerId);
           const periodEnd = periodEndFromStripe(obj);
           const stripeStatus = String(obj.status || '');
@@ -216,7 +207,6 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
             await markCancelAtPeriodEnd(db, empresaId, periodEnd);
             return res.json({ ok: true, action: 'cancel_at_period_end' });
           }
-
           if (stripeStatus === 'canceled' && empresaId) {
             if (periodEnd && new Date(periodEnd).getTime() > Date.now()) {
               await markCancelAtPeriodEnd(db, empresaId, periodEnd);
@@ -225,7 +215,6 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
             await blockEmpresa(db, empresaId);
             return res.json({ ok: true, action: 'block' });
           }
-
           if (stripeStatus === 'active' && empresaId) {
             const resolved = resolvePlano(planDb || obj.metadata?.plan_db || 'pro');
             await activatePlan(
@@ -245,8 +234,7 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
           type === 'customer.subscription.created' ||
           type === 'invoice.paid'
         ) {
-          let { empresaId, planDb, customerId, subscriptionId } =
-            extractFromStripeObject(obj);
+          let { empresaId, planDb, customerId, subscriptionId } = extractFromStripeObject(obj);
           empresaId = await resolveEmpresaId(db, empresaId, customerId);
           const periodEnd = periodEndFromStripe(obj);
 
@@ -352,18 +340,15 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
     }
   });
 
-  app.post('/api/checkout', async (req: Request, res: Response) => {
+  app.post('/api/checkout', validateBody(schemaCheckout), async (req: Request, res: Response) => {
     try {
       if (!stripeConfigured()) {
         return res.status(503).json({
           error: 'Pagamentos não configurados (STRIPE_SECRET_KEY).',
         });
       }
-      const plano = String(req.body.plano || req.body.plan || '').toLowerCase();
-      if (!resolvePlano(plano)) {
-        return res.status(400).json({ error: 'Plano inválido.' });
-      }
 
+      const plano = String(req.body.plano);
       const empresaId = req.body.empresa_id ? String(req.body.empresa_id) : null;
       const db = getDb();
       await ensureStripeColumns(db);
@@ -432,4 +417,3 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
     (timer as NodeJS.Timeout).unref();
   }
 }
-
