@@ -17,6 +17,7 @@ import { mountAuthRoutes } from './routes/authRoutes.js';
 import { mountEmpresaRoutes } from './routes/empresaRoutes.js';
 import { mountReviewRoutes } from './routes/reviewRoutes.js';
 import { mountAdminListRoutes } from './routes/adminListRoutes.js';
+import { mountRelatorioRoutes } from './routes/relatorioRoutes.js';
 import { mountPasswordResetRoutes } from './passwordResetRoutes.js';
 import { mountAdminLoginRoute } from './adminLoginRoute.js';
 import { mountAdminPasswordResetRoutes } from './adminPasswordReset.js';
@@ -24,19 +25,13 @@ import { mountMfaRoutes } from './mfa.js';
 import { mountStripeRoutes } from './stripeRoutes.js';
 import { stripeConfigured } from './stripeBilling.js';
 import { aiConfigured, listAiProviders, getAiLoadStats } from './groqService.js';
-import Stripe from 'stripe';
+import { ensureUnidadesSchema } from './relatorioPdf.js';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-
-const JWT_SECRET = process.env.JWT_SECRET || 'minha-chave-secreta';
-
-const config = {
-  JWT_SECRET, 
-  stripe
-};
+assertEnvOrExit();
+const JWT_SECRET = requireJwtSecret();
 
 const app = express();
-app.set('trust proxy', 1); // Railway / proxies — Secure cookies atrás de TLS
+app.set('trust proxy', 1);
 app.use(cookieParser());
 app.use(latencyMiddleware as any);
 app.use((req, res, next) => {
@@ -74,12 +69,18 @@ const PORT = Number(process.env.PORT || 5000);
 
 async function main() {
   await initDB();
+  try {
+    await ensureUnidadesSchema(getDb());
+  } catch (e) {
+    console.warn('ensureUnidadesSchema:', e);
+  }
 
   mountTrialRoutes(app);
   mountAuthRoutes(app);
   mountEmpresaRoutes(app);
   mountReviewRoutes(app);
   mountAdminListRoutes(app);
+  mountRelatorioRoutes(app);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
@@ -96,11 +97,9 @@ async function main() {
     `🤖 IA: ${providers.length ? providers.join(' + ') : 'OFF'} | balance=${load.mode}`
   );
   console.log(`💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF — defina STRIPE_SECRET_KEY no .env'}`);
-  console.log(`🍪 Cookies: sameSite=${process.env.NODE_ENV === 'production' ? 'none' : 'lax'} secure=${process.env.NODE_ENV === 'production'}`);
   app.listen(PORT, () => {
     console.log(`🚀 API Filtra.IA em http://localhost:${PORT}`);
     console.log(`   Health:  http://localhost:${PORT}/api/health`);
-    console.log(`   Metrics: http://localhost:${PORT}/api/metrics`);
   });
 }
 

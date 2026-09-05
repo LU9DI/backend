@@ -29,6 +29,7 @@ export function mountTrialRoutes(app: Express) {
           google_review_url: req.body.google_review_url
             ? String(req.body.google_review_url)
             : undefined,
+          whatsapp: req.body.whatsapp ? String(req.body.whatsapp) : undefined,
         });
         res.status(201).json(result);
       } catch (e: any) {

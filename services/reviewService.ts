@@ -4,7 +4,7 @@
 import type { Database } from 'sqlite';
 import { getDb, findEmpresa } from '../lib/db.js';
 import { gerarRespostaReview, gerarTagsSemanticas, aiConfigured } from '../groqService.js';
-import { planTemIA, getFeedbackLimit, contarReviewsMes } from '../quota.js';
+import { planTemIA, getFeedbackLimit, contarReviewsMes } from '../lib/quota.js';
 
 export type ReviewInput = {
   name?: string;

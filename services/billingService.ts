@@ -3,7 +3,7 @@
  */
 import type { Database } from 'sqlite';
 import { resolvePlano } from '../stripeBilling.js';
-import { enviarEmail } from '../mailer.js';
+import { enviarEmail } from '../lib/mailer.js';
 
 function normalizePlanDb(planDb: string): string {
   const p = String(planDb || '').toLowerCase();
@@ -42,7 +42,6 @@ export async function activatePlan(
     ]);
   }
 
-  // E-mail de confirmação (best-effort)
   try {
     const emp = await db.get('SELECT nome_empresa FROM empresas WHERE id = ?', [empresaId]);
     const user = await db.get(
@@ -83,10 +82,9 @@ export async function markCancelAtPeriodEnd(
       [periodEndIso, empresaId]
     );
   } else {
-    await db.run(
-      `UPDATE empresas SET cancel_at_period_end = 1, status = 'ativo' WHERE id = ?`,
-      [empresaId]
-    );
+    await db.run(`UPDATE empresas SET cancel_at_period_end = 1, status = 'ativo' WHERE id = ?`, [
+      empresaId,
+    ]);
   }
   console.log(`[billing] cancel_at_period_end empresa=${empresaId}`);
 }

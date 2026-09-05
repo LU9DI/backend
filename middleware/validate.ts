@@ -1,32 +1,18 @@
 /**
  * Middleware de validação de body — sem dependências externas.
- *
- * Uso:
- *   app.post('/api/foo', validateBody(schema), handler)
- *
- * Em caso de erro → 400 { error, fields: { campo: 'mensagem' } }
- * Em sucesso → req.body limpo/normalizado e next()
  */
 import type { Request, Response, NextFunction } from 'express';
 import { normalizarCnpj, cnpjValido } from '../lib/cnpj.js';
-import { validarSenhaEmpresa } from '../passwordPolicy.js';
+import { validarSenhaEmpresa } from '../lib/passwordPolicy.js';
 
 export type FieldRule = {
-  /** Campo obrigatório */
   required?: boolean;
-  /** Tipo esperado após coerção */
   type?: 'string' | 'number' | 'boolean' | 'email' | 'cnpj' | 'url' | 'password_empresa';
-  /** Tamanho mínimo (string) ou valor mínimo (number) */
   min?: number;
-  /** Tamanho máximo (string) ou valor máximo (number) */
   max?: number;
-  /** Apenas inteiros (number) */
   integer?: boolean;
-  /** Mensagem customizada */
   message?: string;
-  /** Transformação antes de validar (ex.: trim) */
   transform?: (v: unknown) => unknown;
-  /** Validação extra */
   custom?: (v: unknown, body: Record<string, unknown>) => string | null;
 };
 
@@ -135,10 +121,8 @@ function applyRule(
       }
       return { error: rule.message || `${key} deve ser boolean.` };
     }
-    default: {
-      // sem type: só required/custom
+    default:
       break;
-    }
   }
 
   if (rule.custom) {
@@ -149,10 +133,6 @@ function applyRule(
   return { value };
 }
 
-/**
- * Valida req.body conforme o schema.
- * Campos validados ficam em req.validated e também sobrescrevem req.body (normalizados).
- */
 export function validateBody(schema: Schema) {
   return (req: Request, res: Response, next: NextFunction) => {
     const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<
@@ -185,8 +165,6 @@ export function validateBody(schema: Schema) {
   };
 }
 
-// ── Schemas prontos ───────────────────────────────────────────
-
 export const schemaTrialAtivar: Schema = {
   cnpj: { required: true, type: 'cnpj' },
   nome_empresa: {
@@ -199,6 +177,7 @@ export const schemaTrialAtivar: Schema = {
   email: { required: true, type: 'email' },
   senha: { required: true, type: 'password_empresa' },
   google_review_url: { required: false, type: 'url', max: 500 },
+  whatsapp: { required: false, type: 'string', max: 20 },
 };
 
 export const schemaLoginEmpresa: Schema = {

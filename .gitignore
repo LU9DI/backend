@@ -4,6 +4,7 @@ node_modules/
 /generated/prisma
 *.db
 *.sqlite
-prisma/dev.db
+prisma/
+prisma/**
 dist/
 coverage/

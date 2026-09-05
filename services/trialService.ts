@@ -1,11 +1,11 @@
 /**
  * Regras de negócio do trial (7 dias).
- * Routes só fazem HTTP; aqui fica a lógica.
  */
 import crypto from 'crypto';
 import type { Database } from 'sqlite';
 import { getDb, slugify, slugUnico } from '../lib/db.js';
 import { createUsuarioForEmpresa } from '../passwordResetRoutes.js';
+import { normalizarWhatsapp } from '../lib/whatsapp.js';
 
 const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(
   /\/$/,
@@ -18,6 +18,7 @@ export type TrialInput = {
   email: string;
   senha: string;
   google_review_url?: string;
+  whatsapp?: string;
 };
 
 export type TrialResult = {
@@ -51,6 +52,13 @@ export async function ativarTrial(input: TrialInput, db: Database = getDb()): Pr
   const email = String(input.email);
   const senha = String(input.senha);
   const googleReviewUrl = input.google_review_url ? String(input.google_review_url) : '';
+  const wpp = normalizarWhatsapp(input.whatsapp || null);
+
+  if (input.whatsapp && String(input.whatsapp).trim() && !wpp) {
+    throw new TrialValidationError(
+      'WhatsApp inválido. Use DDD + número (ex: 11999998888).'
+    );
+  }
 
   const id = crypto.randomUUID();
   const slug = await slugUnico(slugify(nome));
@@ -59,14 +67,15 @@ export async function ativarTrial(input: TrialInput, db: Database = getDb()): Pr
 
   try {
     await db.run(
-      `INSERT INTO empresas (id, cnpj, nome_empresa, slug, google_review_url, status, plan, criado_em, expira_em)
-       VALUES (?, ?, ?, ?, ?, 'trial', 'trial', ?, ?)`,
+      `INSERT INTO empresas (id, cnpj, nome_empresa, slug, google_review_url, whatsapp_suporte, status, plan, criado_em, expira_em)
+       VALUES (?, ?, ?, ?, ?, ?, 'trial', 'trial', ?, ?)`,
       [
         id,
         cnpj,
         nome,
         slug,
         googleReviewUrl || null,
+        wpp,
         criadoEm.toISOString(),
         expiraEm.toISOString(),
       ]
