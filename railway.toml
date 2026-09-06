@@ -1,7 +1,3 @@
-# Railway — deploy do backend
-# No painel: Root Directory = backend
-# NÃO use Custom Start Command a menos que seja exatamente o abaixo.
-
 [build]
 builder = "NIXPACKS"
 buildCommand = "npm install"

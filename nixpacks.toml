@@ -1,0 +1,9 @@
+# Railway/Nixpacks — NÃO usar npm ci (lock pode estar defasado no monorepo)
+[phases.install]
+cmds = ["npm install"]
+
+[phases.build]
+cmds = ["echo skip-tsc"]
+
+[start]
+cmd = "npm start"
