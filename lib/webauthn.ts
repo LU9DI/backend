@@ -378,9 +378,6 @@ function verifyWebAuthnSignature(
     }
 
     // WebAuthn usa ASN.1 DER para ES256 às vezes; tenta ambos
-    const attempts: crypto.VerifyAlgo[] = [];
-    // @ts-expect-error runtime algorithms
-    const algs = ['SHA256', undefined];
     try {
       return crypto.verify(null, data, keyObject, signature);
     } catch {

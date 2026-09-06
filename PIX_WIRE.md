@@ -3,7 +3,7 @@
 ## Modos
 
 | Modo | Endpoint | UX |
-|------|----------|----|
+
 | **Avulso** | `POST /api/pix/avulso` | QR Code + Copia e Cola |
 | **Agendado** | `POST /api/pix/agendado` | QR com `vence_em` (até 29 dias) |
 | **Recorrente** | `POST /api/pix/recorrente` | Link de assinatura MP (`init_point`) |
@@ -20,22 +20,25 @@ MP_NOTIFICATION_URL=https://SUA_API/api/webhook/mercadopago
 API_PUBLIC_URL=https://SUA_API       # alternativa se não usar MP_NOTIFICATION_URL
 ```
 
-1. Crie app em https://www.mercadopago.com.br/developers  
+1. Crie app em [Mercado Pago Developers](https://www.mercadopago.com.br/developers)
 2. Copie o **Access Token** (teste ou produção)  
 3. Webhooks → URL da API `/api/webhook/mercadopago`  
 4. Eventos: `payment`, `merchant_order`, `subscription_preapproval`
 
 ## Exemplos
 
-### Avulso
+### AvulsoS
+
 ```bash
 curl -X POST http://localhost:5000/api/pix/avulso \
   -H 'Content-Type: application/json' \
   -d '{"plano":"pro","empresa_id":"UUID","email":"cliente@email.com"}'
 ```
+
 Resposta: `qr_code` (copia-e-cola), `qr_code_base64` (imagem), `payment_id`.
 
 ### Agendado
+
 ```bash
 curl -X POST http://localhost:5000/api/pix/agendado \
   -H 'Content-Type: application/json' \
@@ -43,11 +46,13 @@ curl -X POST http://localhost:5000/api/pix/agendado \
 ```
 
 ### Recorrente
+
 ```bash
 curl -X POST http://localhost:5000/api/pix/recorrente \
   -H 'Content-Type: application/json' \
   -d '{"plano":"pro","empresa_id":"UUID","email":"cliente@email.com"}'
 ```
+
 Abra `init_point` / `authorize_url` no browser.
 
 ## Notas

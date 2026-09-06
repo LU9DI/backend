@@ -45,7 +45,7 @@ Em produção: `WEBAUTHN_RP_ID=seudominio.com` e `WEBAUTHN_ORIGIN=https://seudom
 ### Proteções
 
 | Controle | Detalhe |
-|----------|---------|
+
 | Challenge uso único | TTL 5 min, apagado ao consumir |
 | Origin binding | clientData.origin deve bater com WEBAUTHN_ORIGIN |
 | RP ID hash | anti-phishing |

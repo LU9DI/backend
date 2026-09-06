@@ -42,7 +42,7 @@ SMTP_FROM=noreply@seudominio.com
 ## 2. Webhooks públicos (HTTPS)
 
 | Provider | URL |
-|----------|-----|
+
 | Stripe | `POST /api/webhook/stripe` |
 | Mercado Pago | `POST /api/webhook/mercadopago` |
 | PayPal | `POST /api/webhook/paypal` |

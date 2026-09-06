@@ -3,7 +3,7 @@
 ## Secrets
 
 | Secret | Rotação | Notas |
-|--------|---------|-------|
+
 | `JWT_SECRET` / `JWT_PREVIOUS_SECRET` | 90 dias | Use rotação com kid; login força novo token |
 | `STRIPE_SECRET_KEY` / webhook | se vazou | Revogar no dashboard Stripe |
 | `MP_ACCESS_TOKEN` / `MP_WEBHOOK_SECRET` | se vazou | Regenerar no Mercado Pago |

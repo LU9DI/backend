@@ -3,7 +3,7 @@
 ## Credenciais padrão
 
 | Campo | Valor |
-|-------|--------|
+
 | **URL** | `/admin/login` |
 | **E-mail** | `admin@seusaas.com` |
 | **Senha** | `MudeEstaSenha123!` (ou o valor de `ADMIN_PASSWORD` no `.env`) |
@@ -13,7 +13,7 @@
 ## Login da empresa (cliente)
 
 | Campo | Valor |
-|-------|--------|
+
 | **URL** | `/login` |
 | **CNPJ** | o CNPJ usado no trial |
 | **Senha** | a senha cadastrada no trial |
@@ -58,5 +58,6 @@ await db.close();
 ```
 
 Depois entre em `/admin/login` com:
+
 - e-mail: `admin@seusaas.com`
 - senha: `MudeEstaSenha123!`

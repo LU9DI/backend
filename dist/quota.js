@@ -10,6 +10,6 @@ export async function checkQuota(plan, type) {
         throw new Error(`Limite mensal de ${type} para o plano ${plan} atingido`);
     }
     await db.run(`INSERT INTO usage (plan, month, ${type}) VALUES (?, ?, 1)
-     ON CONFLICT(plan, month) DO UPDATE SET ${type} = ${type} + 1`, [plan, month]);
+    ON CONFLICT(plan, month) DO UPDATE SET ${type} = ${type} + 1`, [plan, month]);
 }
 

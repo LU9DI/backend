@@ -142,17 +142,17 @@ export async function criarReview(
     slugOrId = emp.slug || emp.id;
 
     if (!isTest) {
-      checkMemoryRate(ip, empresaId);
-      await checkDbRateByIp(db, empresaId, ipHash);
-      if (comment) await checkDuplicateComment(db, empresaId, comment);
+      checkMemoryRate(ip, empresaId!);
+      await checkDbRateByIp(db, empresaId!, ipHash);
+      if (comment) await checkDuplicateComment(db, empresaId!, comment);
       await checkOneComplaintOnly(db, {
-        empresaId,
+        empresaId: empresaId!,
         ipHash,
         clientWhatsapp: clientWpp,
         rating,
       });
 
-      const usadas = await contarReviewsMes(empresaId);
+      const usadas = await contarReviewsMes(empresaId!);
       const limite = getFeedbackLimit(plan);
       if (usadas >= limite) {
         throw new ReviewQuotaError(
