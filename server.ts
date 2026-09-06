@@ -32,6 +32,7 @@ import { mountPixRoutes } from './routes/pixRoutes.js';
 import { mountSubscriptionRoutes } from './routes/subscriptionRoutes.js';
 import { mountUnidadeRoutes } from './routes/unidadeRoutes.js';
 import { mountExportRoutes } from './routes/exportRoutes.js';
+import { mountPublicPlanosRoutes } from './routes/publicPlanosRoutes.js';
 import { mountPasswordResetRoutes } from './passwordResetRoutes.js';
 import { mountAdminLoginRoute } from './adminLoginRoute.js';
 import { mountAdminPasswordResetRoutes } from './adminPasswordReset.js';
@@ -205,6 +206,7 @@ async function main() {
   mountSubscriptionRoutes(app);
   mountUnidadeRoutes(app);
   mountExportRoutes(app);
+  mountPublicPlanosRoutes(app);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);

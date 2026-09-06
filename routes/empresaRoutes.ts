@@ -4,7 +4,14 @@ import { getDb, findEmpresa } from '../lib/db.js';
 import { normalizarWhatsapp, linkWhatsapp } from '../lib/whatsapp.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { ensureReviewFraudColumns } from '../lib/reviewFraud.js';
-import { planTemPdf, allowPlanSwitch, PLANOS_OFICIAIS, planLabel, isTrialPlan } from '../lib/plans.js';
+import {
+  planTemPdf,
+  allowPlanSwitch,
+  PLANOS_OFICIAIS,
+  planLabel,
+  isTrialPlan,
+  isPlanoOficial,
+} from '../lib/plans.js';
 import {
   planTemIA,
   getFeedbackLimit,
@@ -23,6 +30,12 @@ const whatsappPatchLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Muitas alterações de WhatsApp. Aguarde.' },
+});
+
+const planPatchLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 40,
+  message: { error: 'Muitas trocas de plano. Aguarde.' },
 });
 
 function nivelDashboard(plan: string): 'basico' | 'pro' | 'ultra' | 'executivo' {
@@ -105,6 +118,55 @@ export function mountEmpresaRoutes(app: Express) {
     })
   );
 
+  /** Troca de plano em modo teste (sem Stripe) — requer login */
+  app.patch(
+    '/api/empresa/:ref/plano',
+    planPatchLimiter,
+    autenticarToken,
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+      if (!allowPlanSwitch()) {
+        return res.status(403).json({
+          error:
+            'Troca de plano de teste desativada em produção. Use Stripe/checkout ou defina ALLOW_PLAN_SWITCH=1.',
+          code: 'PLAN_SWITCH_DISABLED',
+        });
+      }
+
+      const empresa = await findEmpresa(req.params.ref);
+      if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
+      if (!podeGerirEmpresa(req, empresa.id)) {
+        return res.status(403).json({ error: 'Sem permissão. Faça login com a conta desta empresa.' });
+      }
+
+      const plan = String(req.body.plan || req.body.plano || '')
+        .toLowerCase()
+        .trim();
+      if (!isPlanoOficial(plan) && !isTrialPlan(plan)) {
+        return res.status(400).json({
+          error: `Plano inválido. Use: ${[...PLANOS_OFICIAIS, 'trial'].join(', ')}`,
+        });
+      }
+
+      const dias = isTrialPlan(plan) ? 7 : 30;
+      const expira = new Date(Date.now() + dias * 24 * 60 * 60 * 1000).toISOString();
+      const status = isTrialPlan(plan) ? 'trial' : 'ativo';
+
+      await getDb().run(
+        `UPDATE empresas SET plan = ?, status = ?, expira_em = ?, cancel_at_period_end = 0 WHERE id = ?`,
+        [plan, status, expira, empresa.id]
+      );
+
+      res.json({
+        success: true,
+        plan,
+        status,
+        expira_em: expira,
+        mensagem: `Plano ${planLabel(plan)} ativo (modo teste — sem cobrança).`,
+        pdf_disponivel: planTemPdf(plan),
+      });
+    })
+  );
+
   app.patch(
     '/api/empresa/:ref/whatsapp',
     whatsappPatchLimiter,
@@ -135,6 +197,32 @@ export function mountEmpresaRoutes(app: Express) {
         whatsapp: normalizado,
         whatsapp_url: linkWhatsapp(normalizado),
       });
+    })
+  );
+
+  /** Link Google Maps / Google Review (nota ≥4 redireciona para cá) */
+  app.patch(
+    '/api/empresa/:ref/google',
+    autenticarToken,
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+      const empresa = await findEmpresa(req.params.ref);
+      if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
+      if (!podeGerirEmpresa(req, empresa.id)) {
+        return res.status(403).json({ error: 'Sem permissão.' });
+      }
+      let url = String(req.body.google_review_url || req.body.url || '').trim();
+      if (!url) {
+        await getDb().run(`UPDATE empresas SET google_review_url = NULL WHERE id = ?`, [empresa.id]);
+        return res.json({ success: true, google_review_url: null });
+      }
+      if (!/^https?:\/\//i.test(url)) {
+        return res.status(400).json({ error: 'URL inválida. Use http:// ou https://' });
+      }
+      if (url.length > 500) {
+        return res.status(400).json({ error: 'URL muito longa (máx. 500).' });
+      }
+      await getDb().run(`UPDATE empresas SET google_review_url = ? WHERE id = ?`, [url, empresa.id]);
+      res.json({ success: true, google_review_url: url });
     })
   );
 
@@ -276,18 +364,29 @@ export function mountEmpresaRoutes(app: Express) {
       const ref = empresa.slug || empresa.id;
       const wpp = normalizarWhatsapp(empresa.whatsapp_suporte);
 
+      const statusAcesso =
+        empresa.status === 'bloqueado'
+          ? 'BLOQUEADO'
+          : trial
+            ? 'TRIAL'
+            : empresa.status === 'ativo'
+              ? 'ATIVO'
+              : String(empresa.status || '—').toUpperCase();
+
       res.json({
         empresa: {
           id: empresa.id,
           slug: empresa.slug,
           nome_empresa: empresa.nome_empresa,
           status: empresa.status,
+          status_acesso: statusAcesso,
           plan: empresa.plan,
           expira_em: empresa.expira_em,
           cancel_at_period_end: Number(empresa.cancel_at_period_end) === 1,
           google_review_url: empresa.google_review_url || null,
           whatsapp: wpp,
           whatsapp_url: linkWhatsapp(wpp),
+          locale: empresa.locale || 'pt',
         },
         reviews: reviews.slice(0, 200),
         metricas: {
@@ -336,6 +435,15 @@ export function mountEmpresaRoutes(app: Express) {
           mostrar_copiar_resposta: true,
           mostrar_tratar: true,
           whatsapp_crise: true,
+        },
+        integracoes: {
+          push: Boolean(
+            process.env.VAPID_PUBLIC_KEY?.trim() && process.env.VAPID_PRIVATE_KEY?.trim()
+          ),
+          n8n: Boolean(process.env.N8N_WEBHOOK_URL?.trim()),
+          stripe: Boolean(process.env.STRIPE_SECRET_KEY?.trim()),
+          smtp: Boolean(process.env.SMTP_HOST?.trim() && process.env.SMTP_FROM?.trim()),
+          google_review: Boolean(empresa.google_review_url),
         },
         links: {
           avaliacao: `${base}/avaliacao/${ref}`,

@@ -51,7 +51,7 @@ async function markProcessed(
 ) {
   await db.run(
     `INSERT OR IGNORE INTO paypal_webhook_events (event_id, event_type, processed_at, action, payload_summary)
-     VALUES (?, ?, datetime('now'), ?, ?)`,
+    VALUES (?, ?, datetime('now'), ?, ?)`,
     [eventId, eventType, action, (summary || '').slice(0, 500)]
   );
 }
