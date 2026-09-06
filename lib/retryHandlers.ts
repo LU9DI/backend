@@ -9,9 +9,16 @@ import {
   parsePlanoFromInvoiceId,
   getPayPalOrderSummary,
 } from './paypal.js';
+import {
+  getPayment,
+  getPreapproval,
+  parseExternalRef,
+  mpConfigured,
+} from './mercadopago.js';
 import { resolvePlano } from '../stripeBilling.js';
 import { activatePlan, blockEmpresa } from '../services/billingService.js';
 import { enviarEmail } from './mailer.js';
+import { logWebhookEvent } from './opsLog.js';
 
 async function activatePayPal(
   empresaId: string,
@@ -37,10 +44,62 @@ async function activatePayPal(
     if (!cols.includes('payment_gateway')) {
       await db.exec(`ALTER TABLE empresas ADD COLUMN payment_gateway TEXT`);
     }
+    if (!cols.includes('billing_cycle')) {
+      await db.exec(`ALTER TABLE empresas ADD COLUMN billing_cycle TEXT`);
+    }
     await db.run(`UPDATE empresas SET payment_gateway = 'paypal', billing_cycle = ? WHERE id = ?`, [
       plano?.interval === 'year' ? 'year' : 'month',
       empresaId,
     ]);
+  } catch {
+    /* */
+  }
+}
+
+async function activateFromMp(
+  empresaId: string,
+  planoKey: string | null,
+  paymentId?: string | null,
+  preapprovalId?: string | null
+) {
+  const db = getDb();
+  const plano = resolvePlano(planoKey || 'pro');
+  const days = plano?.interval === 'year' ? 365 : 30;
+  const exp = new Date();
+  exp.setDate(exp.getDate() + days);
+  await activatePlan(
+    db,
+    empresaId,
+    plano?.planDb || 'pro',
+    null,
+    preapprovalId
+      ? `mp_preapproval:${preapprovalId}`
+      : paymentId
+        ? `mp_pix:${paymentId}`
+        : `mp_pix:retry`,
+    exp.toISOString()
+  );
+  try {
+    const cols = (await db.all(`PRAGMA table_info(empresas)`)).map((c: any) => c.name);
+    if (!cols.includes('payment_gateway')) {
+      await db.exec(`ALTER TABLE empresas ADD COLUMN payment_gateway TEXT`);
+    }
+    if (!cols.includes('billing_cycle')) {
+      await db.exec(`ALTER TABLE empresas ADD COLUMN billing_cycle TEXT`);
+    }
+    if (!cols.includes('mp_preapproval_id')) {
+      await db.exec(`ALTER TABLE empresas ADD COLUMN mp_preapproval_id TEXT`);
+    }
+    await db.run(
+      `UPDATE empresas SET payment_gateway = 'mercadopago_pix', billing_cycle = ? WHERE id = ?`,
+      [plano?.interval === 'year' ? 'year' : 'month', empresaId]
+    );
+    if (preapprovalId) {
+      await db.run(`UPDATE empresas SET mp_preapproval_id = ? WHERE id = ?`, [
+        preapprovalId,
+        empresaId,
+      ]);
+    }
   } catch {
     /* */
   }
@@ -120,6 +179,68 @@ export function registerAllRetryHandlers() {
       cap.captureId,
       orderId
     );
+  });
+
+  /** Reprocessa webhook Mercado Pago (payment / preapproval). */
+  registerRetryHandler('mp_webhook', async (payload) => {
+    if (!mpConfigured()) throw new Error('MP_ACCESS_TOKEN ausente');
+    const body = payload.body || payload;
+    const query = payload.query || {};
+    const type = String(body.type || body.action || body.topic || query.topic || '');
+    const dataId = String(
+      body.data?.id || body.id || query.id || body['data.id'] || ''
+    ).trim();
+
+    if (type.includes('preapproval') || type.includes('subscription') || String(query.topic || '').includes('subscription')) {
+      const preId = dataId || String(query.id || '');
+      if (!preId) throw new Error('mp_webhook: preapproval id ausente');
+      const remote = await getPreapproval(preId);
+      const status = String(remote.status || '');
+      const parsed = parseExternalRef(remote.external_reference);
+      const empresaId = remote.metadata?.empresa_id || parsed.empresaId;
+      const planoKey = remote.metadata?.plano || parsed.planoKey;
+      if ((status === 'authorized' || status === 'active') && empresaId) {
+        await activateFromMp(String(empresaId), planoKey, null, preId);
+        await logWebhookEvent(getDb(), {
+          source: 'mercadopago',
+          event_type: type || 'preapproval_retry',
+          status: 'ok',
+          detail: `retry activate ${empresaId}`,
+        });
+        return;
+      }
+      if ((status === 'cancelled' || status === 'paused') && empresaId) {
+        await blockEmpresa(getDb(), String(empresaId), { notify: true, tipo: 'cancelamento' });
+        return;
+      }
+      throw new Error(`mp_webhook preapproval status=${status}`);
+    }
+
+    const paymentId = dataId || String(query.id || '');
+    if (!paymentId) throw new Error('mp_webhook: payment id ausente');
+    const remote = await getPayment(paymentId);
+    const status = String(remote.status || '');
+    const parsed = parseExternalRef(remote.external_reference);
+    const empresaId = remote.metadata?.empresa_id || parsed.empresaId;
+    const planoKey = remote.metadata?.plano || parsed.planoKey;
+
+    if (status === 'approved' && empresaId) {
+      await activateFromMp(String(empresaId), planoKey, paymentId, null);
+      await logWebhookEvent(getDb(), {
+        source: 'mercadopago',
+        event_type: type || 'payment_retry',
+        status: 'ok',
+        detail: `retry activate ${empresaId}`,
+      });
+      return;
+    }
+    if ((status === 'refunded' || status === 'charged_back') && empresaId) {
+      await blockEmpresa(getDb(), String(empresaId), { notify: true, tipo: 'assinatura' });
+      return;
+    }
+    if (status === 'pending' || status === 'in_process') {
+      throw new Error(`mp ainda pending (${status})`);
+    }
   });
 
   registerRetryHandler('email', async (payload) => {

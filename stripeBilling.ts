@@ -2,10 +2,10 @@
  * Stripe Checkout — tabela oficial de planos
  * Inicial | Pro | Ultra | Corporativo | Rei  (mensal e anual)
  *
- * Limites de feedbacks/mês (definidos pelo produto):
- * inicial 150 | pro 400 | ultra 800 | corporativo 2500 | rei 8000
+ * Preços podem ser sobrescritos via admin (plan_prices no SQLite).
  */
 import crypto from 'crypto';
+import { applyDbPricesToPlanos } from './lib/planPricing.js';
 
 const STRIPE_API = 'https://api.stripe.com/v1';
 
@@ -137,6 +137,17 @@ export const PLANOS: Record<string, PlanoDef> = {
   },
 };
 
+let pricesLoaded = false;
+
+export async function refreshPlanPricesFromDb(db?: any) {
+  try {
+    await applyDbPricesToPlanos(PLANOS as any, db);
+    pricesLoaded = true;
+  } catch (e: any) {
+    console.warn('[planos] refresh preços:', e?.message || e);
+  }
+}
+
 export function resolvePlano(raw: string): PlanoDef | null {
   const k = String(raw || '')
     .toLowerCase()
@@ -185,10 +196,21 @@ export async function criarCheckoutSession(opts: {
   email?: string | null;
   nomeEmpresa?: string | null;
 }): Promise<{ sessionId: string; checkoutUrl: string; label: string; value: number }> {
+  if (!pricesLoaded) {
+    try {
+      await refreshPlanPricesFromDb();
+    } catch {
+      /* */
+    }
+  }
   const plano = resolvePlano(opts.planoKey);
   if (!plano) throw new Error('Plano inválido');
 
-  const success = `${appUrl()}/?checkout=success&session_id={CHECKOUT_SESSION_ID}`;
+  const empresaQ = opts.empresaId
+    ? `&empresa_id=${encodeURIComponent(opts.empresaId)}`
+    : '';
+  const planoQ = `&plano=${encodeURIComponent(plano.planDb)}`;
+  const success = `${appUrl()}/pagamento-ok?checkout=success&session_id={CHECKOUT_SESSION_ID}${empresaQ}${planoQ}`;
   const cancel = `${appUrl()}/?checkout=cancel`;
 
   const params: Record<string, string> = {
@@ -323,11 +345,17 @@ export function listPlanosPublicos() {
     const p = PLANOS[k];
     return {
       key: p.key,
+      planDb: p.planDb,
       label: p.label,
       valueMonthly: p.displayMonthly,
       interval: p.interval,
       reviewLimit: p.reviewLimit,
+      priceLabel:
+        p.interval === 'month'
+          ? `R$ ${p.displayMonthly.toFixed(2).replace('.', ',')}`
+          : `R$ ${p.displayMonthly.toFixed(2).replace('.', ',')}/mês (anual)`,
     };
   });
 }
 
+export { applyDbPricesToPlanos } from './lib/planPricing.js';

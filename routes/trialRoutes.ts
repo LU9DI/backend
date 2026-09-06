@@ -21,16 +21,20 @@ export function mountTrialRoutes(app: Express) {
     validateBody(schemaTrialAtivar),
     asyncHandler(async (req: Request, res: Response) => {
       try {
-        const result = await ativarTrial({
-          cnpj: String(req.body.cnpj),
-          nome_empresa: String(req.body.nome_empresa),
-          email: String(req.body.email),
-          senha: String(req.body.senha),
-          google_review_url: req.body.google_review_url
-            ? String(req.body.google_review_url)
-            : undefined,
-          whatsapp: req.body.whatsapp ? String(req.body.whatsapp) : undefined,
-        });
+        const result = await ativarTrial(
+          {
+            cnpj: String(req.body.cnpj),
+            nome_empresa: String(req.body.nome_empresa),
+            email: String(req.body.email),
+            senha: String(req.body.senha),
+            google_review_url: req.body.google_review_url
+              ? String(req.body.google_review_url)
+              : undefined,
+            whatsapp: req.body.whatsapp ? String(req.body.whatsapp) : undefined,
+          },
+          undefined,
+          res
+        );
         res.status(201).json(result);
       } catch (e: any) {
         if (e instanceof TrialConflictError || e instanceof TrialValidationError) {

@@ -1,4 +1,4 @@
-/** Limites de feedbacks/mês e cotas de IA. */
+/** Limites de feedbacks/mês e cotas de IA (tokens). */
 import { getDb } from './db.js';
 import { getCurrentMonth } from './planUtils.js';
 
@@ -10,6 +10,20 @@ export const PLAN_FEEDBACK_LIMITS: Record<string, number> = {
   ultra: 800,
   corporativo: 2500,
   rei: 8000,
+};
+
+/**
+ * Teto mensal de tokens de IA por empresa (economia no início).
+ * Inicial/Pro = 0 (sem IA). Trial baixo. Ultra+ sobe gradualmente.
+ */
+export const PLAN_TOKEN_LIMITS: Record<string, number> = {
+  trial: 25_000,
+  teste: 25_000,
+  inicial: 0,
+  pro: 0,
+  ultra: 120_000,
+  corporativo: 400_000,
+  rei: 1_200_000,
 };
 
 /**
@@ -25,6 +39,37 @@ export function planTemIA(plan: string | null | undefined): boolean {
 export function getFeedbackLimit(plan: string): number {
   const key = String(plan || 'trial').toLowerCase();
   return PLAN_FEEDBACK_LIMITS[key] ?? PLAN_FEEDBACK_LIMITS.trial;
+}
+
+export function getTokenLimit(plan: string): number {
+  const key = String(plan || 'trial').toLowerCase();
+  return PLAN_TOKEN_LIMITS[key] ?? PLAN_TOKEN_LIMITS.trial;
+}
+
+export async function tokensUsadosMes(empresaId: string): Promise<number> {
+  const db = getDb();
+  const mes = getCurrentMonth();
+  const row = await db.get(
+    `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
+     WHERE empresa_id = ? AND substr(criado_em, 1, 7) = ?`,
+    [empresaId, mes]
+  );
+  return Number(row?.t || 0);
+}
+
+/**
+ * Bloqueia chamada de IA se a empresa estourou o teto mensal de tokens do plano.
+ * Retorna { ok, used, limit }.
+ */
+export async function assertEmpresaTokenQuota(
+  empresaId: string | null | undefined,
+  plan: string | null | undefined
+): Promise<{ ok: boolean; used: number; limit: number }> {
+  if (!empresaId) return { ok: true, used: 0, limit: 0 };
+  const limit = getTokenLimit(String(plan || 'trial'));
+  if (limit <= 0) return { ok: false, used: 0, limit: 0 };
+  const used = await tokensUsadosMes(empresaId);
+  return { ok: used < limit, used, limit };
 }
 
 export async function checkQuota(plan: string, type: 'tags' | 'respostas'): Promise<void> {

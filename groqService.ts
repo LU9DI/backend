@@ -9,6 +9,7 @@ import {
 } from './lib/sentiment.js';
 import { estimateTokens, recordAiUsage } from './lib/aiUsage.js';
 import { getDb } from './lib/db.js';
+import { isRateLimitError, recordRateLimitHit } from './lib/aiMonitor.js';
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GEMINI_BASE =
@@ -116,6 +117,9 @@ function markFail(p: AiProvider, err: any, ms: number) {
   s.lastError = String(err?.message || err).slice(0, 200);
   s.lastUsedAt = Date.now();
   recordLatency(p, ms);
+  if (isRateLimitError(err)) {
+    recordRateLimitHit(p, s.lastError || 'rate limit');
+  }
   if (s.consecutiveFails >= cbFailures()) {
     s.cooldownUntil = Date.now() + cbCooldownMs();
     console.warn(
@@ -434,10 +438,7 @@ export async function gerarTagsSemanticas(
     return ['#Neutro'];
   }
 
-  const system = `Você analisa avaliações de estabelecimentos comerciais.
-Retorne APENAS um JSON array de 1 a 5 tags em português no formato hashtag CamelCase.
-Exemplos: ["#AtendimentoRuim","#ComidaExcelente"]
-Não explique. Apenas o array JSON.`;
+  const system = `Você analisa avaliações de estabelecimentos comerciais.\nRetorne APENAS um JSON array de 1 a 5 tags em português no formato hashtag CamelCase.\nExemplos: ["#AtendimentoRuim","#ComidaExcelente"]\nNão explique. Apenas o array JSON.`;
 
   const user = `Nota: ${rating}/5\nComentário: ${comment}`;
   const raw = await callLLM(system, user, 120, 0.3, { empresaId, tipo: 'tags' });
@@ -469,10 +470,7 @@ export async function analisarSentimento(
   }
 
   try {
-    const system = `Analise o sentimento de uma avaliação de cliente em português do Brasil.
-Retorne APENAS JSON válido:
-{"sentimento":"positivo"|"neutro"|"negativo","score":número de -1 a 1,"keywords":["até 5 palavras-chave"]}
-Não use markdown.`;
+    const system = `Analise o sentimento de uma avaliação de cliente em português do Brasil.\nRetorne APENAS JSON válido:\n{"sentimento":"positivo"|"neutro"|"negativo","score":número de -1 a 1,"keywords":["até 5 palavras-chave"]}\nNão use markdown.`;
     const user = `Nota: ${rating}/5\nComentário: ${comment}`;
     const raw = await callLLM(system, user, 100, 0.2, { empresaId, tipo: 'sentimento' });
     const parsed = parseSentimentFromAiJson(raw);

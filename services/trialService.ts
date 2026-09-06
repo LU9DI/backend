@@ -3,10 +3,12 @@
  */
 import crypto from 'crypto';
 import type { Database } from 'sqlite';
+import type { Response } from 'express';
 import { getDb, slugify, slugUnico } from '../lib/db.js';
 import { createUsuarioForEmpresa } from '../passwordResetRoutes.js';
 import { normalizarWhatsapp } from '../lib/whatsapp.js';
 import { notificarTrialAtivado } from '../lib/notifications.js';
+import { setAuthCookie, signAccessToken } from '../lib/auth.js';
 
 const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(
   /\/$/,
@@ -30,6 +32,12 @@ export type TrialResult = {
   link_acesso: string;
   link_painel: string;
   expira_em: string;
+  token?: string;
+  tokenPayload?: {
+    id: string;
+    nome_funcionario: string;
+    empresa_id: string;
+  };
 };
 
 export class TrialConflictError extends Error {
@@ -48,7 +56,11 @@ export class TrialValidationError extends Error {
   }
 }
 
-export async function ativarTrial(input: TrialInput, db: Database = getDb()): Promise<TrialResult> {
+export async function ativarTrial(
+  input: TrialInput,
+  db: Database = getDb(),
+  res?: Response
+): Promise<TrialResult> {
   const cnpj = String(input.cnpj);
   const nome = String(input.nome_empresa);
   const email = String(input.email);
@@ -89,12 +101,28 @@ export async function ativarTrial(input: TrialInput, db: Database = getDb()): Pr
     throw e;
   }
 
+  let usuarioId: string;
   try {
-    await createUsuarioForEmpresa(db, { empresaId: id, cnpj, nome, email, senha });
+    const u = await createUsuarioForEmpresa(db, { empresaId: id, cnpj, nome, email, senha });
+    usuarioId = (u as any)?.id || crypto.randomUUID();
   } catch (e: any) {
     await db.run('DELETE FROM empresas WHERE id = ?', [id]);
     throw new TrialValidationError(e.message || 'Falha ao criar usuário.');
   }
+
+  // Busca usuário real para JWT
+  const usuario = await db.get(
+    `SELECT id, nome_funcionario, empresa_id FROM usuarios WHERE empresa_id = ? ORDER BY rowid DESC LIMIT 1`,
+    [id]
+  );
+
+  const tokenPayload = {
+    id: String(usuario?.id || usuarioId),
+    nome_funcionario: String(usuario?.nome_funcionario || nome),
+    empresa_id: id,
+  };
+  const token = signAccessToken(tokenPayload);
+  if (res) setAuthCookie(res, token);
 
   // E-mail de boas-vindas (não bloqueia a resposta)
   notificarTrialAtivado({
@@ -113,5 +141,7 @@ export async function ativarTrial(input: TrialInput, db: Database = getDb()): Pr
     link_acesso: `${APP_URL}/avaliacao/${slug}`,
     link_painel: `${APP_URL}/painel/${slug}`,
     expira_em: expiraEm.toISOString(),
+    token,
+    tokenPayload,
   };
 }

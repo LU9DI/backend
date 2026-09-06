@@ -1,9 +1,8 @@
 /**
  * Área técnica do admin:
- * - Status webhooks Stripe / n8n
- * - Auditoria de críticas retidas (1–3★) + resposta IA
- * - Status de geração de relatórios PDF
- * - Webhook inbound n8n (captação Google Maps)
+ * - Status webhooks Stripe / n8n / PayPal / Mercado Pago (Pix)
+ * - Auditoria de críticas retidas
+ * - Status PDF + fila de retry
  */
 import type { Express, Request, Response } from 'express';
 import { getDb } from '../lib/db.js';
@@ -12,12 +11,14 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import {
   ensureOpsTables,
   logWebhookEvent,
-  recentWebhookEvents,
   recentPdfLogs,
   webhookHealth,
 } from '../lib/opsLog.js';
 import { stripeConfigured } from '../stripeBilling.js';
+import { paypalConfigured, paypalWebhookConfigured } from '../lib/paypal.js';
+import { mpConfigured } from '../lib/mercadopago.js';
 import { smtpConfigured } from '../lib/mailer.js';
+import { retryQueueStats } from '../lib/retryQueue.js';
 
 function requireAdmin(req: AuthRequest, res: Response): boolean {
   if (!isAdminUser(req.user)) {
@@ -40,7 +41,6 @@ function ageLabel(iso: string | null): string | null {
 }
 
 export function mountAdminTecnicoRoutes(app: Express) {
-  /** Inbound n8n — captação Google Maps / automações */
   app.post(
     '/api/webhook/n8n',
     asyncHandler(async (req: Request, res: Response) => {
@@ -82,7 +82,6 @@ export function mountAdminTecnicoRoutes(app: Express) {
     })
   );
 
-  /** GET /api/admin/tecnico — painel completo */
   app.get(
     '/api/admin/tecnico',
     autenticarToken,
@@ -91,15 +90,13 @@ export function mountAdminTecnicoRoutes(app: Express) {
       const db = getDb();
       await ensureOpsTables(db);
 
-      // —— Webhooks ——
       const stripeHealth = await webhookHealth(db, 'stripe', 24);
       const n8nHealth = await webhookHealth(db, 'n8n', 24);
-      const stripeEvents = await recentWebhookEvents(db, 25);
-      const stripeOnly = (stripeEvents || []).filter((e: any) => e.source === 'stripe');
-      const n8nOnly = (stripeEvents || []).filter((e: any) => e.source === 'n8n');
-      // recentWebhookEvents returns mixed — fetch more specifically
+      const paypalHealth = await webhookHealth(db, 'paypal', 24);
+      const mpHealth = await webhookHealth(db, 'mercadopago', 24);
+
       const allEvents = await db.all(
-        `SELECT * FROM webhook_events ORDER BY id DESC LIMIT 40`
+        `SELECT * FROM webhook_events ORDER BY id DESC LIMIT 80`
       );
 
       const n8nUrl =
@@ -130,13 +127,14 @@ export function mountAdminTecnicoRoutes(app: Express) {
       }
 
       const stripeLast24hOk =
-        stripeHealth.total === 0
-          ? null
-          : stripeHealth.errors === 0 && stripeHealth.ok > 0;
+        stripeHealth.total === 0 ? null : stripeHealth.errors === 0 && stripeHealth.ok > 0;
       const n8nLast24hOk =
         n8nHealth.total === 0 ? null : n8nHealth.errors === 0 && n8nHealth.ok > 0;
+      const paypalLast24hOk =
+        paypalHealth.total === 0 ? null : paypalHealth.errors === 0 && paypalHealth.ok > 0;
+      const mpLast24hOk =
+        mpHealth.total === 0 ? null : mpHealth.errors === 0 && mpHealth.ok > 0;
 
-      // —— Críticas retidas (1–3★) ——
       const cols = (await db.all(`PRAGMA table_info(reviews)`)).map((c: any) => c.name);
       if (!cols.includes('client_whatsapp')) {
         try {
@@ -188,7 +186,6 @@ export function mountAdminTecnicoRoutes(app: Express) {
       const comIa = criticasFmt.filter((c: any) => c.tem_ia).length;
       const semIa = criticasFmt.length - comIa;
 
-      // —— PDF ——
       const pdfLogs = await recentPdfLogs(db, 40);
       const pdfSince = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
       const pdfStats = await db.get(
@@ -197,6 +194,7 @@ export function mountAdminTecnicoRoutes(app: Express) {
            SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) as ok_count,
            SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as err_count,
            SUM(CASE WHEN status = 'forbidden' THEN 1 ELSE 0 END) as forbidden_count,
+           SUM(CASE WHEN auth_mode LIKE 'jwt%' THEN 1 ELSE 0 END) as jwt_count,
            MAX(created_at) as last_at
          FROM pdf_generation_log
          WHERE created_at >= ?`,
@@ -207,6 +205,13 @@ export function mountAdminTecnicoRoutes(app: Express) {
         Number(pdfStats?.total || 0) === 0
           ? null
           : Number(pdfStats?.err_count || 0) === 0 && Number(pdfStats?.ok_count || 0) > 0;
+
+      let retry: any = { by_status: {}, pending_due: 0 };
+      try {
+        retry = await retryQueueStats(db);
+      } catch {
+        /* */
+      }
 
       res.json({
         gerado_em: new Date().toISOString(),
@@ -241,6 +246,38 @@ export function mountAdminTecnicoRoutes(app: Express) {
             stats_24h: n8nHealth,
             eventos: (allEvents || []).filter((e: any) => e.source === 'n8n').slice(0, 20),
           },
+          paypal: {
+            configurado: paypalConfigured(),
+            webhook_id: paypalWebhookConfigured(),
+            ok: !paypalConfigured() ? false : paypalLast24hOk,
+            detalhe: !paypalConfigured()
+              ? 'PAYPAL_CLIENT_ID/SECRET ausentes'
+              : !paypalWebhookConfigured()
+                ? 'PAYPAL_WEBHOOK_ID ausente (verify em prod)'
+                : paypalHealth.total === 0
+                  ? 'Nenhum evento PayPal em 24h'
+                  : `${paypalHealth.ok} ok / ${paypalHealth.errors} erro(s) em 24h`,
+            last_at: paypalHealth.last_at,
+            last_age: ageLabel(paypalHealth.last_at),
+            stats_24h: paypalHealth,
+            eventos: (allEvents || []).filter((e: any) => e.source === 'paypal').slice(0, 20),
+          },
+          mercadopago: {
+            configurado: mpConfigured(),
+            inbound: '/api/webhook/mercadopago',
+            ok: !mpConfigured() ? false : mpLast24hOk,
+            detalhe: !mpConfigured()
+              ? 'MP_ACCESS_TOKEN ausente'
+              : mpHealth.total === 0
+                ? 'Nenhum evento Pix/MP em 24h'
+                : `${mpHealth.ok} ok / ${mpHealth.errors} erro(s) em 24h`,
+            last_at: mpHealth.last_at,
+            last_age: ageLabel(mpHealth.last_at),
+            stats_24h: mpHealth,
+            eventos: (allEvents || [])
+              .filter((e: any) => e.source === 'mercadopago')
+              .slice(0, 20),
+          },
         },
         criticas_retidas: {
           total: criticasFmt.length,
@@ -253,7 +290,7 @@ export function mountAdminTecnicoRoutes(app: Express) {
           detalhe:
             Number(pdfStats?.total || 0) === 0
               ? 'Nenhuma geração nas últimas 24h'
-              : `${pdfStats?.ok_count || 0} ok / ${pdfStats?.err_count || 0} erro(s) / ${pdfStats?.forbidden_count || 0} bloqueado(s) por plano`,
+              : `${pdfStats?.ok_count || 0} ok / ${pdfStats?.err_count || 0} erro(s) / ${pdfStats?.forbidden_count || 0} bloqueado(s) · JWT: ${pdfStats?.jwt_count || 0}`,
           last_at: pdfStats?.last_at || null,
           last_age: ageLabel(pdfStats?.last_at || null),
           stats_24h: {
@@ -261,20 +298,26 @@ export function mountAdminTecnicoRoutes(app: Express) {
             ok: Number(pdfStats?.ok_count || 0),
             errors: Number(pdfStats?.err_count || 0),
             forbidden: Number(pdfStats?.forbidden_count || 0),
+            jwt: Number(pdfStats?.jwt_count || 0),
           },
           logs: pdfLogs || [],
         },
+        retry_queue: retry,
         sistema: {
           smtp: smtpConfigured(),
           stripe: stripeConfigured(),
+          paypal: paypalConfigured(),
+          pix: mpConfigured(),
           groq: Boolean(process.env.GROQ_API_KEY?.trim()),
+          gemini: Boolean(
+            process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_AI_API_KEY?.trim()
+          ),
           jobs_secret: Boolean(process.env.JOBS_SECRET?.trim()),
         },
       });
     })
   );
 
-  /** Atalho só críticas */
   app.get(
     '/api/admin/criticas-retidas',
     autenticarToken,

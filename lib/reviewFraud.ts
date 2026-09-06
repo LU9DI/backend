@@ -4,9 +4,10 @@
  * Camadas:
  * 1. Honeypot (campo oculto preenchido por bot)
  * 2. Rate limit por IP + empresa (memória + DB)
- * 3. Comentário duplicado recente
- * 4. Padrões suspeitos (nome genérico + nota extrema em rajada)
- * 5. Flag is_test (não conta em métricas/PDF)
+ * 3. Reclamação (≤3★) única por IP e por WhatsApp
+ * 4. Comentário duplicado recente
+ * 5. Padrões suspeitos (nome genérico + nota extrema em rajada)
+ * 6. Flag is_test (não conta em métricas/PDF)
  */
 import crypto from 'crypto';
 import type { Database } from 'sqlite';
@@ -16,6 +17,8 @@ const recentHits = new Map<string, number[]>();
 
 const MAX_PER_HOUR = 5;
 const MAX_PER_DAY = 12;
+/** Uma reclamação (nota ≤3) por dispositivo a cada 30 dias. */
+const COMPLAINT_WINDOW_DAYS = Number(process.env.COMPLAINT_ONCE_DAYS || 30);
 const DUPLICATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export class ReviewFraudError extends Error {
@@ -78,6 +81,7 @@ export async function ensureReviewFraudColumns(db: Database): Promise<void> {
   await add('ip_hash', 'ip_hash TEXT');
   await add('fraud_flags', 'fraud_flags TEXT');
   await add('origin', 'origin TEXT');
+  await add('client_whatsapp', 'client_whatsapp TEXT');
 }
 
 function normalizeComment(c: string): string {
@@ -145,6 +149,54 @@ export async function checkDbRateByIp(
   }
 }
 
+/**
+ * Reclamação (nota ≤ 3): apenas 1 por dispositivo (IP) na janela configurável
+ * e 1 por WhatsApp do cliente na mesma empresa.
+ */
+export async function checkOneComplaintOnly(
+  db: Database,
+  opts: {
+    empresaId: string;
+    ipHash: string;
+    clientWhatsapp?: string | null;
+    rating: number;
+  }
+): Promise<void> {
+  if (opts.rating > 3) return;
+
+  const days = Math.max(1, COMPLAINT_WINDOW_DAYS);
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+  const byIp = await db.get(
+    `SELECT COUNT(*) as c FROM reviews
+     WHERE empresa_id = ? AND ip_hash = ? AND rating <= 3
+       AND IFNULL(is_test,0) = 0 AND createdAt >= ?`,
+    [opts.empresaId, opts.ipHash, since]
+  );
+  if (Number(byIp?.c || 0) >= 1) {
+    throw new ReviewFraudError(
+      'Você já enviou uma reclamação recentemente para este estabelecimento. Aguarde ou fale pelo WhatsApp da empresa.',
+      409
+    );
+  }
+
+  const wpp = (opts.clientWhatsapp || '').replace(/\D/g, '');
+  if (wpp.length >= 10) {
+    const byWpp = await db.get(
+      `SELECT COUNT(*) as c FROM reviews
+       WHERE empresa_id = ? AND client_whatsapp = ? AND rating <= 3
+         AND IFNULL(is_test,0) = 0 AND createdAt >= ?`,
+      [opts.empresaId, wpp, since]
+    );
+    if (Number(byWpp?.c || 0) >= 1) {
+      throw new ReviewFraudError(
+        'Este WhatsApp já registrou uma reclamação para este estabelecimento no período.',
+        409
+      );
+    }
+  }
+}
+
 /** Heurísticas leves — não bloqueiam sozinhas, só marcam flags */
 export function softFraudFlags(opts: {
   name: string;
@@ -172,7 +224,6 @@ export function softFraudFlags(opts: {
 
 export function assertNotHoneypot(honeypot: string | undefined | null): void {
   if (honeypot && String(honeypot).trim()) {
-    // Resposta genérica — não educar bots
     throw new ReviewFraudError('Não foi possível enviar sua avaliação.', 400);
   }
 }

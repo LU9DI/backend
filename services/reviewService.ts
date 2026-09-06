@@ -9,12 +9,18 @@ import {
   analisarSentimento,
   aiConfigured,
 } from '../groqService.js';
-import { planTemIA, getFeedbackLimit, contarReviewsMes } from '../lib/quota.js';
+import {
+  planTemIA,
+  getFeedbackLimit,
+  contarReviewsMes,
+  assertEmpresaTokenQuota,
+} from '../lib/quota.js';
 import {
   assertNotHoneypot,
   checkDbRateByIp,
   checkDuplicateComment,
   checkMemoryRate,
+  checkOneComplaintOnly,
   ensureReviewFraudColumns,
   hashIp,
   softFraudFlags,
@@ -42,6 +48,7 @@ export type ReviewResult = {
   ai: boolean;
   is_test?: boolean;
   sentiment?: string;
+  ai_skipped_quota?: boolean;
 };
 
 export class ReviewNotFoundError extends Error {
@@ -138,6 +145,12 @@ export async function criarReview(
       checkMemoryRate(ip, empresaId);
       await checkDbRateByIp(db, empresaId, ipHash);
       if (comment) await checkDuplicateComment(db, empresaId, comment);
+      await checkOneComplaintOnly(db, {
+        empresaId,
+        ipHash,
+        clientWhatsapp: clientWpp,
+        rating,
+      });
 
       const usadas = await contarReviewsMes(empresaId);
       const limite = getFeedbackLimit(plan);
@@ -155,8 +168,22 @@ export async function criarReview(
 
   let aiReply: string | null = null;
   let aiTags: string | null = null;
+  let aiSkippedQuota = false;
 
-  const useAi = !isTest && planTemIA(plan) && aiConfigured();
+  const planAllowsAi = !isTest && planTemIA(plan) && aiConfigured();
+  let useAi = planAllowsAi;
+
+  if (useAi && empresaId) {
+    const q = await assertEmpresaTokenQuota(empresaId, plan);
+    if (!q.ok) {
+      useAi = false;
+      aiSkippedQuota = true;
+      console.warn(
+        `[IA] cota tokens esgotada empresa=${empresaId} used=${q.used}/${q.limit}`
+      );
+    }
+  }
+
   const useAiSentiment = useAi && Boolean(comment?.trim());
   const sentiment = await analisarSentimento(
     rating,
@@ -253,6 +280,7 @@ export async function criarReview(
     ai: Boolean(aiReply),
     is_test: isTest,
     sentiment: sentiment.label,
+    ai_skipped_quota: aiSkippedQuota,
   };
 }
 

@@ -20,7 +20,15 @@ export function validateEnv(): EnvReport {
   }
 
   if (!process.env.STRIPE_SECRET_KEY) {
-    warnings.push('STRIPE_SECRET_KEY ausente — checkout retornará 503 até configurar.');
+    warnings.push('STRIPE_SECRET_KEY ausente — checkout cartão retornará 503 até configurar.');
+  }
+
+  if (!process.env.MP_ACCESS_TOKEN?.trim()) {
+    warnings.push('MP_ACCESS_TOKEN ausente — Pix (QR/copia-cola/recorrente) desligado.');
+  }
+
+  if (!process.env.PAYPAL_CLIENT_ID?.trim()) {
+    warnings.push('PAYPAL_CLIENT_ID ausente — PayPal desligado.');
   }
 
   const recovery = process.env.ADMIN_RECOVERY_SECRET || '';

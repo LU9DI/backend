@@ -20,6 +20,7 @@ import { mountEmpresaRoutes } from './routes/empresaRoutes.js';
 import { mountReviewRoutes } from './routes/reviewRoutes.js';
 import { mountAdminDashboardRoutes } from './routes/adminDashboardRoutes.js';
 import { mountAdminTecnicoRoutes } from './routes/adminTecnicoRoutes.js';
+import { mountAdminNegocioRoutes } from './routes/adminNegocioRoutes.js';
 import { mountTokenMetricsRoutes } from './routes/tokenMetricsRoutes.js';
 import { mountRelatorioRoutes } from './routes/relatorioRoutes.js';
 import { mountPlanSwitchRoutes } from './routes/planSwitchRoutes.js';
@@ -27,23 +28,33 @@ import { mountWebAuthnRoutes } from './routes/webauthnRoutes.js';
 import { mountPushRoutes } from './routes/pushRoutes.js';
 import { mountJobsRoutes } from './routes/jobsRoutes.js';
 import { mountPayPalRoutes } from './routes/paypalRoutes.js';
+import { mountPixRoutes } from './routes/pixRoutes.js';
+import { mountSubscriptionRoutes } from './routes/subscriptionRoutes.js';
+import { mountUnidadeRoutes } from './routes/unidadeRoutes.js';
+import { mountExportRoutes } from './routes/exportRoutes.js';
 import { mountPasswordResetRoutes } from './passwordResetRoutes.js';
 import { mountAdminLoginRoute } from './adminLoginRoute.js';
 import { mountAdminPasswordResetRoutes } from './adminPasswordReset.js';
 import { mountMfaRoutes } from './mfa.js';
 import { mountStripeRoutes } from './stripeRoutes.js';
-import { stripeConfigured } from './stripeBilling.js';
+import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
 import { paypalConfigured } from './lib/paypal.js';
+import { mpConfigured } from './lib/mercadopago.js';
 import { aiConfigured, listAiProviders, getAiLoadStats } from './groqService.js';
-import { ensureUnidadesSchema } from './relatorioPdf.js';
+import { ensureUnidadesSchema } from './lib/unidades.js';
 import { ensureWebAuthnSchema, webauthnConfig } from './lib/webauthn.js';
 import { ensurePushSchema, pushConfigured, initWebPush } from './lib/push.js';
 import { ensureAiUsageSchema } from './lib/aiUsage.js';
 import { ensureOpsTables } from './lib/opsLog.js';
 import { ensureRetryQueue, startRetryWorker } from './lib/retryQueue.js';
 import { registerAllRetryHandlers } from './lib/retryHandlers.js';
+import { ensurePlanPricingSchema } from './lib/planPricing.js';
 import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
+import {
+  anonymizeOldClientWhatsapp,
+  ensureReviewTreatmentColumns,
+} from './lib/lgpd.js';
 import {
   backfillSentiment,
   countMissingSentiment,
@@ -70,6 +81,7 @@ app.get('/api/health', (_req, res) => {
     ok: true,
     stripe: stripeConfigured(),
     paypal: paypalConfigured(),
+    pix: mpConfigured(),
     ai: aiConfigured(),
     ai_providers: listAiProviders(),
     plan_switch: allowPlanSwitch(),
@@ -98,28 +110,30 @@ app.get('/api/metrics', (_req, res) => {
 const PORT = Number(process.env.PORT || 5000);
 
 async function runSentimentBackfillOnBoot() {
-  if (process.env.BACKFILL_SENTIMENT === '0') {
-    console.log('⏭️  Backfill de sentimento desligado (BACKFILL_SENTIMENT=0)');
-    return;
-  }
+  if (process.env.BACKFILL_SENTIMENT === '0') return;
   try {
     const db = getDb();
     const missing = await countMissingSentiment(db);
-    if (missing === 0) {
-      console.log('✅ Sentimento: nenhuma review pendente de backfill');
-      return;
-    }
+    if (missing === 0) return;
     const limit = Math.max(1, Number(process.env.BACKFILL_SENTIMENT_LIMIT || 2000));
-    console.log(`🧠 Backfill sentimento: ${missing} pendente(s), processando até ${limit}…`);
     const r = await backfillSentiment(db, {
       limit,
       useAi: process.env.BACKFILL_SENTIMENT_AI === '1',
     });
-    console.log(
-      `🧠 Backfill sentimento: updated=${r.updated} errors=${r.errors} em ${r.duration_ms}ms`
-    );
+    console.log(`🧠 Backfill sentimento: updated=${r.updated} errors=${r.errors}`);
   } catch (e: any) {
-    console.warn('Backfill sentimento (não bloqueia boot):', e?.message || e);
+    console.warn('Backfill sentimento:', e?.message || e);
+  }
+}
+
+async function runLgpdSweepOnBoot() {
+  if (process.env.LGPD_SWEEP === '0') return;
+  try {
+    const db = getDb();
+    await ensureReviewTreatmentColumns(db);
+    await anonymizeOldClientWhatsapp(db, { limit: 1000 });
+  } catch (e: any) {
+    console.warn('LGPD sweep:', e?.message || e);
   }
 }
 
@@ -152,14 +166,26 @@ async function main() {
     console.warn('ensureOpsTables:', e);
   }
   try {
+    await ensurePlanPricingSchema(getDb());
+    await refreshPlanPricesFromDb(getDb());
+  } catch (e) {
+    console.warn('plan pricing:', e);
+  }
+  try {
     await ensureRetryQueue(getDb());
     registerAllRetryHandlers();
     startRetryWorker();
   } catch (e) {
     console.warn('retry queue:', e);
   }
+  try {
+    await ensureReviewTreatmentColumns(getDb());
+  } catch (e) {
+    console.warn('treatment columns:', e);
+  }
 
   await runSentimentBackfillOnBoot();
+  await runLgpdSweepOnBoot();
 
   mountTrialRoutes(app);
   mountAuthRoutes(app);
@@ -167,6 +193,7 @@ async function main() {
   mountReviewRoutes(app);
   mountAdminDashboardRoutes(app);
   mountAdminTecnicoRoutes(app);
+  mountAdminNegocioRoutes(app);
   mountTokenMetricsRoutes(app);
   mountRelatorioRoutes(app);
   mountPlanSwitchRoutes(app);
@@ -174,6 +201,10 @@ async function main() {
   mountPushRoutes(app);
   mountJobsRoutes(app);
   mountPayPalRoutes(app);
+  mountPixRoutes(app);
+  mountSubscriptionRoutes(app);
+  mountUnidadeRoutes(app);
+  mountExportRoutes(app);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
@@ -184,30 +215,9 @@ async function main() {
   app.use(notFoundHandler);
   app.use(errorHandler);
 
-  const providers = listAiProviders();
-  const load = getAiLoadStats();
-  const jwtStat = jwtRotationStatus();
-  console.log(
-    `🤖 IA: ${providers.length ? providers.join(' + ') : 'OFF'} | balance=${load.mode}`
-  );
-  console.log(
-    `🔐 JWT kid=${jwtStat.kid} keys_verify=${jwtStat.keys_for_verify} previous=${jwtStat.has_previous}`
-  );
-  console.log(
-    `👆 WebAuthn rp=${webauthnConfig().rpId} origin=${webauthnConfig().origin}`
-  );
-  console.log(`🔔 Push: ${pushConfigured() ? 'ON (VAPID)' : 'OFF — npx web-push generate-vapid-keys'}`);
-  console.log(`📧 SMTP: ${smtpConfigured() ? 'ON' : 'OFF — e-mails vão para o console em dev'}`);
-  console.log(
-    `🧪 Troca de plano (teste): ${allowPlanSwitch() ? 'ON' : 'OFF'} — ALLOW_PLAN_SWITCH`
-  );
-  console.log(`💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'}`);
-  console.log(
-    `💳 PayPal: ${paypalConfigured() ? 'ok (' + (process.env.PAYPAL_MODE || 'sandbox') + ')' : 'OFF — PAYPAL_CLIENT_ID/SECRET'}`
-  );
+  console.log(`💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'}`);
   app.listen(PORT, () => {
     console.log(`🚀 API Filtra.IA em http://localhost:${PORT}`);
-    console.log(`   Health:  http://localhost:${PORT}/api/health`);
   });
 }
 

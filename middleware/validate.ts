@@ -218,8 +218,21 @@ export const schemaReview: Schema = {
       return null;
     },
   },
-  /** WhatsApp do cliente — exigido em nota ≤ 3 no serviço (validação fina). */
-  client_whatsapp: { required: false, type: 'string', max: 20 },
+  /** WhatsApp do cliente — obrigatório em nota ≤ 3 (schema + serviço). */
+  client_whatsapp: {
+    required: false,
+    type: 'string',
+    max: 20,
+    custom: (v, body) => {
+      const rating = Number(body.rating);
+      if (rating > 3) return null;
+      const w = String(v ?? body.whatsapp ?? '').replace(/\D/g, '');
+      if (w.length < 10) {
+        return 'WhatsApp do cliente é obrigatório para notas ≤ 3 (DDD + número).';
+      }
+      return null;
+    },
+  },
   whatsapp: { required: false, type: 'string', max: 20 },
   empresa_id: { required: false, type: 'string', max: 100 },
   empresa_ref: { required: false, type: 'string', max: 100 },

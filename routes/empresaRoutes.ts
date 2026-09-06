@@ -1,24 +1,36 @@
 import type { Express, Request, Response } from 'express';
+import rateLimit from 'express-rate-limit';
 import { getDb, findEmpresa } from '../lib/db.js';
 import { normalizarWhatsapp, linkWhatsapp } from '../lib/whatsapp.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { ensureReviewFraudColumns } from '../lib/reviewFraud.js';
 import { planTemPdf, allowPlanSwitch, PLANOS_OFICIAIS, planLabel, isTrialPlan } from '../lib/plans.js';
-import { planTemIA } from '../lib/quota.js';
+import {
+  planTemIA,
+  getFeedbackLimit,
+  getTokenLimit,
+  tokensUsadosMes,
+  contarReviewsMes,
+} from '../lib/quota.js';
+import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
+import { ensureReviewTreatmentColumns } from '../lib/lgpd.js';
 
 const APP_URL = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
 
-/**
- * Níveis de UI do painel.
- * Trial / teste = executivo (tudo incluso nos 7 dias).
- */
+const whatsappPatchLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas alterações de WhatsApp. Aguarde.' },
+});
+
 function nivelDashboard(plan: string): 'basico' | 'pro' | 'ultra' | 'executivo' {
   const p = String(plan || 'trial').toLowerCase();
   if (isTrialPlan(p)) return 'executivo';
   if (p === 'rei' || p === 'corporativo') return 'executivo';
   if (p === 'ultra') return 'ultra';
   if (p === 'pro') return 'pro';
-  // inicial
   return 'basico';
 }
 
@@ -29,14 +41,12 @@ function serieUltimosDias(
   const map = new Map<string, { total: number; pos: number; neg: number; soma: number }>();
   const hoje = new Date();
   hoje.setHours(0, 0, 0, 0);
-
   for (let i = dias - 1; i >= 0; i--) {
     const d = new Date(hoje);
     d.setDate(d.getDate() - i);
     const key = d.toISOString().slice(0, 10);
     map.set(key, { total: 0, pos: 0, neg: 0, soma: 0 });
   }
-
   for (const r of reviews) {
     const key = String(r.createdAt || '').slice(0, 10);
     const bucket = map.get(key);
@@ -47,7 +57,6 @@ function serieUltimosDias(
     if (rating >= 4) bucket.pos += 1;
     if (rating <= 3) bucket.neg += 1;
   }
-
   return [...map.entries()].map(([dia, b]) => ({
     dia,
     total: b.total,
@@ -57,16 +66,19 @@ function serieUltimosDias(
   }));
 }
 
+function podeGerirEmpresa(req: AuthRequest, empresaId: string): boolean {
+  if (isAdminUser(req.user)) return true;
+  return Boolean(req.user?.empresa_id && req.user.empresa_id === empresaId);
+}
+
 export function mountEmpresaRoutes(app: Express) {
   app.get(
     '/api/empresa/:ref/validar',
     asyncHandler(async (req: Request, res: Response) => {
       const empresa = await findEmpresa(req.params.ref);
       if (!empresa) return res.status(404).json({ valido: false, motivo: 'not_found' });
-
       const agora = new Date();
       const expira = new Date(empresa.expira_em);
-
       if ((empresa.status === 'trial' || empresa.status === 'teste') && agora > expira) {
         return res.json({
           valido: false,
@@ -79,7 +91,6 @@ export function mountEmpresaRoutes(app: Express) {
       if (empresa.status === 'bloqueado') {
         return res.json({ valido: false, motivo: 'inactive', nome: empresa.nome_empresa });
       }
-
       const wpp = normalizarWhatsapp(empresa.whatsapp_suporte);
       return res.json({
         valido: true,
@@ -96,28 +107,29 @@ export function mountEmpresaRoutes(app: Express) {
 
   app.patch(
     '/api/empresa/:ref/whatsapp',
-    asyncHandler(async (req: Request, res: Response) => {
+    whatsappPatchLimiter,
+    autenticarToken,
+    asyncHandler(async (req: AuthRequest, res: Response) => {
       const empresa = await findEmpresa(req.params.ref);
       if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
-
+      if (!podeGerirEmpresa(req, empresa.id)) {
+        return res.status(403).json({ error: 'Sem permissão para alterar o WhatsApp desta empresa.' });
+      }
       const raw = String(req.body.whatsapp || req.body.whatsapp_suporte || '').trim();
       if (!raw) {
         await getDb().run(`UPDATE empresas SET whatsapp_suporte = NULL WHERE id = ?`, [empresa.id]);
         return res.json({ success: true, whatsapp: null, whatsapp_url: null });
       }
-
       const normalizado = normalizarWhatsapp(raw);
       if (!normalizado) {
         return res.status(400).json({
           error: 'WhatsApp inválido. Use DDD + número (ex: 11999998888 ou +55 11 99999-8888).',
         });
       }
-
       await getDb().run(`UPDATE empresas SET whatsapp_suporte = ? WHERE id = ?`, [
         normalizado,
         empresa.id,
       ]);
-
       res.json({
         success: true,
         whatsapp: normalizado,
@@ -128,28 +140,34 @@ export function mountEmpresaRoutes(app: Express) {
 
   app.get(
     '/api/empresa/:ref/painel',
-    asyncHandler(async (req: Request, res: Response) => {
+    autenticarToken,
+    asyncHandler(async (req: AuthRequest, res: Response) => {
       const empresa = await findEmpresa(req.params.ref);
       if (!empresa) {
         return res.status(404).json({ error: 'Empresa não encontrada.' });
       }
+      if (!podeGerirEmpresa(req, empresa.id)) {
+        return res.status(403).json({
+          error: 'Sem permissão. Faça login com a conta desta empresa.',
+          code: 'FORBIDDEN_PAINEL',
+        });
+      }
 
       const db = getDb();
       await ensureReviewFraudColumns(db);
+      await ensureReviewTreatmentColumns(db);
       const cols = (await db.all(`PRAGMA table_info(reviews)`)).map((c: any) => c.name);
       if (!cols.includes('sentiment')) await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment TEXT`);
       if (!cols.includes('sentiment_score'))
         await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_score REAL`);
       if (!cols.includes('sentiment_source'))
         await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_source TEXT`);
-      if (!cols.includes('client_whatsapp'))
-        await db.exec(`ALTER TABLE reviews ADD COLUMN client_whatsapp TEXT`);
 
       const rows = await db.all(
         `SELECT id, name, rating, comment, ai_reply, ai_tags, createdAt,
                 IFNULL(is_test,0) as is_test, fraud_flags, origin,
                 sentiment, sentiment_score, sentiment_source,
-                client_whatsapp
+                client_whatsapp, treated_at, treated_note
          FROM reviews WHERE empresa_id = ? ORDER BY createdAt DESC LIMIT 500`,
         [empresa.id]
       );
@@ -164,7 +182,10 @@ export function mountEmpresaRoutes(app: Express) {
             tags = [];
           }
         }
-        const clientWpp = normalizarWhatsapp(r.client_whatsapp);
+        const clientWpp =
+          r.client_whatsapp === '[anonimizado]'
+            ? null
+            : normalizarWhatsapp(r.client_whatsapp);
         return {
           id: r.id,
           name: r.name,
@@ -181,6 +202,10 @@ export function mountEmpresaRoutes(app: Express) {
           sentiment_source: r.sentiment_source || null,
           client_whatsapp: clientWpp,
           client_whatsapp_url: linkWhatsapp(clientWpp),
+          client_whatsapp_anon: r.client_whatsapp === '[anonimizado]',
+          treated_at: r.treated_at || null,
+          treated_note: r.treated_note || null,
+          treated: Boolean(r.treated_at),
         };
       });
 
@@ -190,6 +215,7 @@ export function mountEmpresaRoutes(app: Express) {
       const media = total ? Math.round((soma / total) * 10) / 10 : 0;
       const negativas = reais.filter((r: any) => r.rating <= 3).length;
       const positivas = reais.filter((r: any) => r.rating >= 4).length;
+      const tratadas = reais.filter((r: any) => r.treated && r.rating <= 3).length;
 
       const dist = [0, 0, 0, 0, 0];
       for (const r of reais) {
@@ -239,8 +265,12 @@ export function mountEmpresaRoutes(app: Express) {
       const trial = isTrialPlan(plan);
       const nivel = nivelDashboard(plan);
       const pdf_disponivel = planTemPdf(plan);
-      // Trial tem IA; planos pagos seguem planTemIA
       const tem_ia = trial || planTemIA(plan);
+
+      const feedback_limite = getFeedbackLimit(plan);
+      const feedback_usados = await contarReviewsMes(empresa.id);
+      const token_limite = getTokenLimit(plan);
+      const token_usados = tem_ia ? await tokensUsadosMes(empresa.id) : 0;
 
       const base = APP_URL.replace(/\/$/, '');
       const ref = empresa.slug || empresa.id;
@@ -254,6 +284,7 @@ export function mountEmpresaRoutes(app: Express) {
           status: empresa.status,
           plan: empresa.plan,
           expira_em: empresa.expira_em,
+          cancel_at_period_end: Number(empresa.cancel_at_period_end) === 1,
           google_review_url: empresa.google_review_url || null,
           whatsapp: wpp,
           whatsapp_url: linkWhatsapp(wpp),
@@ -264,6 +295,8 @@ export function mountEmpresaRoutes(app: Express) {
           media,
           negativas,
           positivas,
+          tratadas,
+          pendentes_tratamento: Math.max(0, negativas - tratadas),
           alerta_crise: crises_24h >= 3,
           crises_24h,
           distribuicao: dist,
@@ -274,6 +307,14 @@ export function mountEmpresaRoutes(app: Express) {
           sentimento_mix,
           sentimento_score_medio:
             scoreN > 0 ? Math.round((scoreSum / scoreN) * 100) / 100 : null,
+          feedback_usados,
+          feedback_limite,
+          tokens_usados: token_usados,
+          tokens_limite: token_limite,
+          tokens_pct:
+            token_limite > 0
+              ? Math.min(100, Math.round((token_usados / token_limite) * 100))
+              : 0,
         },
         dashboard: {
           nivel,
@@ -284,17 +325,16 @@ export function mountEmpresaRoutes(app: Express) {
           planos_teste: allowPlanSwitch()
             ? PLANOS_OFICIAIS.map((p) => ({ key: p, label: planLabel(p) }))
             : [],
-          // Gráficos / tendência / tags: trial e planos superiores
           mostrar_graficos: true,
           mostrar_tendencia:
             trial || nivel === 'pro' || nivel === 'ultra' || nivel === 'executivo',
           mostrar_tags: tem_ia && (trial || nivel === 'ultra' || nivel === 'executivo'),
-          mostrar_crise: true, // alerta de crise disponível em todos
+          mostrar_crise: true,
           mostrar_sentimento: true,
           mostrar_ia_respostas: tem_ia,
-          // Universal em TODOS os planos (incl. inicial/pro e trial):
           mostrar_whatsapp_cliente: true,
           mostrar_copiar_resposta: true,
+          mostrar_tratar: true,
           whatsapp_crise: true,
         },
         links: {
@@ -303,6 +343,7 @@ export function mountEmpresaRoutes(app: Express) {
           widget: `${base}/widget/${ref}`,
           embed: `${base}/avaliacao/${ref}`,
           relatorio_pdf: pdf_disponivel ? `/api/empresa/${ref}/relatorio.pdf` : null,
+          login: `${base}/login`,
         },
       });
     })

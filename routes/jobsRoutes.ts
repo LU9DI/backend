@@ -1,13 +1,6 @@
 /**
- * Jobs internos (cron / Railway / GitHub Actions).
- * Protegido por JOBS_SECRET no header Authorization: Bearer <secret>
- * ou query ?secret=
- *
- * Endpoints:
- *   POST /api/jobs/trial-expiring
- *   POST /api/jobs/expirations
- *   POST /api/jobs/retry-failures  — processa fila de retry
- *   GET  /api/jobs/retry-stats
+ * Jobs internos (cron).
+ * Authorization: Bearer JOBS_SECRET ou ?secret=
  */
 import type { Express, Request, Response } from 'express';
 import { getDb } from '../lib/db.js';
@@ -19,6 +12,8 @@ import {
 } from '../lib/notifications.js';
 import { enforcarExpiracoes } from '../services/billingService.js';
 import { processRetryQueue, retryQueueStats } from '../lib/retryQueue.js';
+import { createSqliteBackup } from '../lib/backup.js';
+import { enviarEmail } from '../lib/mailer.js';
 
 function authorized(req: Request): boolean {
   const secret = process.env.JOBS_SECRET?.trim();
@@ -33,14 +28,10 @@ function authorized(req: Request): boolean {
 
 async function ensureJobColumns(db: any) {
   const cols = (await db.all(`PRAGMA table_info(empresas)`)).map((c: any) => c.name);
-  if (!cols.includes('trial_remind_sent_at')) {
-    await db.exec(`ALTER TABLE empresas ADD COLUMN trial_remind_sent_at TEXT`);
-  }
-  if (!cols.includes('expiry_remind_sent_at')) {
-    await db.exec(`ALTER TABLE empresas ADD COLUMN expiry_remind_sent_at TEXT`);
-  }
-  if (!cols.includes('expired_notice_sent_at')) {
-    await db.exec(`ALTER TABLE empresas ADD COLUMN expired_notice_sent_at TEXT`);
+  for (const c of ['trial_remind_sent_at', 'expiry_remind_sent_at', 'expired_notice_sent_at', 'trial_mid_sent_at'] as const) {
+    if (!cols.includes(c)) {
+      await db.exec(`ALTER TABLE empresas ADD COLUMN ${c} TEXT`);
+    }
   }
 }
 
@@ -54,6 +45,11 @@ function recentementeEnviado(iso: string | null | undefined, agora: number, hora
   if (Number.isNaN(last)) return false;
   return agora - last < horas * 60 * 60 * 1000;
 }
+
+const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(
+  /\/$/,
+  ''
+);
 
 export function mountJobsRoutes(app: Express) {
   app.post('/api/jobs/retry-failures', async (req: Request, res: Response) => {
@@ -76,6 +72,79 @@ export function mountJobsRoutes(app: Express) {
       res.json({ success: true, ...stats });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || 'error' });
+    }
+  });
+
+  app.post('/api/jobs/backup', async (req: Request, res: Response) => {
+    if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
+    const result = await createSqliteBackup();
+    if (!result.ok) return res.status(500).json(result);
+    res.json({ success: true, ...result });
+  });
+
+  /** Lembrete no meio do trial (~dia 5 de 7) */
+  app.post('/api/jobs/trial-mid', async (req: Request, res: Response) => {
+    if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
+    try {
+      const db = getDb();
+      await ensureJobColumns(db);
+      const agora = Date.now();
+      const agoraIso = new Date(agora).toISOString();
+      // expira entre 1.5 e 3.5 dias → ~dia 4–5.5 de um trial de 7 dias
+      const from = new Date(agora + 1.5 * 86400000).toISOString();
+      const to = new Date(agora + 3.5 * 86400000).toISOString();
+
+      const rows = await db.all(
+        `SELECT e.id, e.nome_empresa, e.slug, e.expira_em, e.trial_mid_sent_at, u.email
+         FROM empresas e
+         LEFT JOIN usuarios u ON u.empresa_id = e.id AND u.email IS NOT NULL
+         WHERE e.status = 'trial'
+           AND e.expira_em IS NOT NULL
+           AND e.expira_em > ?
+           AND e.expira_em <= ?
+         GROUP BY e.id`,
+        [from, to]
+      );
+
+      let enviados = 0;
+      let pulados = 0;
+      for (const e of rows || []) {
+        if (!e.email || recentementeEnviado(e.trial_mid_sent_at, agora, 48)) {
+          pulados++;
+          continue;
+        }
+        const dias = diasAte(e.expira_em, agora);
+        const planos = `${APP_URL}/#planos`;
+        const painel = `${APP_URL}/painel/${e.slug || e.id}`;
+        await enviarEmail({
+          to: e.email,
+          subject: `Filtra.IA — metade do trial · ${e.nome_empresa}`,
+          text: [
+            `Olá,`,
+            ``,
+            `Você está no meio do período grátis de ${e.nome_empresa}.`,
+            `Faltam cerca de ${dias} dia(s) (até ${e.expira_em}).`,
+            ``,
+            `Painel: ${painel}`,
+            `Planos (cartão ou Pix): ${planos}`,
+            ``,
+            `Compartilhe o link de avaliação com clientes enquanto testa.`,
+          ].join('\n'),
+        });
+        await db.run(`UPDATE empresas SET trial_mid_sent_at = ? WHERE id = ?`, [agoraIso, e.id]);
+        enviados++;
+      }
+
+      res.json({
+        success: true,
+        enviados,
+        pulados,
+        candidatos: (rows || []).length,
+        smtp: smtpConfigured(),
+      });
+    } catch (e: any) {
+      console.error('jobs/trial-mid:', e?.message || e);
+      res.status(500).json({ error: 'INTERNAL_SERVER_ERROR' });
     }
   });
 
@@ -291,7 +360,6 @@ export function mountJobsRoutes(app: Express) {
         } else stats.pulados++;
       }
 
-      // também processa retries pendentes neste job diário
       let retry = null;
       try {
         retry = await processRetryQueue(db, 40);
