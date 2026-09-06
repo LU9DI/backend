@@ -28,15 +28,34 @@ const limiter = rateLimit({
   message: { error: 'Muitas tentativas de biometria. Aguarde.' },
 });
 
-function toB64url(buf: ArrayBuffer | Uint8Array): string {
-  const u8 = buf instanceof ArrayBuffer ? new Uint8Array(buf) : buf;
-  let s = '';
-  u8.forEach((b) => (s += String.fromCharCode(b)));
-  return Buffer.from(s, 'binary')
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
+async function handleRegisterVerify(req: AuthRequest, res: Response) {
+  const db = getDb();
+  await ensureWebAuthnSchema(db);
+  if (!req.user?.id) return res.status(401).json({ error: 'Não autenticado.' });
+
+  const {
+    challengeId,
+    credentialId,
+    publicKey,
+    clientDataJSON,
+    deviceName,
+    transports,
+  } = req.body || {};
+
+  try {
+    const result = await finishRegistration(db, {
+      challengeId: String(challengeId),
+      userId: req.user.id,
+      credentialId: String(credentialId),
+      publicKey: String(publicKey),
+      clientDataJSON: String(clientDataJSON),
+      deviceName: deviceName ? String(deviceName) : undefined,
+      transports: Array.isArray(transports) ? transports.map(String) : undefined,
+    });
+    res.json({ success: true, ...result });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message || 'Falha ao registrar digital.' });
+  }
 }
 
 export function mountWebAuthnRoutes(app: Express) {
@@ -44,7 +63,6 @@ export function mountWebAuthnRoutes(app: Express) {
     res.json({ ...webauthnConfig(), available: true });
   });
 
-  /** Opções para cadastrar digital (requer sessão senha/JWT). */
   app.post(
     '/api/webauthn/register/options',
     limiter,
@@ -70,42 +88,20 @@ export function mountWebAuthnRoutes(app: Express) {
     })
   );
 
+  // Alias: /verify (oficial) e /finish (frontend legado)
   app.post(
     '/api/webauthn/register/verify',
     limiter,
     autenticarToken,
-    asyncHandler(async (req: AuthRequest, res: Response) => {
-      const db = getDb();
-      await ensureWebAuthnSchema(db);
-      if (!req.user?.id) return res.status(401).json({ error: 'Não autenticado.' });
-
-      const {
-        challengeId,
-        credentialId,
-        publicKey,
-        clientDataJSON,
-        deviceName,
-        transports,
-      } = req.body || {};
-
-      try {
-        const result = await finishRegistration(db, {
-          challengeId: String(challengeId),
-          userId: req.user.id,
-          credentialId: String(credentialId),
-          publicKey: String(publicKey),
-          clientDataJSON: String(clientDataJSON),
-          deviceName: deviceName ? String(deviceName) : undefined,
-          transports: Array.isArray(transports) ? transports.map(String) : undefined,
-        });
-        res.json({ success: true, ...result });
-      } catch (e: any) {
-        res.status(400).json({ error: e.message || 'Falha ao registrar digital.' });
-      }
-    })
+    asyncHandler(handleRegisterVerify)
+  );
+  app.post(
+    '/api/webauthn/register/finish',
+    limiter,
+    autenticarToken,
+    asyncHandler(handleRegisterVerify)
   );
 
-  /** Login por digital: opções (só CNPJ). */
   app.post(
     '/api/webauthn/login/options',
     limiter,

@@ -3,9 +3,10 @@
  */
 import bcrypt from 'bcrypt';
 import type { Database } from 'sqlite';
-import type { Response } from 'express';
+import type { Response, Request } from 'express';
 import { getDb } from '../lib/db.js';
 import { setAuthCookie, signAccessToken } from '../lib/auth.js';
+import { writeAudit, clientIp } from '../lib/auditLog.js';
 
 export type LoginInput = {
   cnpj: string;
@@ -33,16 +34,41 @@ export class AuthUnauthorizedError extends Error {
 export async function loginEmpresa(
   input: LoginInput,
   res: Response,
-  db: Database = getDb()
+  db: Database = getDb(),
+  req?: Request
 ): Promise<LoginResult> {
   const cnpj = String(input.cnpj);
   const senha = String(input.senha);
+  const ip = req ? clientIp(req) : null;
+  const ua = req ? String(req.headers['user-agent'] || '').slice(0, 200) : null;
 
   const usuario = await db.get('SELECT * FROM usuarios WHERE cnpj = ?', [cnpj]);
-  if (!usuario?.senha_hash) throw new AuthUnauthorizedError();
+  if (!usuario?.senha_hash) {
+    await writeAudit(db, {
+      action: 'auth.login_failed',
+      result: 'denied',
+      target: cnpj.slice(0, 14),
+      ip,
+      user_agent: ua,
+      detail: 'usuário não encontrado',
+    });
+    throw new AuthUnauthorizedError();
+  }
 
   const ok = await bcrypt.compare(senha, usuario.senha_hash);
-  if (!ok) throw new AuthUnauthorizedError();
+  if (!ok) {
+    await writeAudit(db, {
+      action: 'auth.login_failed',
+      actor_user_id: usuario.id,
+      empresa_id: usuario.empresa_id,
+      result: 'denied',
+      target: cnpj.slice(0, 14),
+      ip,
+      user_agent: ua,
+      detail: 'senha inválida',
+    });
+    throw new AuthUnauthorizedError();
+  }
 
   const tokenPayload = {
     id: usuario.id,
@@ -52,6 +78,16 @@ export async function loginEmpresa(
 
   const token = signAccessToken(tokenPayload);
   setAuthCookie(res, token);
+
+  await writeAudit(db, {
+    action: 'auth.login',
+    actor_user_id: usuario.id,
+    actor_role: usuario.empresa_id === 'admin' ? 'admin' : 'empresa',
+    empresa_id: usuario.empresa_id,
+    result: 'ok',
+    ip,
+    user_agent: ua,
+  });
 
   return { success: true, token, tokenPayload };
 }

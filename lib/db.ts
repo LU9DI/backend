@@ -1,5 +1,7 @@
 /**
- * Inicialização e acesso ao SQLite.
+ * Inicialização e acesso ao banco.
+ * - Dev / testes: SQLite (padrão)
+ * - Produção: Postgres se DATABASE_URL estiver definido (recomendado)
  */
 import path from 'path';
 import fs from 'fs';
@@ -10,25 +12,60 @@ import { open, type Database } from 'sqlite';
 import { fileURLToPath } from 'url';
 import { ensureAuthColumns } from '../passwordResetRoutes.js';
 import { ensureMfaColumns } from '../mfa.js';
+import { initPgDatabase, isPostgresUrl, asSqliteDb } from './db.pg.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const isProd = process.env.NODE_ENV === 'production';
 
 let _db: Database | null = null;
+let _engine: 'sqlite' | 'postgres' = 'sqlite';
 
 export function getDb(): Database {
   if (!_db) throw new Error('Banco ainda não inicializado. Chame initDB() primeiro.');
   return _db;
 }
 
-export async function initDB(): Promise<Database> {
+export function dbEngine(): 'sqlite' | 'postgres' {
+  return _engine;
+}
+
+async function initSqlite(): Promise<Database> {
   const dbPath =
     process.env.SQLITE_DB_PATH ||
-    (isProd ? '/data/database.sqlite' : path.resolve(__dirname, '..', '..', 'data', 'database.sqlite'));
+    (isProd
+      ? '/data/database.sqlite'
+      : path.resolve(__dirname, '..', '..', 'data', 'database.sqlite'));
 
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  _db = await open({ filename: dbPath, driver: sqlite3.Database });
+  const db = await open({ filename: dbPath, driver: sqlite3.Database });
+  _engine = 'sqlite';
+  console.log(`💾 SQLite: ${dbPath}`);
+  return db;
+}
+
+async function initPostgres(): Promise<Database> {
+  const url = process.env.DATABASE_URL!.trim();
+  const pg = await initPgDatabase(url);
+  _engine = 'postgres';
+  console.log('🐘 Postgres conectado (DATABASE_URL)');
+  return asSqliteDb(pg);
+}
+
+export async function initDB(): Promise<Database> {
+  const url = process.env.DATABASE_URL?.trim();
+
+  if (isPostgresUrl(url)) {
+    _db = await initPostgres();
+  } else if (isProd && !process.env.SQLITE_ALLOW_PROD) {
+    console.warn(
+      '⚠️  PRODUÇÃO sem DATABASE_URL Postgres. Usando SQLite. ' +
+        'Defina DATABASE_URL=postgresql://... ou SQLITE_ALLOW_PROD=1 para silenciar.'
+    );
+    _db = await initSqlite();
+  } else {
+    _db = await initSqlite();
+  }
 
   await _db.exec(`
     CREATE TABLE IF NOT EXISTS empresas (
@@ -52,8 +89,7 @@ export async function initDB(): Promise<Database> {
       cnpj TEXT NOT NULL,
       nome_funcionario TEXT NOT NULL,
       empresa_id TEXT NOT NULL,
-      senha_hash TEXT NOT NULL,
-      FOREIGN KEY (empresa_id) REFERENCES empresas(id)
+      senha_hash TEXT NOT NULL
     );
   `);
   await _db.exec(`
@@ -95,11 +131,16 @@ export async function initDB(): Promise<Database> {
   if (!adminExiste) {
     const senhaPadrao = process.env.ADMIN_PASSWORD || 'MudeEstaSenha123!';
     const hash = await bcrypt.hash(senhaPadrao, 12);
-    await _db.run(
-      'INSERT INTO usuarios (id, cnpj, nome_funcionario, empresa_id, senha_hash, email) VALUES (?, ?, ?, ?, ?, ?)',
-      [crypto.randomUUID(), '00000000000000', 'Admin', 'admin', hash, adminMail]
-    );
-    console.log(`🔑 Admin criado: ${adminMail}`);
+    try {
+      await _db.run(
+        'INSERT INTO usuarios (id, cnpj, nome_funcionario, empresa_id, senha_hash, email) VALUES (?, ?, ?, ?, ?, ?)',
+        [crypto.randomUUID(), '00000000000000', 'Admin', 'admin', hash, adminMail]
+      );
+      console.log(`🔑 Admin criado: ${adminMail}`);
+    } catch (e: any) {
+      // Postgres pode exigir coluna email no CREATE — ensureAuthColumns deve ter adicionado
+      console.warn('Admin seed:', e?.message || e);
+    }
   }
 
   return _db;

@@ -7,7 +7,7 @@ import cookieParser from 'cookie-parser';
 import 'dotenv/config';
 
 import { assertEnvOrExit } from './lib/env.js';
-import { initDB, getDb } from './lib/db.js';
+import { initDB, getDb, dbEngine } from './lib/db.js';
 import { requireJwtSecret, setAuthCookie, autenticarToken } from './lib/auth.js';
 import { jwtRotationStatus } from './lib/jwtKeys.js';
 import { buildCorsOptions } from './lib/cors.js';
@@ -33,6 +33,7 @@ import { mountSubscriptionRoutes } from './routes/subscriptionRoutes.js';
 import { mountUnidadeRoutes } from './routes/unidadeRoutes.js';
 import { mountExportRoutes } from './routes/exportRoutes.js';
 import { mountPublicPlanosRoutes } from './routes/publicPlanosRoutes.js';
+import { mountAuditRoutes } from './routes/auditRoutes.js';
 import { mountPasswordResetRoutes } from './passwordResetRoutes.js';
 import { mountAdminLoginRoute } from './adminLoginRoute.js';
 import { mountAdminPasswordResetRoutes } from './adminPasswordReset.js';
@@ -47,6 +48,7 @@ import { ensureWebAuthnSchema, webauthnConfig } from './lib/webauthn.js';
 import { ensurePushSchema, pushConfigured, initWebPush } from './lib/push.js';
 import { ensureAiUsageSchema } from './lib/aiUsage.js';
 import { ensureOpsTables } from './lib/opsLog.js';
+import { ensureAuditSchema } from './lib/auditLog.js';
 import { ensureRetryQueue, startRetryWorker } from './lib/retryQueue.js';
 import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
@@ -80,6 +82,7 @@ app.get('/api/health', (_req, res) => {
   const ai = getAiLoadStats();
   res.json({
     ok: true,
+    db: typeof dbEngine === 'function' ? dbEngine() : 'sqlite',
     stripe: stripeConfigured(),
     paypal: paypalConfigured(),
     pix: mpConfigured(),
@@ -167,6 +170,11 @@ async function main() {
     console.warn('ensureOpsTables:', e);
   }
   try {
+    await ensureAuditSchema(getDb());
+  } catch (e) {
+    console.warn('ensureAuditSchema:', e);
+  }
+  try {
     await ensurePlanPricingSchema(getDb());
     await refreshPlanPricesFromDb(getDb());
   } catch (e) {
@@ -207,6 +215,7 @@ async function main() {
   mountUnidadeRoutes(app);
   mountExportRoutes(app);
   mountPublicPlanosRoutes(app);
+  mountAuditRoutes(app);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
