@@ -1,8 +1,7 @@
 /**
- * Stripe Checkout — tabela oficial de planos
- * Inicial | Pro | Ultra | Corporativo | Rei  (mensal e anual)
- *
- * Preços podem ser sobrescritos via admin (plan_prices no SQLite).
+ * Planos oficiais + Stripe Checkout (opcional).
+ * Stripe fica OFF se STRIPE_ENABLED=0/false ou sem STRIPE_SECRET_KEY.
+ * Pagamentos preferidos no Brasil: Mercado Pago (Pix) e PayPal.
  */
 import crypto from 'crypto';
 import { applyDbPricesToPlanos } from './lib/planPricing.js';
@@ -155,8 +154,11 @@ export function resolvePlano(raw: string): PlanoDef | null {
   return PLANOS[k] || null;
 }
 
+/** Stripe só liga se houver chave E STRIPE_ENABLED não for 0/false/off. */
 export function stripeConfigured(): boolean {
-  return !!process.env.STRIPE_SECRET_KEY;
+  const flag = String(process.env.STRIPE_ENABLED || '1').trim().toLowerCase();
+  if (flag === '0' || flag === 'false' || flag === 'off' || flag === 'no') return false;
+  return Boolean(process.env.STRIPE_SECRET_KEY?.trim());
 }
 
 export function stripeWebhookSecret(): string {
@@ -171,8 +173,8 @@ function appUrl(): string {
 }
 
 async function stripeForm(path: string, params: Record<string, string>): Promise<any> {
-  const key = process.env.STRIPE_SECRET_KEY;
-  if (!key) throw new Error('STRIPE_SECRET_KEY não configurada');
+  if (!stripeConfigured()) throw new Error('Stripe desligado (STRIPE_ENABLED=0 ou sem chave)');
+  const key = process.env.STRIPE_SECRET_KEY!;
 
   const body = new URLSearchParams(params);
   const res = await fetch(`${STRIPE_API}${path}`, {
