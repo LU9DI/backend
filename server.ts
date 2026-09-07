@@ -1,13 +1,14 @@
 /**
- * Filtra.IA — bootstrap da API
+ * Filtra.IA — bootstrap da API (produção-ready)
  */
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import 'dotenv/config';
+import type { Server } from 'http';
 
 import { assertEnvOrExit } from './lib/env.js';
-import { initDB, getDb, dbEngine } from './lib/db.js';
+import { initDB, getDb, dbEngine, pingDb } from './lib/db.js';
 import { requireJwtSecret, setAuthCookie, autenticarToken } from './lib/auth.js';
 import { jwtRotationStatus } from './lib/jwtKeys.js';
 import { buildCorsOptions } from './lib/cors.js';
@@ -78,11 +79,23 @@ app.use((req, res, next) => {
 });
 app.use(cors(buildCorsOptions()));
 
-app.get('/api/health', (_req, res) => {
+/** Health com ping real no banco — Render usa para saber se o serviço está vivo. */
+app.get('/api/health', async (_req, res) => {
   const ai = getAiLoadStats();
-  res.json({
-    ok: true,
-    db: typeof dbEngine === 'function' ? dbEngine() : 'sqlite',
+  let dbPing: { ok: boolean; engine: string; error?: string } = {
+    ok: false,
+    engine: 'unknown',
+  };
+  try {
+    dbPing = await pingDb();
+  } catch (e: any) {
+    dbPing = { ok: false, engine: 'unknown', error: String(e?.message || e) };
+  }
+
+  const body = {
+    ok: dbPing.ok,
+    db: dbPing.engine || (typeof dbEngine === 'function' ? dbEngine() : 'sqlite'),
+    db_ok: dbPing.ok,
     stripe: stripeConfigured(),
     paypal: paypalConfigured(),
     pix: mpConfigured(),
@@ -100,10 +113,20 @@ app.get('/api/health', (_req, res) => {
     http_latency: getHttpMetrics().global,
     env: process.env.NODE_ENV || 'development',
     time: new Date().toISOString(),
-  });
+  };
+
+  res.status(dbPing.ok ? 200 : 503).json(body);
 });
 
-app.get('/api/metrics', (_req, res) => {
+app.get('/api/metrics', (req, res) => {
+  // Em produção exige header se JOBS_SECRET estiver definido
+  const secret = process.env.JOBS_SECRET?.trim();
+  if (process.env.NODE_ENV === 'production' && secret) {
+    const got = String(req.headers['x-jobs-secret'] || '');
+    if (got !== secret) {
+      return res.status(401).json({ error: 'Não autorizado.' });
+    }
+  }
   res.json({
     time: new Date().toISOString(),
     http: getHttpMetrics(),
@@ -112,6 +135,8 @@ app.get('/api/metrics', (_req, res) => {
 });
 
 const PORT = Number(process.env.PORT || 5000);
+let server: Server | null = null;
+let shuttingDown = false;
 
 async function runSentimentBackfillOnBoot() {
   if (process.env.BACKFILL_SENTIMENT === '0') return;
@@ -138,6 +163,26 @@ async function runLgpdSweepOnBoot() {
     await anonymizeOldClientWhatsapp(db, { limit: 1000 });
   } catch (e: any) {
     console.warn('LGPD sweep:', e?.message || e);
+  }
+}
+
+function gracefulShutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`⏹  ${signal} — encerrando...`);
+  const force = setTimeout(() => {
+    console.error('Force exit após timeout de shutdown');
+    process.exit(1);
+  }, 10_000);
+  force.unref();
+
+  if (server) {
+    server.close(() => {
+      console.log('HTTP fechado.');
+      process.exit(0);
+    });
+  } else {
+    process.exit(0);
   }
 }
 
@@ -226,10 +271,16 @@ async function main() {
   app.use(notFoundHandler);
   app.use(errorHandler);
 
-  console.log(`💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'}`);
-  app.listen(PORT, () => {
+  console.log(
+    `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'}`
+  );
+
+  server = app.listen(PORT, () => {
     console.log(`🚀 API Filtra.IA em http://localhost:${PORT}`);
   });
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }
 
 main().catch((e) => {

@@ -1,5 +1,6 @@
 /**
  * Validação de variáveis de ambiente na subida.
+ * Em produção: JWT forte + DATABASE_URL Postgres (exceto SQLITE_ALLOW_PROD=1).
  */
 
 export type EnvReport = {
@@ -11,12 +12,40 @@ export type EnvReport = {
 export function validateEnv(): EnvReport {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const isProd = process.env.NODE_ENV === 'production';
 
   const jwt = process.env.JWT_SECRET || '';
   if (!jwt) {
     errors.push('JWT_SECRET é obrigatório (mín. 32 caracteres).');
   } else if (jwt.length < 32) {
     errors.push('JWT_SECRET deve ter pelo menos 32 caracteres.');
+  } else if (isProd && /^(secret|change|troque|test|dev)/i.test(jwt)) {
+    errors.push('JWT_SECRET em produção parece placeholder — use um valor aleatório forte.');
+  }
+
+  const dbUrl = process.env.DATABASE_URL?.trim() || '';
+  const allowSqliteProd = process.env.SQLITE_ALLOW_PROD === '1';
+  if (isProd && !allowSqliteProd) {
+    if (!dbUrl) {
+      errors.push(
+        'DATABASE_URL (PostgreSQL) é obrigatório em produção. ' +
+          'No Render, ligue filtra-ia-db ou defina SQLITE_ALLOW_PROD=1 (não recomendado).'
+      );
+    } else if (!/^postgres(ql)?:\/\//i.test(dbUrl)) {
+      errors.push('DATABASE_URL deve ser uma URL postgres:// ou postgresql://.');
+    }
+  }
+
+  if (isProd) {
+    const cors =
+      (process.env.CORS_ORIGINS || '').trim() ||
+      process.env.APP_URL ||
+      process.env.FRONTEND_URL;
+    if (!cors) {
+      warnings.push(
+        'CORS_ORIGINS / APP_URL / FRONTEND_URL vazios em produção — browsers de outros domínios serão bloqueados.'
+      );
+    }
   }
 
   if (!process.env.STRIPE_SECRET_KEY) {
@@ -24,7 +53,7 @@ export function validateEnv(): EnvReport {
   }
 
   if (!process.env.MP_ACCESS_TOKEN?.trim()) {
-    warnings.push('MP_ACCESS_TOKEN ausente — Pix (QR/copia-cola/recorrente) desligado.');
+    warnings.push('MP_ACCESS_TOKEN ausente — Pix desligado.');
   }
 
   if (!process.env.PAYPAL_CLIENT_ID?.trim()) {
@@ -47,9 +76,9 @@ export function validateEnv(): EnvReport {
       'Nenhuma IA configurada (GROQ_API_KEY / GEMINI_API_KEY) — respostas automáticas desligadas.'
     );
   } else if (!hasGroq) {
-    warnings.push('Só Gemini ativo — defina GROQ_API_KEY para usar Groq como primário.');
+    warnings.push('Só Gemini ativo — defina GROQ_API_KEY para primário.');
   } else if (!hasGemini) {
-    warnings.push('Só Groq ativo — defina GEMINI_API_KEY para failover quando a cota acabar.');
+    warnings.push('Só Groq ativo — defina GEMINI_API_KEY para failover de cota.');
   }
 
   if (!process.env.SMTP_HOST) {

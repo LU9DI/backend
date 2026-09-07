@@ -1,7 +1,7 @@
 /**
  * Inicialização e acesso ao banco.
  * - Dev / testes: SQLite (padrão)
- * - Produção: Postgres se DATABASE_URL estiver definido (recomendado)
+ * - Produção: Postgres obrigatório (DATABASE_URL), salvo SQLITE_ALLOW_PROD=1
  */
 import path from 'path';
 import fs from 'fs';
@@ -28,6 +28,17 @@ export function getDb(): Database {
 
 export function dbEngine(): 'sqlite' | 'postgres' {
   return _engine;
+}
+
+/** Health real: SELECT 1. */
+export async function pingDb(): Promise<{ ok: boolean; engine: string; error?: string }> {
+  try {
+    const db = getDb();
+    await db.get('SELECT 1 AS ok');
+    return { ok: true, engine: _engine };
+  } catch (e: any) {
+    return { ok: false, engine: _engine, error: String(e?.message || e) };
+  }
 }
 
 async function initSqlite(): Promise<Database> {
@@ -57,13 +68,14 @@ export async function initDB(): Promise<Database> {
 
   if (isPostgresUrl(url)) {
     _db = await initPostgres();
-  } else if (isProd && !process.env.SQLITE_ALLOW_PROD) {
-    console.warn(
-      '⚠️  PRODUÇÃO sem DATABASE_URL Postgres. Usando SQLite. ' +
-        'Defina DATABASE_URL=postgresql://... ou SQLITE_ALLOW_PROD=1 para silenciar.'
+  } else if (isProd && process.env.SQLITE_ALLOW_PROD !== '1') {
+    throw new Error(
+      'Produção exige DATABASE_URL Postgres. Defina no Render (filtra-ia-db) ou SQLITE_ALLOW_PROD=1.'
     );
-    _db = await initSqlite();
   } else {
+    if (isProd) {
+      console.warn('⚠️  SQLITE_ALLOW_PROD=1 — dados no disco efêmero do Render podem sumir.');
+    }
     _db = await initSqlite();
   }
 
@@ -123,6 +135,15 @@ export async function initDB(): Promise<Database> {
     );
   `);
 
+  // Índices críticos (idempotentes)
+  try {
+    await _db.exec(`CREATE INDEX IF NOT EXISTS idx_reviews_empresa ON reviews(empresa_id)`);
+    await _db.exec(`CREATE INDEX IF NOT EXISTS idx_empresas_cnpj ON empresas(cnpj)`);
+    await _db.exec(`CREATE INDEX IF NOT EXISTS idx_empresas_slug ON empresas(slug)`);
+  } catch {
+    /* alguns engines já têm índice via UNIQUE */
+  }
+
   await ensureAuthColumns(_db);
   await ensureMfaColumns(_db);
 
@@ -138,7 +159,6 @@ export async function initDB(): Promise<Database> {
       );
       console.log(`🔑 Admin criado: ${adminMail}`);
     } catch (e: any) {
-      // Postgres pode exigir coluna email no CREATE — ensureAuthColumns deve ter adicionado
       console.warn('Admin seed:', e?.message || e);
     }
   }
