@@ -14,11 +14,13 @@ function convertPlaceholders(sql: string): string {
   return sql.replace(/\?/g, () => `$${++n}`);
 }
 
-/** Traduções leves SQLite → Postgres para o código legado. */
+/**
+ * Traduções SQLite → Postgres.
+ * Ordem importa: funções datetime('now') ANTES do tipo DATETIME.
+ */
 function adaptSql(sql: string): string {
   let s = sql;
 
-  // INSERT OR IGNORE → ON CONFLICT DO NOTHING (quando não há cláusula já)
   if (/INSERT\s+OR\s+IGNORE/i.test(s) && !/ON\s+CONFLICT/i.test(s)) {
     s = s.replace(/INSERT\s+OR\s+IGNORE/i, 'INSERT');
     if (!/ON\s+CONFLICT/i.test(s)) {
@@ -26,10 +28,17 @@ function adaptSql(sql: string): string {
     }
   }
 
-  s = s.replace(/datetime\('now'\)/gi, 'NOW()');
+  // Funções de data SQLite → Postgres (antes de trocar o tipo DATETIME)
+  s = s.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'NOW()');
+  s = s.replace(/datetime\s*\(\s*"now"\s*\)/gi, 'NOW()');
   s = s.replace(/CURRENT_TIMESTAMP/gi, 'NOW()');
   s = s.replace(/IFNULL\s*\(/gi, 'COALESCE(');
+
+  // Tipos SQLite → Postgres (word-boundary evita tocar em TIMESTAMPTZ)
+  s = s.replace(/\bDATETIME\b/gi, 'TIMESTAMPTZ');
+  s = s.replace(/\bREAL\b/gi, 'DOUBLE PRECISION');
   s = s.replace(/INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT/gi, 'SERIAL PRIMARY KEY');
+  s = s.replace(/AUTOINCREMENT/gi, '');
 
   return s;
 }
@@ -46,10 +55,12 @@ async function handlePragma(client: pg.PoolClient, sql: string): Promise<any[]> 
               SELECT kcu.column_name FROM information_schema.table_constraints tc
               JOIN information_schema.key_column_usage kcu
                 ON tc.constraint_name = kcu.constraint_name
-              WHERE tc.table_name = $1 AND tc.constraint_type = 'PRIMARY KEY'
+               AND tc.table_schema = kcu.table_schema
+              WHERE tc.table_name = $1 AND tc.table_schema = 'public'
+                AND tc.constraint_type = 'PRIMARY KEY'
             ) THEN 1 ELSE 0 END as pk
      FROM information_schema.columns
-     WHERE table_name = $1
+     WHERE table_schema = 'public' AND table_name = $1
      ORDER BY ordinal_position`,
     [table]
   );
@@ -67,11 +78,15 @@ export type PgDatabase = {
 export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
   pool = new Pool({
     connectionString: databaseUrl,
-    ssl: process.env.PGSSL === '0' ? false : databaseUrl.includes('localhost') ? false : { rejectUnauthorized: false },
+    ssl:
+      process.env.PGSSL === '0'
+        ? false
+        : databaseUrl.includes('localhost')
+          ? false
+          : { rejectUnauthorized: false },
     max: Number(process.env.PG_POOL_MAX || 10),
   });
 
-  // ping
   const client = await pool.connect();
   try {
     await client.query('SELECT 1');
@@ -81,7 +96,8 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
 
   const db: PgDatabase = {
     async exec(sql: string) {
-      const statements = adaptSql(sql)
+      const adapted = adaptSql(sql);
+      const statements = adapted
         .split(';')
         .map((x) => x.trim())
         .filter(Boolean);
@@ -89,7 +105,22 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
       try {
         for (const st of statements) {
           if (/^PRAGMA/i.test(st)) continue;
-          await c.query(st);
+          try {
+            await c.query(st);
+          } catch (e: any) {
+            const msg = String(e?.message || e);
+            // Já existe / coluna duplicada — não derruba o boot
+            if (
+              /already exists/i.test(msg) ||
+              e?.code === '42P07' ||
+              e?.code === '42701'
+            ) {
+              continue;
+            }
+            console.error('pg.exec falhou:', msg);
+            console.error('SQL:', st.slice(0, 500));
+            throw e;
+          }
         }
       } finally {
         c.release();
@@ -156,7 +187,6 @@ export function isPostgresUrl(url?: string | null): boolean {
   return /^postgres(ql)?:\/\//i.test(url.trim());
 }
 
-/** Type cast helper — runtime is PgDatabase, callers tipam como sqlite Database. */
 export function asSqliteDb(db: PgDatabase): Database {
   return db as unknown as Database;
 }
