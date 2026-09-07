@@ -7,6 +7,7 @@ import { getDb } from '../lib/db.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import {
   mpConfigured,
+  mpTokenMode,
   createPixAvulso,
   createPixAgendado,
   createPixRecorrente,
@@ -52,6 +53,15 @@ async function ensurePixTables(db: Database) {
   if (!cols.includes('billing_cycle')) {
     await db.exec(`ALTER TABLE empresas ADD COLUMN billing_cycle TEXT`);
   }
+}
+
+function mpHttpError(res: Response, e: any) {
+  const status = Number(e?.status) >= 400 && Number(e?.status) < 600 ? Number(e.status) : 502;
+  return res.status(status).json({
+    error: e?.message || 'Erro Mercado Pago',
+    provider: 'mercadopago',
+    token_mode: mpTokenMode(),
+  });
 }
 
 async function activateFromPix(
@@ -100,7 +110,21 @@ export function mountPixRoutes(app: Express) {
     res.json({
       configured: mpConfigured(),
       provider: 'mercadopago',
+      token_mode: mpTokenMode(),
       modes: ['avulso', 'agendado', 'recorrente'],
+      endpoints: {
+        avulso: 'POST /api/pix/avulso',
+        agendado: 'POST /api/pix/agendado',
+        recorrente: 'POST /api/pix/recorrente',
+        poll: 'GET /api/pix/payment/:id',
+        webhook: 'POST /api/webhook/mercadopago',
+      },
+      dica:
+        mpTokenMode() === 'unknown'
+          ? 'MP_ACCESS_TOKEN deve começar com APP_USR- (produção) ou TEST- (sandbox). Não use Public Key.'
+          : mpTokenMode() === 'test'
+            ? 'Token de TESTE ativo — pagamentos são simulados.'
+            : 'Token de PRODUÇÃO ativo.',
     });
   });
 
@@ -110,7 +134,7 @@ export function mountPixRoutes(app: Express) {
       if (!mpConfigured()) {
         return res.status(503).json({
           error:
-            'Pix não configurado. Defina MP_ACCESS_TOKEN no backend/.env (Mercado Pago).',
+            'Pix não configurado. Defina MP_ACCESS_TOKEN no Render (Access Token do Mercado Pago).',
         });
       }
       const plano = String(req.body?.plano || '').trim();
@@ -122,13 +146,18 @@ export function mountPixRoutes(app: Express) {
         if (!emp) return res.status(404).json({ error: 'Empresa não encontrada.' });
       }
 
-      const created = await createPixAvulso({
-        planoKey: plano,
-        empresaId,
-        email: req.body?.email ? String(req.body.email) : null,
-        nomePagador: req.body?.nome ? String(req.body.nome) : null,
-        cpf: req.body?.cpf ? String(req.body.cpf) : null,
-      });
+      let created;
+      try {
+        created = await createPixAvulso({
+          planoKey: plano,
+          empresaId,
+          email: req.body?.email ? String(req.body.email) : null,
+          nomePagador: req.body?.nome ? String(req.body.nome) : null,
+          cpf: req.body?.cpf ? String(req.body.cpf) : null,
+        });
+      } catch (e: any) {
+        return mpHttpError(res, e);
+      }
 
       const db = getDb();
       await ensurePixTables(db);
@@ -187,13 +216,18 @@ export function mountPixRoutes(app: Express) {
       }
 
       const empresaId = req.body?.empresa_id ? String(req.body.empresa_id) : null;
-      const created = await createPixAgendado({
-        planoKey: plano,
-        empresaId,
-        email: req.body?.email ? String(req.body.email) : null,
-        nomePagador: req.body?.nome ? String(req.body.nome) : null,
-        venceEmIso: venceEm,
-      });
+      let created;
+      try {
+        created = await createPixAgendado({
+          planoKey: plano,
+          empresaId,
+          email: req.body?.email ? String(req.body.email) : null,
+          nomePagador: req.body?.nome ? String(req.body.nome) : null,
+          venceEmIso: venceEm,
+        });
+      } catch (e: any) {
+        return mpHttpError(res, e);
+      }
 
       const db = getDb();
       await ensurePixTables(db);
@@ -252,11 +286,16 @@ export function mountPixRoutes(app: Express) {
       }
 
       const empresaId = req.body?.empresa_id ? String(req.body.empresa_id) : null;
-      const created = await createPixRecorrente({
-        planoKey: plano,
-        empresaId,
-        email,
-      });
+      let created;
+      try {
+        created = await createPixRecorrente({
+          planoKey: plano,
+          empresaId,
+          email,
+        });
+      } catch (e: any) {
+        return mpHttpError(res, e);
+      }
 
       const db = getDb();
       await ensurePixTables(db);
@@ -328,10 +367,10 @@ export function mountPixRoutes(app: Express) {
       const empresaId = remote.metadata?.empresa_id || parsed.empresaId || null;
       const planoKey = remote.metadata?.plano || parsed.planoKey || null;
 
-      await db.run(
-        `UPDATE pix_payments SET status = ?, updated_at = datetime('now') WHERE id = ?`,
-        [status, id]
-      );
+      await db.run(`UPDATE pix_payments SET status = ?, updated_at = NOW() WHERE id = ?`, [
+        status,
+        id,
+      ]);
 
       if ((status === 'approved' || status === 'authorized') && empresaId) {
         const emp = await db.get(`SELECT id, status, plan FROM empresas WHERE id = ?`, [empresaId]);
@@ -374,7 +413,6 @@ export function mountPixRoutes(app: Express) {
       const xSig = (req.headers['x-signature'] as string) || '';
       const xReq = (req.headers['x-request-id'] as string) || '';
 
-      // Só valida assinatura se houver secret E headers de assinatura
       if (process.env.MP_WEBHOOK_SECRET?.trim() && xSig) {
         const okSig = verifyMpWebhookSignature({
           xSignature: xSig,
@@ -413,10 +451,10 @@ export function mountPixRoutes(app: Express) {
           const empresaId = remote.metadata?.empresa_id || parsed.empresaId || null;
           const planoKey = remote.metadata?.plano || parsed.planoKey || null;
 
-          await db.run(
-            `UPDATE pix_payments SET status = ?, updated_at = datetime('now') WHERE id = ?`,
-            [status, paymentId]
-          );
+          await db.run(`UPDATE pix_payments SET status = ?, updated_at = NOW() WHERE id = ?`, [
+            status,
+            paymentId,
+          ]);
 
           if (status === 'approved' && empresaId) {
             const result = await activateFromPix(db, {
