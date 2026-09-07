@@ -1,14 +1,15 @@
 /**
  * Preços públicos dos planos (mesmos valores editados no admin).
  * GET /api/planos — sem auth, para a landing.
+ * Pagamentos: Pix (Mercado Pago) e PayPal — Stripe desligado.
  */
 import type { Express, Request, Response } from 'express';
 import { getDb } from '../lib/db.js';
 import { listPlanPrices, ensurePlanPricingSchema } from '../lib/planPricing.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { listPlanosPublicos, refreshPlanPricesFromDb, stripeConfigured } from '../stripeBilling.js';
+import { refreshPlanPricesFromDb, stripeConfigured } from '../stripeBilling.js';
 import { paypalConfigured } from '../lib/paypal.js';
-import { mpConfigured } from '../lib/mercadopago.js';
+import { mpConfigured, mpTokenMode } from '../lib/mercadopago.js';
 
 const LABELS: Record<string, string> = {
   inicial: 'Inicial',
@@ -106,6 +107,8 @@ export function mountPublicPlanosRoutes(app: Express) {
           features,
           missingFeatures: feat.missingFeatures || [],
           highlight: Boolean(feat.highlight),
+          // métodos de pagamento deste plano (sem Stripe)
+          pagamento: ['pix', 'paypal'],
         };
       });
 
@@ -113,16 +116,17 @@ export function mountPublicPlanosRoutes(app: Express) {
       cards.sort((a, b) => order.indexOf(a.plan) - order.indexOf(b.plan));
 
       const pagamentos = {
-        stripe: stripeConfigured(),
+        stripe: false,
         paypal: paypalConfigured(),
         pix: mpConfigured(),
+        pix_token_mode: mpConfigured() ? mpTokenMode() : null,
         preferidos: ['pix', 'paypal'].filter((m) =>
           m === 'pix' ? mpConfigured() : paypalConfigured()
         ),
         endpoints: {
-          pix: '/api/pix/...',
+          pix_avulso: 'POST /api/pix/avulso',
+          pix_recorrente: 'POST /api/pix/recorrente',
           paypal: '/api/paypal/...',
-          stripe_checkout: stripeConfigured() ? '/api/checkout' : null,
         },
       };
 
@@ -131,7 +135,6 @@ export function mountPublicPlanosRoutes(app: Express) {
         planos: cards,
         annual_discount_pct,
         pagamentos,
-        stripe_planos: listPlanosPublicos(),
         updated_at: new Date().toISOString(),
       });
     })
