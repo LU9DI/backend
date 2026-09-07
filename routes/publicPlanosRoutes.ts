@@ -1,12 +1,14 @@
 /**
  * Preços públicos dos planos (mesmos valores editados no admin).
- * GET /api/planos — sem auth, para a landing em localhost:3000.
+ * GET /api/planos — sem auth, para a landing.
  */
 import type { Express, Request, Response } from 'express';
 import { getDb } from '../lib/db.js';
 import { listPlanPrices, ensurePlanPricingSchema } from '../lib/planPricing.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { PLANOS, listPlanosPublicos, refreshPlanPricesFromDb } from '../stripeBilling.js';
+import { listPlanosPublicos, refreshPlanPricesFromDb, stripeConfigured } from '../stripeBilling.js';
+import { paypalConfigured } from '../lib/paypal.js';
+import { mpConfigured } from '../lib/mercadopago.js';
 
 const LABELS: Record<string, string> = {
   inicial: 'Inicial',
@@ -84,7 +86,6 @@ export function mountPublicPlanosRoutes(app: Express) {
         const plan = String(p.plan);
         const limit = Number(p.review_limit) || 0;
         const feat = FEATURES[plan] || { features: [] };
-        // Atualiza texto de feedbacks se o limite mudou no admin
         const features = (feat.features || []).map((f) =>
           /feedbacks\/mês/i.test(f)
             ? `${limit.toLocaleString('pt-BR')} feedbacks/mês`
@@ -108,14 +109,28 @@ export function mountPublicPlanosRoutes(app: Express) {
         };
       });
 
-      // ordem comercial
       const order = ['inicial', 'pro', 'ultra', 'corporativo', 'rei'];
       cards.sort((a, b) => order.indexOf(a.plan) - order.indexOf(b.plan));
+
+      const pagamentos = {
+        stripe: stripeConfigured(),
+        paypal: paypalConfigured(),
+        pix: mpConfigured(),
+        preferidos: ['pix', 'paypal'].filter((m) =>
+          m === 'pix' ? mpConfigured() : paypalConfigured()
+        ),
+        endpoints: {
+          pix: '/api/pix/...',
+          paypal: '/api/paypal/...',
+          stripe_checkout: stripeConfigured() ? '/api/checkout' : null,
+        },
+      };
 
       res.setHeader('Cache-Control', 'public, max-age=30');
       res.json({
         planos: cards,
         annual_discount_pct,
+        pagamentos,
         stripe_planos: listPlanosPublicos(),
         updated_at: new Date().toISOString(),
       });
