@@ -2,6 +2,8 @@
  * Inicialização e acesso ao banco.
  * - Dev / testes: SQLite (padrão)
  * - Produção: Postgres obrigatório (DATABASE_URL), salvo SQLITE_ALLOW_PROD=1
+ *
+ * Tipos de data: TIMESTAMP (não DATETIME) — portável SQLite + Postgres.
  */
 import path from 'path';
 import fs from 'fs';
@@ -87,13 +89,13 @@ export async function initDB(): Promise<Database> {
       slug TEXT UNIQUE,
       status TEXT DEFAULT 'trial',
       plan TEXT DEFAULT 'trial',
-      criado_em DATETIME NOT NULL,
-      expira_em DATETIME NOT NULL,
+      criado_em TIMESTAMP NOT NULL,
+      expira_em TIMESTAMP NOT NULL,
       google_review_url TEXT,
       voice_style TEXT,
       empresa_pai_id TEXT,
       whatsapp_suporte TEXT
-    );
+    )
   `);
   await _db.exec(`
     CREATE TABLE IF NOT EXISTS usuarios (
@@ -102,7 +104,7 @@ export async function initDB(): Promise<Database> {
       nome_funcionario TEXT NOT NULL,
       empresa_id TEXT NOT NULL,
       senha_hash TEXT NOT NULL
-    );
+    )
   `);
   await _db.exec(`
     CREATE TABLE IF NOT EXISTS reviews (
@@ -113,8 +115,8 @@ export async function initDB(): Promise<Database> {
       comment TEXT,
       ai_reply TEXT,
       ai_tags TEXT,
-      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
+      createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
   `);
   await _db.exec(`
     CREATE TABLE IF NOT EXISTS ai_usage (
@@ -122,8 +124,8 @@ export async function initDB(): Promise<Database> {
       empresa_id TEXT,
       tipo TEXT NOT NULL,
       tokens INTEGER NOT NULL DEFAULT 0,
-      criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
+      criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
   `);
   await _db.exec(`
     CREATE TABLE IF NOT EXISTS usage (
@@ -132,16 +134,15 @@ export async function initDB(): Promise<Database> {
       tags INTEGER DEFAULT 0,
       respostas INTEGER DEFAULT 0,
       PRIMARY KEY (plan, month)
-    );
+    )
   `);
 
-  // Índices críticos (idempotentes)
   try {
     await _db.exec(`CREATE INDEX IF NOT EXISTS idx_reviews_empresa ON reviews(empresa_id)`);
     await _db.exec(`CREATE INDEX IF NOT EXISTS idx_empresas_cnpj ON empresas(cnpj)`);
     await _db.exec(`CREATE INDEX IF NOT EXISTS idx_empresas_slug ON empresas(slug)`);
   } catch {
-    /* alguns engines já têm índice via UNIQUE */
+    /* ok */
   }
 
   await ensureAuthColumns(_db);

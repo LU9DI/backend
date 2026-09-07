@@ -61,19 +61,19 @@ export async function ensureAuthColumns(db: Database) {
     /* ok */
   }
 
+  // TIMESTAMP (não DATETIME) — funciona em SQLite e Postgres
   await db.exec(`
     CREATE TABLE IF NOT EXISTS password_resets (
       id TEXT PRIMARY KEY,
       usuario_id TEXT NOT NULL,
       token_hash TEXT NOT NULL,
-      expira_em DATETIME NOT NULL,
+      expira_em TIMESTAMP NOT NULL,
       usado INTEGER DEFAULT 0,
-      criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+      criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
     )
   `);
 
-  // Índice para invalidação / lookup por usuário
   try {
     await db.exec(
       `CREATE INDEX IF NOT EXISTS idx_password_resets_usuario ON password_resets(usuario_id, usado)`
@@ -160,7 +160,6 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
         return res.json({ success: true, message: okMsg });
       }
 
-      // Só o token mais recente permanece válido
       await invalidatePasswordResetTokens(db, usuario.id);
 
       const token = crypto.randomBytes(32).toString('hex');
@@ -232,7 +231,6 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
         return res.status(400).json({ error: 'Link inválido ou já utilizado.' });
       }
       if (new Date(row.expira_em).getTime() < Date.now()) {
-        // marca como usado para não reaparecer em auditorias confusas
         await db.run('UPDATE password_resets SET usado = 1 WHERE id = ?', [row.id]);
         return res.status(400).json({ error: 'Link expirado. Solicite uma nova recuperação.' });
       }
@@ -247,7 +245,6 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
       const hash = await bcrypt.hash(nova, 12);
       await db.run('UPDATE usuarios SET senha_hash = ? WHERE id = ?', [hash, row.usuario_id]);
 
-      // Invalida o token usado e qualquer outro residual do usuário
       await db.run('UPDATE password_resets SET usado = 1 WHERE id = ?', [row.id]);
       await invalidatePasswordResetTokens(db, row.usuario_id);
 
