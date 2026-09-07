@@ -2,9 +2,11 @@
  * Mercado Pago — Pix avulso, agendado e assinatura recorrente.
  *
  * Env:
- *   MP_ACCESS_TOKEN=APP_USR-...   (ou TEST-...)
+ *   MP_ACCESS_TOKEN=APP_USR-...   (produção) ou TEST-... (sandbox)
  *   MP_WEBHOOK_SECRET=           (opcional — x-signature)
  *   MP_NOTIFICATION_URL=         (opcional)
+ *
+ * NÃO use Public Key / Client ID aqui — só Access Token.
  */
 
 import crypto from 'crypto';
@@ -18,9 +20,24 @@ export function mpConfigured(): boolean {
   return Boolean(process.env.MP_ACCESS_TOKEN?.trim());
 }
 
+/** Ambiente do token: live | test | unknown */
+export function mpTokenMode(): 'live' | 'test' | 'unknown' {
+  const t = process.env.MP_ACCESS_TOKEN?.trim() || '';
+  if (t.startsWith('TEST-') || t.startsWith('TEST')) return 'test';
+  if (t.startsWith('APP_USR-')) return 'live';
+  return 'unknown';
+}
+
 function token(): string {
   const t = process.env.MP_ACCESS_TOKEN?.trim();
   if (!t) throw new Error('MP_ACCESS_TOKEN não configurado');
+  // Public Key costuma começar com APP_USR- mas é curta / ou TEST- com "public"
+  if (/public/i.test(t) || t.length < 40) {
+    throw new Error(
+      'MP_ACCESS_TOKEN parece inválido. Use o Access Token (não a Public Key). ' +
+        'Painel MP → Seu negócio → Credenciais → Access Token.'
+    );
+  }
   return t;
 }
 
@@ -46,11 +63,43 @@ function notificationUrl(): string {
   }
   const base = apiPublicUrl();
   if (base) return `${base}/api/webhook/mercadopago`;
+  // fallback produção Render
+  if (process.env.NODE_ENV === 'production') {
+    return 'https://filtra-ia-api.onrender.com/api/webhook/mercadopago';
+  }
   return '';
 }
 
 export function planoAmountReais(plano: PlanoDef): number {
   return Number((plano.unitAmount / 100).toFixed(2));
+}
+
+function humanizeMpError(data: any, status: number): string {
+  const raw =
+    data?.message ||
+    data?.error ||
+    data?.cause?.[0]?.description ||
+    data?.cause?.[0]?.message ||
+    `Mercado Pago ${status}`;
+  const msg = String(raw);
+
+  if (/unauthorized use of live credentials/i.test(msg)) {
+    return (
+      'Mercado Pago recusou as credenciais (live). ' +
+      'Você provavelmente colocou token de PRODUÇÃO (APP_USR-) em conta/app de teste, ' +
+      'ou misturou Public Key com Access Token. ' +
+      'Solução: no painel MP use Credenciais de produção → Access Token (APP_USR-...), ' +
+      'ou para testes use o token TEST- da aplicação de teste. ' +
+      'Nunca use a Public Key no backend.'
+    );
+  }
+  if (/unauthorized|invalid.*token|invalid_token|401/i.test(msg)) {
+    return (
+      'Access Token do Mercado Pago inválido ou expirado. ' +
+      'Gere um novo em Credenciais → Access Token e atualize MP_ACCESS_TOKEN no Render.'
+    );
+  }
+  return msg;
 }
 
 async function mpFetch(path: string, init: RequestInit = {}): Promise<any> {
@@ -67,11 +116,7 @@ async function mpFetch(path: string, init: RequestInit = {}): Promise<any> {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const msg =
-      data?.message ||
-      data?.error ||
-      data?.cause?.[0]?.description ||
-      `Mercado Pago ${res.status}`;
+    const msg = humanizeMpError(data, res.status);
     const err = new Error(msg) as Error & { status?: number; body?: any };
     err.status = res.status;
     err.body = data;
