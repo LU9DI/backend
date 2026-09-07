@@ -1,5 +1,5 @@
 /**
- * Rotas Pix (Mercado Pago): avulso, agendado, recorrente + webhook.
+ * Mercado Pago: Checkout Transparente + Pix avulso/agendado/recorrente + webhook.
  */
 import type { Express, Request, Response } from 'express';
 import type { Database } from 'sqlite';
@@ -7,6 +7,9 @@ import { getDb } from '../lib/db.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import {
   mpConfigured,
+  mpPublicKey,
+  mpTransparentReady,
+  createTransparentPayment,
   createPixAvulso,
   createPixAgendado,
   createPixRecorrente,
@@ -14,6 +17,7 @@ import {
   getPreapproval,
   parseExternalRef,
   verifyMpWebhookSignature,
+  planoAmountReais,
 } from '../lib/mercadopago.js';
 import { resolvePlano } from '../stripeBilling.js';
 import { activatePlan, blockEmpresa } from '../services/billingService.js';
@@ -82,7 +86,7 @@ async function activateFromPix(
   );
 
   await db.run(
-    `UPDATE empresas SET payment_gateway = 'mercadopago_pix', billing_cycle = ? WHERE id = ?`,
+    `UPDATE empresas SET payment_gateway = 'mercadopago', billing_cycle = ? WHERE id = ?`,
     [plano?.interval === 'year' ? 'year' : 'month', opts.empresaId]
   );
   if (opts.preapprovalId) {
@@ -96,13 +100,115 @@ async function activateFromPix(
 }
 
 export function mountPixRoutes(app: Express) {
+  /** Config pública para o Payment Brick (Checkout Transparente). */
+  app.get('/api/mp/config', (req, res) => {
+    const planoKey = String(req.query.plano || '').trim();
+    const plano = planoKey ? resolvePlano(planoKey) : null;
+    res.json({
+      configured: mpConfigured(),
+      transparent_ready: mpTransparentReady(),
+      public_key: mpPublicKey() || null,
+      provider: 'mercadopago',
+      checkout: 'transparente',
+      amount: plano ? planoAmountReais(plano) : null,
+      plano_label: plano?.label || null,
+      currency: 'BRL',
+      modes: ['transparente', 'avulso', 'agendado', 'recorrente'],
+    });
+  });
+
   app.get('/api/pix/status', (_req, res) => {
     res.json({
       configured: mpConfigured(),
+      transparent_ready: mpTransparentReady(),
+      public_key: mpPublicKey() ? true : false,
       provider: 'mercadopago',
-      modes: ['avulso', 'agendado', 'recorrente'],
+      checkout: 'transparente',
+      modes: ['transparente', 'avulso', 'agendado', 'recorrente'],
     });
   });
+
+  /**
+   * Checkout Transparente — recebe formData do Payment Brick e cria o pagamento.
+   * Body: { plano, empresa_id?, formData }
+   */
+  app.post(
+    '/api/mp/process-payment',
+    asyncHandler(async (req: Request, res: Response) => {
+      if (!mpConfigured()) {
+        return res.status(503).json({
+          error: 'Mercado Pago não configurado. Defina MP_ACCESS_TOKEN no Render.',
+        });
+      }
+      const plano = String(req.body?.plano || '').trim();
+      if (!resolvePlano(plano)) return res.status(400).json({ error: 'Plano inválido.' });
+
+      const formData = req.body?.formData || req.body?.form_data || req.body;
+      if (!formData || typeof formData !== 'object') {
+        return res.status(400).json({ error: 'formData do Brick é obrigatório.' });
+      }
+
+      const empresaId = req.body?.empresa_id ? String(req.body.empresa_id) : null;
+      if (empresaId) {
+        const emp = await getDb().get(`SELECT id FROM empresas WHERE id = ?`, [empresaId]);
+        if (!emp) return res.status(404).json({ error: 'Empresa não encontrada.' });
+      }
+
+      const created = await createTransparentPayment({
+        planoKey: plano,
+        empresaId,
+        formData,
+      });
+
+      const db = getDb();
+      await ensurePixTables(db);
+      const now = new Date().toISOString();
+      await db.run(
+        `INSERT OR REPLACE INTO pix_payments
+          (id, kind, empresa_id, plano_key, amount, status, qr_code, qr_code_base64, ticket_url,
+           external_reference, created_at, updated_at)
+         VALUES (?, 'transparente', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          created.paymentId,
+          empresaId,
+          plano,
+          created.amount,
+          created.status,
+          created.qrCode,
+          created.qrCodeBase64,
+          created.ticketUrl,
+          created.externalReference,
+          now,
+          now,
+        ]
+      );
+
+      if ((created.status === 'approved' || created.status === 'authorized') && empresaId) {
+        await activateFromPix(db, {
+          empresaId,
+          planoKey: plano,
+          paymentId: created.paymentId,
+        });
+      }
+
+      res.json({
+        success: true,
+        kind: 'transparente',
+        payment_id: created.paymentId,
+        status: created.status,
+        status_detail: created.statusDetail,
+        amount: created.amount,
+        plano: created.planoLabel,
+        payment_method_id: created.paymentMethodId,
+        qr_code: created.qrCode,
+        qr_code_base64: created.qrCodeBase64,
+        copia_e_cola: created.qrCode,
+        ticket_url: created.ticketUrl,
+        approved: created.status === 'approved',
+        poll_url: `/api/pix/payment/${created.paymentId}`,
+      });
+    })
+  );
 
   app.post(
     '/api/pix/avulso',
@@ -374,7 +480,6 @@ export function mountPixRoutes(app: Express) {
       const xSig = (req.headers['x-signature'] as string) || '';
       const xReq = (req.headers['x-request-id'] as string) || '';
 
-      // Só valida assinatura se houver secret E headers de assinatura
       if (process.env.MP_WEBHOOK_SECRET?.trim() && xSig) {
         const okSig = verifyMpWebhookSignature({
           xSignature: xSig,

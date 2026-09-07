@@ -1,10 +1,11 @@
 /**
- * Mercado Pago — Pix avulso, agendado e assinatura recorrente.
+ * Mercado Pago — Checkout Transparente + Pix.
  *
  * Env:
- *   MP_ACCESS_TOKEN=APP_USR-...   (ou TEST-...)
- *   MP_WEBHOOK_SECRET=           (opcional — x-signature)
- *   MP_NOTIFICATION_URL=         (opcional)
+ *   MP_ACCESS_TOKEN=APP_USR-...   (Access Token — servidor)
+ *   MP_PUBLIC_KEY=APP_USR-...     (Public Key — front / Bricks)
+ *   MP_WEBHOOK_SECRET=            (opcional — x-signature)
+ *   MP_NOTIFICATION_URL=          (opcional)
  */
 
 import crypto from 'crypto';
@@ -12,10 +13,22 @@ import { resolvePlano, type PlanoDef } from '../stripeBilling.js';
 
 const MP_API = 'https://api.mercadopago.com';
 
-export type PixKind = 'avulso' | 'agendado' | 'recorrente';
+export type PixKind = 'avulso' | 'agendado' | 'recorrente' | 'transparente';
 
 export function mpConfigured(): boolean {
   return Boolean(process.env.MP_ACCESS_TOKEN?.trim());
+}
+
+export function mpPublicKey(): string {
+  return (
+    process.env.MP_PUBLIC_KEY?.trim() ||
+    process.env.NEXT_PUBLIC_MP_PUBLIC_KEY?.trim() ||
+    ''
+  );
+}
+
+export function mpTransparentReady(): boolean {
+  return mpConfigured() && Boolean(mpPublicKey());
 }
 
 function token(): string {
@@ -103,6 +116,98 @@ export function parseExternalRef(ref: string | null | undefined): {
   const planoKey = parts[2] || null;
   const empresaId = parts[3] && parts[3] !== 'none' ? parts[3] : null;
   return { kind, planoKey, empresaId };
+}
+
+/**
+ * Checkout Transparente — cria pagamento a partir do formData do Payment Brick.
+ * Aceita cartão (token), Pix e outros métodos retornados pelo Brick.
+ */
+export async function createTransparentPayment(opts: {
+  planoKey: string;
+  empresaId?: string | null;
+  formData: any;
+}): Promise<{
+  paymentId: string;
+  status: string;
+  statusDetail: string | null;
+  amount: number;
+  planoLabel: string;
+  paymentMethodId: string | null;
+  qrCode: string | null;
+  qrCodeBase64: string | null;
+  ticketUrl: string | null;
+  externalReference: string;
+}> {
+  const plano = resolvePlano(opts.planoKey);
+  if (!plano) throw new Error('Plano inválido');
+
+  const amountExpected = planoAmountReais(plano);
+  const fd = opts.formData || {};
+
+  // Nunca confiar só no valor do client — força o preço do plano
+  const amount = amountExpected;
+  const external_reference = buildExternalRef({
+    empresaId: opts.empresaId,
+    planoKey: plano.key,
+    kind: 'transparente',
+  });
+
+  const body: any = {
+    transaction_amount: amount,
+    description: `Filtra.IA — ${plano.label}`.slice(0, 250),
+    payment_method_id: fd.payment_method_id || fd.paymentMethodId,
+    installments: Number(fd.installments || 1),
+    external_reference,
+    metadata: {
+      empresa_id: opts.empresaId || '',
+      plano: plano.key,
+      plan_db: plano.planDb,
+      kind: 'transparente',
+    },
+    payer: {
+      email: fd.payer?.email || fd.email || 'cliente@filtra.ia',
+    },
+  };
+
+  if (fd.token) body.token = fd.token;
+  if (fd.issuer_id || fd.issuerId) body.issuer_id = fd.issuer_id || fd.issuerId;
+
+  if (fd.payer?.identification) {
+    body.payer.identification = fd.payer.identification;
+  }
+  if (fd.payer?.first_name) body.payer.first_name = String(fd.payer.first_name).slice(0, 60);
+  if (fd.payer?.last_name) body.payer.last_name = String(fd.payer.last_name).slice(0, 60);
+
+  // Pix / boleto às vezes vêm com campos extras no formData
+  if (fd.payment_method_id === 'pix' || body.payment_method_id === 'pix') {
+    body.payment_method_id = 'pix';
+  }
+
+  const notif = notificationUrl();
+  if (notif) body.notification_url = notif;
+
+  if (!body.payment_method_id && !body.token) {
+    throw new Error('Dados de pagamento incompletos (token ou payment_method_id).');
+  }
+
+  const data = await mpFetch('/v1/payments', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+
+  const poi = data.point_of_interaction?.transaction_data || {};
+  return {
+    paymentId: String(data.id),
+    status: String(data.status || 'pending'),
+    statusDetail: data.status_detail ? String(data.status_detail) : null,
+    amount,
+    planoLabel: plano.label,
+    paymentMethodId: data.payment_method_id ? String(data.payment_method_id) : null,
+    qrCode: poi.qr_code || null,
+    qrCodeBase64: poi.qr_code_base64 || null,
+    ticketUrl: poi.ticket_url || null,
+    externalReference: external_reference,
+  };
 }
 
 export async function createPixAvulso(opts: {

@@ -30,6 +30,7 @@ import { mountPushRoutes } from './routes/pushRoutes.js';
 import { mountJobsRoutes } from './routes/jobsRoutes.js';
 import { mountPayPalRoutes } from './routes/paypalRoutes.js';
 import { mountPixRoutes } from './routes/pixRoutes.js';
+import { mountWechatRoutes } from './routes/wechatRoutes.js';
 import { mountSubscriptionRoutes } from './routes/subscriptionRoutes.js';
 import { mountUnidadeRoutes } from './routes/unidadeRoutes.js';
 import { mountExportRoutes } from './routes/exportRoutes.js';
@@ -43,6 +44,7 @@ import { mountStripeRoutes } from './stripeRoutes.js';
 import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
 import { paypalConfigured } from './lib/paypal.js';
 import { mpConfigured } from './lib/mercadopago.js';
+import { wechatConfigured } from './lib/wechat.js';
 import { aiConfigured, listAiProviders, getAiLoadStats } from './groqService.js';
 import { ensureUnidadesSchema } from './lib/unidades.js';
 import { ensureWebAuthnSchema, webauthnConfig } from './lib/webauthn.js';
@@ -99,6 +101,7 @@ app.get('/api/health', async (_req, res) => {
     stripe: stripeConfigured(),
     paypal: paypalConfigured(),
     pix: mpConfigured(),
+    wechat: wechatConfigured(),
     ai: aiConfigured(),
     ai_providers: listAiProviders(),
     plan_switch: allowPlanSwitch(),
@@ -119,7 +122,6 @@ app.get('/api/health', async (_req, res) => {
 });
 
 app.get('/api/metrics', (req, res) => {
-  // Em produção exige header se JOBS_SECRET estiver definido
   const secret = process.env.JOBS_SECRET?.trim();
   if (process.env.NODE_ENV === 'production' && secret) {
     const got = String(req.headers['x-jobs-secret'] || '');
@@ -256,6 +258,7 @@ async function main() {
   mountJobsRoutes(app);
   mountPayPalRoutes(app);
   mountPixRoutes(app);
+  mountWechatRoutes(app);
   mountSubscriptionRoutes(app);
   mountUnidadeRoutes(app);
   mountExportRoutes(app);
@@ -272,8 +275,11 @@ async function main() {
   app.use(errorHandler);
 
   console.log(
-    `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'}`
+    `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | WeChat: ${wechatConfigured() ? 'ok' : 'OFF'}`
   );
+  if (!wechatConfigured()) {
+    console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
+  }
 
   server = app.listen(PORT, () => {
     console.log(`🚀 API Filtra.IA em http://localhost:${PORT}`);
