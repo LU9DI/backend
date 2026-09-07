@@ -62,8 +62,10 @@ const FEATURES: Record<
   },
 };
 
+/** Espaço não-quebrável entre R$ e o valor (evita R$ em uma linha e 499,90 embaixo). */
 function fmtBrl(n: number): string {
-  return `R$ ${Number(n).toFixed(2).replace('.', ',')}`;
+  const num = Number(n).toFixed(2).replace('.', ',');
+  return `R$\u00a0${num}`;
 }
 
 export function mountPublicPlanosRoutes(app: Express) {

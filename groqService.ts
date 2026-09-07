@@ -1,5 +1,6 @@
 /**
  * Camada de IA com balanceamento + failover + métricas de latência + tokens.
+ * Respostas e tags respeitam locale (pt|en|es|zh).
  */
 
 import {
@@ -10,6 +11,12 @@ import {
 import { estimateTokens, recordAiUsage } from './lib/aiUsage.js';
 import { getDb } from './lib/db.js';
 import { isRateLimitError, recordRateLimitHit } from './lib/aiMonitor.js';
+import {
+  normalizeLocale,
+  localeInstruction,
+  tagLanguageName,
+  type AppLocale,
+} from './lib/locale.js';
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GEMINI_BASE =
@@ -378,7 +385,7 @@ export async function callAI(
             provider,
           });
         } catch {
-          /* db pode não estar pronto em testes isolados */
+          /* */
         }
       }
 
@@ -411,18 +418,21 @@ export async function gerarRespostaReview(
   comment: string,
   nomeEmpresa?: string,
   exemplosEstilo?: string,
-  empresaId?: string | null
+  empresaId?: string | null,
+  localeRaw?: string | null
 ): Promise<string> {
-  const local = nomeEmpresa ? ` do estabelecimento "${nomeEmpresa}"` : '';
+  const locale = normalizeLocale(localeRaw);
+  const local = nomeEmpresa ? ` ("${nomeEmpresa}")` : '';
 
   let system =
-    'Você responde avaliações negativas de clientes de forma empática, profissional e breve (máximo 3 frases). Peça desculpas quando apropriado e indique que a equipe vai analisar. Não invente políticas ou promessas específicas.';
+    'You reply to negative customer reviews with empathy, professionalism and brevity (max 3 sentences). Apologize when appropriate and say the team will review the case. Do not invent policies or specific promises. ' +
+    localeInstruction(locale);
 
   if (exemplosEstilo && exemplosEstilo.trim().length > 20) {
-    system += `\n\nImite o estilo de escrita do dono do negócio com base nestes exemplos:\n---\n${exemplosEstilo.slice(0, 1500)}\n---`;
+    system += `\n\nMatch the business owner's writing style based on these examples:\n---\n${exemplosEstilo.slice(0, 1500)}\n---`;
   }
 
-  const prompt = `Cliente: ${nomeCliente || 'Anônimo'}\nNota: ${rating}/5\nComentário: ${comment}\n\nEscreva uma resposta curta para esta avaliação negativa${local}.`;
+  const prompt = `Customer: ${nomeCliente || 'Anonymous'}\nRating: ${rating}/5\nComment: ${comment}\n\nWrite a short reply to this negative review${local}.`;
 
   return callLLM(system, prompt, 180, 0.6, { empresaId, tipo: 'resposta_review' });
 }
@@ -430,17 +440,20 @@ export async function gerarRespostaReview(
 export async function gerarTagsSemanticas(
   rating: number,
   comment: string,
-  empresaId?: string | null
+  empresaId?: string | null,
+  localeRaw?: string | null
 ): Promise<string[]> {
+  const locale = normalizeLocale(localeRaw);
   if (!comment || comment.trim().length < 3) {
-    if (rating >= 4) return ['#ExperienciaPositiva'];
-    if (rating <= 2) return ['#ExperienciaNegativa'];
-    return ['#Neutro'];
+    if (rating >= 4) return ['#PositiveExperience'];
+    if (rating <= 2) return ['#NegativeExperience'];
+    return ['#Neutral'];
   }
 
-  const system = `Você analisa avaliações de estabelecimentos comerciais.\nRetorne APENAS um JSON array de 1 a 5 tags em português no formato hashtag CamelCase.\nExemplos: ["#AtendimentoRuim","#ComidaExcelente"]\nNão explique. Apenas o array JSON.`;
+  const lang = tagLanguageName(locale);
+  const system = `You analyze business reviews.\nReturn ONLY a JSON array of 1 to 5 hashtag tags in CamelCase.\nTag words should be meaningful in ${lang}.\nExamples: ["#BadService","#GreatFood"]\nNo explanation. JSON array only.`;
 
-  const user = `Nota: ${rating}/5\nComentário: ${comment}`;
+  const user = `Rating: ${rating}/5\nComment: ${comment}`;
   const raw = await callLLM(system, user, 120, 0.3, { empresaId, tipo: 'tags' });
 
   try {
@@ -452,7 +465,7 @@ export async function gerarTagsSemanticas(
       .filter((t: string) => t.startsWith('#') && t.length > 2 && t.length < 40)
       .slice(0, 5);
   } catch {
-    const matches = raw.match(/#[\wÀ-ú]+/g);
+    const matches = raw.match(/#[\wÀ-ú\u4e00-\u9fff]+/g);
     return matches ? matches.slice(0, 5) : [];
   }
 }
@@ -470,8 +483,8 @@ export async function analisarSentimento(
   }
 
   try {
-    const system = `Analise o sentimento de uma avaliação de cliente em português do Brasil.\nRetorne APENAS JSON válido:\n{"sentimento":"positivo"|"neutro"|"negativo","score":número de -1 a 1,"keywords":["até 5 palavras-chave"]}\nNão use markdown.`;
-    const user = `Nota: ${rating}/5\nComentário: ${comment}`;
+    const system = `Analyze the sentiment of a customer review.\nReturn ONLY valid JSON:\n{"sentimento":"positivo"|"neutro"|"negativo","score":number from -1 to 1,"keywords":["up to 5 keywords"]}\nNo markdown. Use sentimento keys in Portuguese (positivo/neutro/negativo).`;
+    const user = `Rating: ${rating}/5\nComment: ${comment}`;
     const raw = await callLLM(system, user, 100, 0.2, { empresaId, tipo: 'sentimento' });
     const parsed = parseSentimentFromAiJson(raw);
     if (parsed) return parsed;
@@ -482,4 +495,4 @@ export async function analisarSentimento(
   return heuristic;
 }
 
-export type { SentimentResult };
+export type { SentimentResult, AppLocale };

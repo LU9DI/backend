@@ -1,5 +1,6 @@
 /**
  * Regras de negócio de avaliações (reviews) + anti-fraude + sentimento + push + e-mail.
+ * Respostas de IA respeitam locale (pt|en|es|zh).
  */
 import type { Database } from 'sqlite';
 import { getDb, findEmpresa } from '../lib/db.js';
@@ -29,6 +30,7 @@ import {
 import { notifyCrisisReview } from '../lib/push.js';
 import { normalizarWhatsapp } from '../lib/whatsapp.js';
 import { notificarCriticaPrivada, notificarAlertaCrise } from '../lib/notifications.js';
+import { normalizeLocale } from '../lib/locale.js';
 
 export type ReviewInput = {
   name?: string;
@@ -40,6 +42,7 @@ export type ReviewInput = {
   is_test?: boolean;
   ip?: string;
   client_whatsapp?: string;
+  locale?: string;
 };
 
 export type ReviewResult = {
@@ -49,6 +52,7 @@ export type ReviewResult = {
   is_test?: boolean;
   sentiment?: string;
   ai_skipped_quota?: boolean;
+  locale?: string;
 };
 
 export class ReviewNotFoundError extends Error {
@@ -78,18 +82,25 @@ export class ReviewValidationError extends Error {
 export { ReviewFraudError };
 
 async function ensureSentimentColumns(db: Database) {
-  const cols = (await db.all(`PRAGMA table_info(reviews)`)).map((c: any) => c.name);
-  if (!cols.includes('sentiment')) {
-    await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment TEXT`);
-  }
-  if (!cols.includes('sentiment_score')) {
-    await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_score REAL`);
-  }
-  if (!cols.includes('sentiment_source')) {
-    await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_source TEXT`);
-  }
-  if (!cols.includes('client_whatsapp')) {
-    await db.exec(`ALTER TABLE reviews ADD COLUMN client_whatsapp TEXT`);
+  try {
+    const cols = (await db.all(`PRAGMA table_info(reviews)`)).map((c: any) => c.name);
+    if (!cols.includes('sentiment')) {
+      await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment TEXT`);
+    }
+    if (!cols.includes('sentiment_score')) {
+      await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_score REAL`);
+    }
+    if (!cols.includes('sentiment_source')) {
+      await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_source TEXT`);
+    }
+    if (!cols.includes('client_whatsapp')) {
+      await db.exec(`ALTER TABLE reviews ADD COLUMN client_whatsapp TEXT`);
+    }
+    if (!cols.includes('locale')) {
+      await db.exec(`ALTER TABLE reviews ADD COLUMN locale TEXT`);
+    }
+  } catch {
+    /* Postgres: colunas podem já existir via ensure em outro caminho */
   }
 }
 
@@ -117,13 +128,14 @@ export async function criarReview(
   const isTest = Boolean(input.is_test);
   const ip = input.ip || '0.0.0.0';
   const ipHash = hashIp(ip);
+  const locale = normalizeLocale(input.locale);
 
   let clientWpp: string | null = null;
   if (!isTest && rating <= 3) {
     clientWpp = normalizarWhatsapp(input.client_whatsapp);
     if (!clientWpp) {
       throw new ReviewValidationError(
-        'Informe seu WhatsApp (DDD + número) para a empresa poder retornar o contato.'
+        'Informe seu WhatsApp/telefone para a empresa poder retornar o contato.'
       );
     }
   }
@@ -195,8 +207,16 @@ export async function criarReview(
   if (useAi && rating <= 3 && comment) {
     try {
       const [resposta, tags] = await Promise.all([
-        gerarRespostaReview(name || 'Anônimo', rating, comment, nomeEmpresa, undefined, empresaId),
-        gerarTagsSemanticas(rating, comment, empresaId),
+        gerarRespostaReview(
+          name || 'Anônimo',
+          rating,
+          comment,
+          nomeEmpresa,
+          undefined,
+          empresaId,
+          locale
+        ),
+        gerarTagsSemanticas(rating, comment, empresaId, locale),
       ]);
       aiReply = resposta || null;
       aiTags = tags?.length ? JSON.stringify(tags) : null;
@@ -204,32 +224,60 @@ export async function criarReview(
       console.warn('IA review (não bloqueia envio):', e?.message || e);
     }
   } else if (!isTest && rating <= 3 && comment) {
-    aiTags = JSON.stringify(rating <= 2 ? ['#ExperienciaNegativa'] : ['#Neutro']);
+    aiTags = JSON.stringify(rating <= 2 ? ['#NegativeExperience'] : ['#Neutral']);
   }
 
-  const result = await db.run(
-    `INSERT INTO reviews (
-      empresa_id, name, rating, comment, ai_reply, ai_tags,
-      is_test, ip_hash, fraud_flags, origin,
-      sentiment, sentiment_score, sentiment_source, client_whatsapp
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      empresaId,
-      name || 'Anônimo',
-      rating,
-      comment || null,
-      aiReply,
-      aiTags,
-      isTest ? 1 : 0,
-      isTest ? null : ipHash,
-      flags.length ? JSON.stringify(flags) : null,
-      isTest ? 'painel_teste' : 'publico',
-      sentiment.label,
-      sentiment.score,
-      sentiment.source,
-      clientWpp,
-    ]
-  );
+  let result: any;
+  try {
+    result = await db.run(
+      `INSERT INTO reviews (
+        empresa_id, name, rating, comment, ai_reply, ai_tags,
+        is_test, ip_hash, fraud_flags, origin,
+        sentiment, sentiment_score, sentiment_source, client_whatsapp, locale
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        empresaId,
+        name || 'Anônimo',
+        rating,
+        comment || null,
+        aiReply,
+        aiTags,
+        isTest ? 1 : 0,
+        isTest ? null : ipHash,
+        flags.length ? JSON.stringify(flags) : null,
+        isTest ? 'painel_teste' : 'publico',
+        sentiment.label,
+        sentiment.score,
+        sentiment.source,
+        clientWpp,
+        locale,
+      ]
+    );
+  } catch {
+    result = await db.run(
+      `INSERT INTO reviews (
+        empresa_id, name, rating, comment, ai_reply, ai_tags,
+        is_test, ip_hash, fraud_flags, origin,
+        sentiment, sentiment_score, sentiment_source, client_whatsapp
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        empresaId,
+        name || 'Anônimo',
+        rating,
+        comment || null,
+        aiReply,
+        aiTags,
+        isTest ? 1 : 0,
+        isTest ? null : ipHash,
+        flags.length ? JSON.stringify(flags) : null,
+        isTest ? 'painel_teste' : 'publico',
+        sentiment.label,
+        sentiment.score,
+        sentiment.source,
+        clientWpp,
+      ]
+    );
+  }
 
   if (!isTest && empresaId && rating <= 3) {
     notifyCrisisReview(db, {
@@ -281,6 +329,7 @@ export async function criarReview(
     is_test: isTest,
     sentiment: sentiment.label,
     ai_skipped_quota: aiSkippedQuota,
+    locale,
   };
 }
 
