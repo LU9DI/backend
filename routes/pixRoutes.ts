@@ -28,7 +28,7 @@ async function ensurePixTables(db: Database) {
       kind TEXT NOT NULL,
       empresa_id TEXT,
       plano_key TEXT,
-      amount REAL,
+      amount DOUBLE PRECISION,
       status TEXT,
       qr_code TEXT,
       qr_code_base64 TEXT,
@@ -37,25 +37,86 @@ async function ensurePixTables(db: Database) {
       expires_at TEXT,
       preapproval_id TEXT,
       init_point TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_pix_empresa ON pix_payments(empresa_id);
-    CREATE INDEX IF NOT EXISTS idx_pix_status ON pix_payments(status);
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    )
   `);
-  const cols = (await db.all(`PRAGMA table_info(empresas)`)).map((c: any) => c.name);
-  if (!cols.includes('payment_gateway')) {
-    await db.exec(`ALTER TABLE empresas ADD COLUMN payment_gateway TEXT`);
+  try {
+    await db.exec(`CREATE INDEX IF NOT EXISTS idx_pix_empresa ON pix_payments(empresa_id)`);
+    await db.exec(`CREATE INDEX IF NOT EXISTS idx_pix_status ON pix_payments(status)`);
+  } catch {
+    /* ok */
   }
-  if (!cols.includes('mp_preapproval_id')) {
-    await db.exec(`ALTER TABLE empresas ADD COLUMN mp_preapproval_id TEXT`);
+  try {
+    const cols = (await db.all(`PRAGMA table_info(empresas)`)).map((c: any) => c.name);
+    if (!cols.includes('payment_gateway')) {
+      await db.exec(`ALTER TABLE empresas ADD COLUMN payment_gateway TEXT`);
+    }
+    if (!cols.includes('mp_preapproval_id')) {
+      await db.exec(`ALTER TABLE empresas ADD COLUMN mp_preapproval_id TEXT`);
+    }
+    if (!cols.includes('billing_cycle')) {
+      await db.exec(`ALTER TABLE empresas ADD COLUMN billing_cycle TEXT`);
+    }
+  } catch (e: any) {
+    console.warn('[pix] ensure colunas empresas:', e?.message || e);
   }
-  if (!cols.includes('billing_cycle')) {
-    await db.exec(`ALTER TABLE empresas ADD COLUMN billing_cycle TEXT`);
+}
+
+async function savePixRow(
+  db: Database,
+  row: {
+    id: string;
+    kind: string;
+    empresa_id: string | null;
+    plano_key: string;
+    amount: number;
+    status: string;
+    qr_code?: string | null;
+    qr_code_base64?: string | null;
+    ticket_url?: string | null;
+    external_reference?: string | null;
+    expires_at?: string | null;
+    preapproval_id?: string | null;
+    init_point?: string | null;
+  }
+) {
+  const now = new Date().toISOString();
+  try {
+    await db.run(
+      `INSERT INTO pix_payments
+        (id, kind, empresa_id, plano_key, amount, status, qr_code, qr_code_base64, ticket_url,
+         external_reference, expires_at, preapproval_id, init_point, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        row.id,
+        row.kind,
+        row.empresa_id,
+        row.plano_key,
+        row.amount,
+        row.status,
+        row.qr_code || null,
+        row.qr_code_base64 || null,
+        row.ticket_url || null,
+        row.external_reference || null,
+        row.expires_at || null,
+        row.preapproval_id || null,
+        row.init_point || null,
+        now,
+        now,
+      ]
+    );
+  } catch (e: any) {
+    console.warn('[pix] INSERT falhou, tentando UPDATE:', e?.message || e);
+    await db.run(
+      `UPDATE pix_payments SET status = ?, updated_at = ? WHERE id = ?`,
+      [row.status, now, row.id]
+    );
   }
 }
 
 function mpHttpError(res: Response, e: any) {
+  console.error('[pix] MP error:', e?.message || e, e?.body || '');
   const status = Number(e?.status) >= 400 && Number(e?.status) < 600 ? Number(e.status) : 502;
   return res.status(status).json({
     error: e?.message || 'Erro Mercado Pago',
@@ -121,10 +182,11 @@ export function mountPixRoutes(app: Express) {
       },
       dica:
         mpTokenMode() === 'unknown'
-          ? 'MP_ACCESS_TOKEN deve começar com APP_USR- (produção) ou TEST- (sandbox). Não use Public Key.'
+          ? 'MP_ACCESS_TOKEN deve começar com APP_USR- (produção) ou TEST- (sandbox).'
           : mpTokenMode() === 'test'
-            ? 'Token de TESTE ativo — pagamentos são simulados.'
+            ? 'Token de TESTE ativo.'
             : 'Token de PRODUÇÃO ativo.',
+      fix: 'v2-postgres-insert',
     });
   });
 
@@ -159,29 +221,26 @@ export function mountPixRoutes(app: Express) {
         return mpHttpError(res, e);
       }
 
-      const db = getDb();
-      await ensurePixTables(db);
-      const now = new Date().toISOString();
-      await db.run(
-        `INSERT OR REPLACE INTO pix_payments
-          (id, kind, empresa_id, plano_key, amount, status, qr_code, qr_code_base64, ticket_url,
-           external_reference, expires_at, created_at, updated_at)
-         VALUES (?, 'avulso', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          created.paymentId,
-          empresaId,
-          plano,
-          created.amount,
-          created.status,
-          created.qrCode,
-          created.qrCodeBase64,
-          created.ticketUrl,
-          created.externalReference,
-          created.expiresAt,
-          now,
-          now,
-        ]
-      );
+      // Persistência não pode derrubar a resposta se o Pix já foi gerado no MP
+      try {
+        const db = getDb();
+        await ensurePixTables(db);
+        await savePixRow(db, {
+          id: created.paymentId,
+          kind: 'avulso',
+          empresa_id: empresaId,
+          plano_key: plano,
+          amount: created.amount,
+          status: created.status,
+          qr_code: created.qrCode,
+          qr_code_base64: created.qrCodeBase64,
+          ticket_url: created.ticketUrl,
+          external_reference: created.externalReference,
+          expires_at: created.expiresAt,
+        });
+      } catch (e: any) {
+        console.error('[pix] falha ao salvar no banco (Pix já criado no MP):', e?.message || e);
+      }
 
       res.json({
         success: true,
@@ -229,29 +288,25 @@ export function mountPixRoutes(app: Express) {
         return mpHttpError(res, e);
       }
 
-      const db = getDb();
-      await ensurePixTables(db);
-      const now = new Date().toISOString();
-      await db.run(
-        `INSERT OR REPLACE INTO pix_payments
-          (id, kind, empresa_id, plano_key, amount, status, qr_code, qr_code_base64, ticket_url,
-           external_reference, expires_at, created_at, updated_at)
-         VALUES (?, 'agendado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          created.paymentId,
-          empresaId,
-          plano,
-          created.amount,
-          created.status,
-          created.qrCode,
-          created.qrCodeBase64,
-          created.ticketUrl,
-          created.externalReference,
-          created.expiresAt,
-          now,
-          now,
-        ]
-      );
+      try {
+        const db = getDb();
+        await ensurePixTables(db);
+        await savePixRow(db, {
+          id: created.paymentId,
+          kind: 'agendado',
+          empresa_id: empresaId,
+          plano_key: plano,
+          amount: created.amount,
+          status: created.status,
+          qr_code: created.qrCode,
+          qr_code_base64: created.qrCodeBase64,
+          ticket_url: created.ticketUrl,
+          external_reference: created.externalReference,
+          expires_at: created.expiresAt,
+        });
+      } catch (e: any) {
+        console.error('[pix] save agendado:', e?.message || e);
+      }
 
       res.json({
         success: true,
@@ -297,27 +352,23 @@ export function mountPixRoutes(app: Express) {
         return mpHttpError(res, e);
       }
 
-      const db = getDb();
-      await ensurePixTables(db);
-      const now = new Date().toISOString();
-      await db.run(
-        `INSERT OR REPLACE INTO pix_payments
-          (id, kind, empresa_id, plano_key, amount, status, external_reference,
-           preapproval_id, init_point, created_at, updated_at)
-         VALUES (?, 'recorrente', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          created.preapprovalId,
-          empresaId,
-          plano,
-          created.amount,
-          created.status,
-          created.externalReference,
-          created.preapprovalId,
-          created.initPoint,
-          now,
-          now,
-        ]
-      );
+      try {
+        const db = getDb();
+        await ensurePixTables(db);
+        await savePixRow(db, {
+          id: created.preapprovalId,
+          kind: 'recorrente',
+          empresa_id: empresaId,
+          plano_key: plano,
+          amount: created.amount,
+          status: created.status,
+          external_reference: created.externalReference,
+          preapproval_id: created.preapprovalId,
+          init_point: created.initPoint,
+        });
+      } catch (e: any) {
+        console.error('[pix] save recorrente:', e?.message || e);
+      }
 
       res.json({
         success: true,
@@ -367,8 +418,9 @@ export function mountPixRoutes(app: Express) {
       const empresaId = remote.metadata?.empresa_id || parsed.empresaId || null;
       const planoKey = remote.metadata?.plano || parsed.planoKey || null;
 
-      await db.run(`UPDATE pix_payments SET status = ?, updated_at = NOW() WHERE id = ?`, [
+      await db.run(`UPDATE pix_payments SET status = ?, updated_at = ? WHERE id = ?`, [
         status,
+        new Date().toISOString(),
         id,
       ]);
 
@@ -406,9 +458,7 @@ export function mountPixRoutes(app: Express) {
 
       const body = req.body || {};
       const type = String(body.type || body.action || body.topic || '');
-      const dataId = String(
-        body.data?.id || body.id || (body as any)['data.id'] || ''
-      ).trim();
+      const dataId = String(body.data?.id || body.id || (body as any)['data.id'] || '').trim();
 
       const xSig = (req.headers['x-signature'] as string) || '';
       const xReq = (req.headers['x-request-id'] as string) || '';
@@ -420,12 +470,6 @@ export function mountPixRoutes(app: Express) {
           dataId: dataId || null,
         });
         if (!okSig) {
-          await logWebhookEvent(db, {
-            source: 'mercadopago',
-            event_type: type || 'unknown',
-            status: 'error',
-            detail: 'assinatura inválida',
-          });
           return res.status(401).json({ error: 'Assinatura inválida' });
         }
       }
@@ -434,16 +478,9 @@ export function mountPixRoutes(app: Express) {
       const qid = String(req.query.id || dataId || '').trim();
 
       try {
-        if (
-          topic.includes('payment') ||
-          type.includes('payment') ||
-          type === 'payment.updated' ||
-          type === 'payment.created'
-        ) {
+        if (topic.includes('payment') || type.includes('payment')) {
           const paymentId = qid || dataId;
-          if (!paymentId) {
-            return res.json({ ok: true, action: 'no_id' });
-          }
+          if (!paymentId) return res.json({ ok: true, action: 'no_id' });
 
           const remote = await getPayment(paymentId);
           const status = String(remote.status || '');
@@ -451,8 +488,9 @@ export function mountPixRoutes(app: Express) {
           const empresaId = remote.metadata?.empresa_id || parsed.empresaId || null;
           const planoKey = remote.metadata?.plano || parsed.planoKey || null;
 
-          await db.run(`UPDATE pix_payments SET status = ?, updated_at = NOW() WHERE id = ?`, [
+          await db.run(`UPDATE pix_payments SET status = ?, updated_at = ? WHERE id = ?`, [
             status,
+            new Date().toISOString(),
             paymentId,
           ]);
 
@@ -462,82 +500,17 @@ export function mountPixRoutes(app: Express) {
               planoKey,
               paymentId,
             });
-            await logWebhookEvent(db, {
-              source: 'mercadopago',
-              event_type: type || topic,
-              status: 'ok',
-              detail: `activate ${empresaId} ${result.plan}`,
-            });
             return res.json({ ok: true, action: 'activate', ...result });
           }
 
-          if (
-            ['cancelled', 'rejected', 'refunded', 'charged_back'].includes(status) &&
-            empresaId
-          ) {
-            if (status === 'refunded' || status === 'charged_back') {
-              await blockEmpresa(db, String(empresaId), { notify: true, tipo: 'assinatura' });
-              await logWebhookEvent(db, {
-                source: 'mercadopago',
-                event_type: type || topic,
-                status: 'ok',
-                detail: `block ${status} ${empresaId}`,
-              });
-              return res.json({ ok: true, action: 'block' });
-            }
+          if (['refunded', 'charged_back'].includes(status) && empresaId) {
+            await blockEmpresa(db, String(empresaId), { notify: true, tipo: 'assinatura' });
+            return res.json({ ok: true, action: 'block' });
           }
 
-          await logWebhookEvent(db, {
-            source: 'mercadopago',
-            event_type: type || topic,
-            status: 'ok',
-            detail: `status=${status}`,
-          });
           return res.json({ ok: true, action: 'status', status });
         }
 
-        if (
-          topic.includes('subscription') ||
-          type.includes('subscription_preapproval') ||
-          type.includes('preapproval')
-        ) {
-          const preId = qid || dataId;
-          if (!preId) return res.json({ ok: true, action: 'no_preapproval_id' });
-          const remote = await getPreapproval(preId);
-          const status = String(remote.status || '');
-          const parsed = parseExternalRef(remote.external_reference);
-          const empresaId = remote.metadata?.empresa_id || parsed.empresaId || null;
-          const planoKey = remote.metadata?.plano || parsed.planoKey || null;
-
-          if ((status === 'authorized' || status === 'active') && empresaId) {
-            const result = await activateFromPix(db, {
-              empresaId: String(empresaId),
-              planoKey,
-              preapprovalId: preId,
-            });
-            await logWebhookEvent(db, {
-              source: 'mercadopago',
-              event_type: type || topic,
-              status: 'ok',
-              detail: `preapproval activate ${empresaId}`,
-            });
-            return res.json({ ok: true, action: 'preapproval_activate', ...result });
-          }
-
-          if ((status === 'cancelled' || status === 'paused') && empresaId) {
-            await blockEmpresa(db, String(empresaId), { notify: true, tipo: 'cancelamento' });
-            return res.json({ ok: true, action: 'preapproval_cancel' });
-          }
-
-          return res.json({ ok: true, action: 'preapproval_status', status });
-        }
-
-        await logWebhookEvent(db, {
-          source: 'mercadopago',
-          event_type: type || topic || 'unknown',
-          status: 'ignored',
-          detail: JSON.stringify(body).slice(0, 300),
-        });
         return res.json({ ok: true, action: 'ignore' });
       } catch (e: any) {
         console.error('[mp webhook]', e?.message || e);

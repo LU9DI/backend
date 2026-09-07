@@ -3,10 +3,10 @@
  *
  * Env:
  *   MP_ACCESS_TOKEN=APP_USR-...   (produção) ou TEST-... (sandbox)
- *   MP_WEBHOOK_SECRET=           (opcional — x-signature)
- *   MP_NOTIFICATION_URL=         (opcional)
+ *   MP_WEBHOOK_SECRET=           (opcional)
+ *   API_PUBLIC_URL=https://filtra-ia-api.onrender.com
  *
- * NÃO use Public Key / Client ID aqui — só Access Token.
+ * NÃO use Public Key no backend — só Access Token.
  */
 
 import crypto from 'crypto';
@@ -20,7 +20,6 @@ export function mpConfigured(): boolean {
   return Boolean(process.env.MP_ACCESS_TOKEN?.trim());
 }
 
-/** Ambiente do token: live | test | unknown */
 export function mpTokenMode(): 'live' | 'test' | 'unknown' {
   const t = process.env.MP_ACCESS_TOKEN?.trim() || '';
   if (t.startsWith('TEST-') || t.startsWith('TEST')) return 'test';
@@ -31,11 +30,12 @@ export function mpTokenMode(): 'live' | 'test' | 'unknown' {
 function token(): string {
   const t = process.env.MP_ACCESS_TOKEN?.trim();
   if (!t) throw new Error('MP_ACCESS_TOKEN não configurado');
-  // Public Key costuma começar com APP_USR- mas é curta / ou TEST- com "public"
-  if (/public/i.test(t) || t.length < 40) {
-    throw new Error(
-      'MP_ACCESS_TOKEN parece inválido. Use o Access Token (não a Public Key). ' +
-        'Painel MP → Seu negócio → Credenciais → Access Token.'
+  if (/public/i.test(t)) {
+    throw Object.assign(
+      new Error(
+        'MP_ACCESS_TOKEN parece Public Key. Use o Access Token em Credenciais → Access Token.'
+      ),
+      { status: 502 }
     );
   }
   return t;
@@ -63,7 +63,6 @@ function notificationUrl(): string {
   }
   const base = apiPublicUrl();
   if (base) return `${base}/api/webhook/mercadopago`;
-  // fallback produção Render
   if (process.env.NODE_ENV === 'production') {
     return 'https://filtra-ia-api.onrender.com/api/webhook/mercadopago';
   }
@@ -71,7 +70,21 @@ function notificationUrl(): string {
 }
 
 export function planoAmountReais(plano: PlanoDef): number {
-  return Number((plano.unitAmount / 100).toFixed(2));
+  const n = Number((Number(plano.unitAmount) / 100).toFixed(2));
+  if (!Number.isFinite(n) || n <= 0) {
+    throw Object.assign(new Error(`Valor do plano inválido: ${plano.key}`), { status: 400 });
+  }
+  return n;
+}
+
+function normalizePayerEmail(email?: string | null): string {
+  const e = String(email || '')
+    .trim()
+    .toLowerCase();
+  if (e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && !e.endsWith('@filtra.ia')) {
+    return e;
+  }
+  return 'pagador.filtra@gmail.com';
 }
 
 function humanizeMpError(data: any, status: number): string {
@@ -86,17 +99,14 @@ function humanizeMpError(data: any, status: number): string {
   if (/unauthorized use of live credentials/i.test(msg)) {
     return (
       'Mercado Pago recusou as credenciais (live). ' +
-      'Você provavelmente colocou token de PRODUÇÃO (APP_USR-) em conta/app de teste, ' +
-      'ou misturou Public Key com Access Token. ' +
-      'Solução: no painel MP use Credenciais de produção → Access Token (APP_USR-...), ' +
-      'ou para testes use o token TEST- da aplicação de teste. ' +
-      'Nunca use a Public Key no backend.'
+      'Token de PRODUÇÃO inválido, misturado com teste, ou Public Key no lugar do Access Token. ' +
+      'Use Credenciais de produção → Access Token (APP_USR-...) ou TEST- para sandbox.'
     );
   }
-  if (/unauthorized|invalid.*token|invalid_token|401/i.test(msg)) {
+  if (/unauthorized|invalid.*token|invalid_token/i.test(msg) || status === 401) {
     return (
       'Access Token do Mercado Pago inválido ou expirado. ' +
-      'Gere um novo em Credenciais → Access Token e atualize MP_ACCESS_TOKEN no Render.'
+      'Gere um novo Access Token e atualize MP_ACCESS_TOKEN no Render.'
     );
   }
   return msg;
@@ -117,8 +127,9 @@ async function mpFetch(path: string, init: RequestInit = {}): Promise<any> {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = humanizeMpError(data, res.status);
+    console.error('[mp] API error', { path, status: res.status, message: msg, data });
     const err = new Error(msg) as Error & { status?: number; body?: any };
-    err.status = res.status;
+    err.status = res.status >= 400 && res.status < 600 ? res.status : 502;
     err.body = data;
     throw err;
   }
@@ -144,10 +155,11 @@ export function parseExternalRef(ref: string | null | undefined): {
   if (parts[0] !== 'filtra' || parts.length < 4) {
     return { kind: null, planoKey: null, empresaId: null };
   }
-  const kind = parts[1] as PixKind;
-  const planoKey = parts[2] || null;
-  const empresaId = parts[3] && parts[3] !== 'none' ? parts[3] : null;
-  return { kind, planoKey, empresaId };
+  return {
+    kind: parts[1] as PixKind,
+    planoKey: parts[2] || null,
+    empresaId: parts[3] && parts[3] !== 'none' ? parts[3] : null,
+  };
 }
 
 export async function createPixAvulso(opts: {
@@ -156,19 +168,9 @@ export async function createPixAvulso(opts: {
   email?: string | null;
   nomePagador?: string | null;
   cpf?: string | null;
-}): Promise<{
-  paymentId: string;
-  status: string;
-  qrCode: string | null;
-  qrCodeBase64: string | null;
-  ticketUrl: string | null;
-  amount: number;
-  planoLabel: string;
-  expiresAt: string | null;
-  externalReference: string;
-}> {
+}) {
   const plano = resolvePlano(opts.planoKey);
-  if (!plano) throw new Error('Plano inválido');
+  if (!plano) throw Object.assign(new Error('Plano inválido'), { status: 400 });
 
   const amount = planoAmountReais(plano);
   const external_reference = buildExternalRef({
@@ -189,7 +191,7 @@ export async function createPixAvulso(opts: {
       kind: 'avulso',
     },
     payer: {
-      email: opts.email || 'cliente@filtra.ia',
+      email: normalizePayerEmail(opts.email),
       first_name: (opts.nomePagador || 'Cliente').slice(0, 60),
     },
   };
@@ -203,6 +205,12 @@ export async function createPixAvulso(opts: {
 
   const notif = notificationUrl();
   if (notif) body.notification_url = notif;
+
+  console.log('[mp] createPixAvulso', {
+    plano: plano.key,
+    amount,
+    token_mode: mpTokenMode(),
+  });
 
   const data = await mpFetch('/v1/payments', {
     method: 'POST',
@@ -229,19 +237,9 @@ export async function createPixAgendado(opts: {
   email?: string | null;
   venceEmIso: string;
   nomePagador?: string | null;
-}): Promise<{
-  paymentId: string;
-  status: string;
-  qrCode: string | null;
-  qrCodeBase64: string | null;
-  ticketUrl: string | null;
-  amount: number;
-  planoLabel: string;
-  expiresAt: string | null;
-  externalReference: string;
-}> {
+}) {
   const plano = resolvePlano(opts.planoKey);
-  if (!plano) throw new Error('Plano inválido');
+  if (!plano) throw Object.assign(new Error('Plano inválido'), { status: 400 });
 
   const amount = planoAmountReais(plano);
   const external_reference = buildExternalRef({
@@ -251,13 +249,17 @@ export async function createPixAgendado(opts: {
   });
 
   const vence = new Date(opts.venceEmIso);
-  if (Number.isNaN(vence.getTime())) throw new Error('Data de vencimento inválida');
+  if (Number.isNaN(vence.getTime())) {
+    throw Object.assign(new Error('Data de vencimento inválida'), { status: 400 });
+  }
   const max = new Date(Date.now() + 29 * 24 * 60 * 60 * 1000);
   if (vence.getTime() > max.getTime()) {
-    throw new Error('Vencimento do Pix agendado deve ser em até 29 dias');
+    throw Object.assign(new Error('Vencimento do Pix agendado deve ser em até 29 dias'), {
+      status: 400,
+    });
   }
   if (vence.getTime() < Date.now() + 60_000) {
-    throw new Error('Vencimento deve ser no futuro');
+    throw Object.assign(new Error('Vencimento deve ser no futuro'), { status: 400 });
   }
 
   const body: any = {
@@ -273,7 +275,7 @@ export async function createPixAgendado(opts: {
       kind: 'agendado',
     },
     payer: {
-      email: opts.email || 'cliente@filtra.ia',
+      email: normalizePayerEmail(opts.email),
       first_name: (opts.nomePagador || 'Cliente').slice(0, 60),
     },
   };
@@ -305,18 +307,9 @@ export async function createPixRecorrente(opts: {
   empresaId?: string | null;
   email?: string | null;
   reason?: string;
-}): Promise<{
-  preapprovalId: string;
-  initPoint: string;
-  status: string;
-  amount: number;
-  planoLabel: string;
-  frequency: number;
-  frequencyType: string;
-  externalReference: string;
-}> {
+}) {
   const plano = resolvePlano(opts.planoKey);
-  if (!plano) throw new Error('Plano inválido');
+  if (!plano) throw Object.assign(new Error('Plano inválido'), { status: 400 });
 
   const amount = planoAmountReais(plano);
   const external_reference = buildExternalRef({
@@ -331,7 +324,7 @@ export async function createPixRecorrente(opts: {
   const body: any = {
     reason: (opts.reason || `Filtra.IA — ${plano.label}`).slice(0, 250),
     external_reference,
-    payer_email: opts.email || undefined,
+    payer_email: normalizePayerEmail(opts.email),
     auto_recurring: {
       frequency,
       frequency_type,
@@ -354,10 +347,7 @@ export async function createPixRecorrente(opts: {
   });
 
   const init =
-    data.init_point ||
-    data.sandbox_init_point ||
-    data.auto_recurring?.init_point ||
-    null;
+    data.init_point || data.sandbox_init_point || data.auto_recurring?.init_point || null;
   if (!init) throw new Error('Mercado Pago não retornou init_point da assinatura');
 
   return {
