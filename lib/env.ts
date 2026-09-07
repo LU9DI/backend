@@ -1,5 +1,6 @@
 /**
  * Validação de variáveis de ambiente na subida.
+ * NÃO coloque secrets aqui — só process.env (Render Environment / .env).
  */
 
 export type EnvReport = {
@@ -7,6 +8,11 @@ export type EnvReport = {
   errors: string[];
   warnings: string[];
 };
+
+function stripeWanted(): boolean {
+  const flag = String(process.env.STRIPE_ENABLED || '1').trim().toLowerCase();
+  return !(flag === '0' || flag === 'false' || flag === 'off' || flag === 'no');
+}
 
 export function validateEnv(): EnvReport {
   const errors: string[] = [];
@@ -19,16 +25,22 @@ export function validateEnv(): EnvReport {
     errors.push('JWT_SECRET deve ter pelo menos 32 caracteres.');
   }
 
-  if (!process.env.STRIPE_SECRET_KEY) {
-    warnings.push('STRIPE_SECRET_KEY ausente — checkout cartão retornará 503 até configurar.');
+  if (stripeWanted() && !process.env.STRIPE_SECRET_KEY?.trim()) {
+    warnings.push(
+      'STRIPE_SECRET_KEY ausente — cartão Stripe OFF. Use Pix (MP) ou PayPal, ou defina STRIPE_ENABLED=0.'
+    );
+  } else if (!stripeWanted()) {
+    warnings.push('Stripe desligado (STRIPE_ENABLED=0) — pagamentos via Pix/PayPal.');
   }
 
   if (!process.env.MP_ACCESS_TOKEN?.trim()) {
     warnings.push('MP_ACCESS_TOKEN ausente — Pix (QR/copia-cola/recorrente) desligado.');
   }
 
-  if (!process.env.PAYPAL_CLIENT_ID?.trim()) {
-    warnings.push('PAYPAL_CLIENT_ID ausente — PayPal desligado.');
+  if (!process.env.PAYPAL_CLIENT_ID?.trim() || !process.env.PAYPAL_CLIENT_SECRET?.trim()) {
+    warnings.push(
+      'PayPal incompleto — precisa PAYPAL_CLIENT_ID e PAYPAL_CLIENT_SECRET (sandbox ou live).'
+    );
   }
 
   const recovery = process.env.ADMIN_RECOVERY_SECRET || '';
