@@ -22,8 +22,15 @@ export function buildCorsOptions(): CorsOptions {
 
   const allowlist = [...new Set([...fromEnv, ...defaults])];
 
-  if (!isProd || allowlist.length === 0) {
+  if (!isProd) {
     return { origin: true, credentials: true };
+  }
+
+  // Falhar fechado em produção: uma API com cookies não pode refletir
+  // qualquer origem quando a lista de domínios não foi configurada.
+  if (allowlist.length === 0) {
+    console.error('[cors] CORS_ORIGINS, APP_URL ou FRONTEND_URL é obrigatório em produção.');
+    return { origin: false, credentials: true };
   }
 
   return {
