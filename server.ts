@@ -67,6 +67,8 @@ assertEnvOrExit();
 const JWT_SECRET = requireJwtSecret();
 
 const app = express();
+const isProduction = process.env.NODE_ENV === 'production';
+const metricsToken = process.env.METRICS_TOKEN?.trim();
 app.set('trust proxy', 1);
 app.use(requestIdMiddleware);
 app.use(securityHeaders);
@@ -79,31 +81,19 @@ app.use((req, res, next) => {
 app.use(cors(buildCorsOptions()));
 
 app.get('/api/health', (_req, res) => {
-  const ai = getAiLoadStats();
+  // Seguro para o health check público do Render: não revela provedores,
+  // credenciais configuradas, métricas internas ou detalhes de autenticação.
   res.json({
     ok: true,
     db: typeof dbEngine === 'function' ? dbEngine() : 'sqlite',
-    stripe: stripeConfigured(),
-    paypal: paypalConfigured(),
-    pix: mpConfigured(),
-    ai: aiConfigured(),
-    ai_providers: listAiProviders(),
-    plan_switch: allowPlanSwitch(),
-    jwt: jwtRotationStatus(),
-    webauthn: webauthnConfig(),
-    push: pushConfigured(),
-    smtp: smtpConfigured(),
-    ai_latency: {
-      groq: ai.stats.groq.latency,
-      gemini: ai.stats.gemini.latency,
-    },
-    http_latency: getHttpMetrics().global,
-    env: process.env.NODE_ENV || 'development',
     time: new Date().toISOString(),
   });
 });
 
-app.get('/api/metrics', (_req, res) => {
+app.get('/api/metrics', (req, res) => {
+  if (isProduction && (!metricsToken || req.get('x-metrics-token') !== metricsToken)) {
+    return res.status(404).end();
+  }
   res.json({
     time: new Date().toISOString(),
     http: getHttpMetrics(),
@@ -227,9 +217,21 @@ async function main() {
   app.use(errorHandler);
 
   console.log(`💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'}`);
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`🚀 API Filtra.IA em http://localhost:${PORT}`);
   });
+
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`🛑 ${signal} recebido; encerrando HTTP com segurança...`);
+    server.close(() => process.exit(0));
+    const forceExit = setTimeout(() => process.exit(1), 10_000);
+    forceExit.unref();
+  };
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  process.once('SIGINT', () => shutdown('SIGINT'));
 }
 
 main().catch((e) => {
