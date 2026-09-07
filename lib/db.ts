@@ -57,12 +57,10 @@ export async function initDB(): Promise<Database> {
 
   if (isPostgresUrl(url)) {
     _db = await initPostgres();
-  } else if (isProd && !process.env.SQLITE_ALLOW_PROD) {
-    console.warn(
-      '⚠️  PRODUÇÃO sem DATABASE_URL Postgres. Usando SQLite. ' +
-        'Defina DATABASE_URL=postgresql://... ou SQLITE_ALLOW_PROD=1 para silenciar.'
+  } else if (isProd) {
+    throw new Error(
+      'DATABASE_URL com uma URL PostgreSQL válida é obrigatória em produção. SQLite não é permitido.'
     );
-    _db = await initSqlite();
   } else {
     _db = await initSqlite();
   }
@@ -129,7 +127,12 @@ export async function initDB(): Promise<Database> {
   const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
   const adminExiste = await _db.get('SELECT * FROM usuarios WHERE email = ?', [adminMail]);
   if (!adminExiste) {
-    const senhaPadrao = process.env.ADMIN_PASSWORD || 'MudeEstaSenha123!';
+    if (isProd && !process.env.ADMIN_PASSWORD?.trim()) {
+      throw new Error(
+        'ADMIN_PASSWORD é obrigatório para criar o primeiro administrador em produção.'
+      );
+    }
+    const senhaPadrao = process.env.ADMIN_PASSWORD?.trim() || 'MudeEstaSenha123!';
     const hash = await bcrypt.hash(senhaPadrao, 12);
     try {
       await _db.run(
