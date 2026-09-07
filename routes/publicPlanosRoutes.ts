@@ -6,7 +6,7 @@ import type { Express, Request, Response } from 'express';
 import { getDb } from '../lib/db.js';
 import { listPlanPrices, ensurePlanPricingSchema } from '../lib/planPricing.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { PLANOS, listPlanosPublicos, refreshPlanPricesFromDb } from '../stripeBilling.js';
+import { listPlanosPublicos, refreshPlanPricesFromDb } from '../stripeBilling.js';
 
 const LABELS: Record<string, string> = {
   inicial: 'Inicial',
@@ -21,11 +21,11 @@ const FEATURES: Record<
   { features: string[]; missingFeatures?: string[]; highlight?: boolean }
 > = {
   inicial: {
-    features: ['150 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos'],
+    features: ['100 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos'],
     missingFeatures: ['Integrado com IA'],
   },
   pro: {
-    features: ['400 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos', '1 Relatório PDF/mês'],
+    features: ['300 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos', '1 Relatório PDF/mês'],
     missingFeatures: ['Integrado com IA'],
   },
   ultra: {
@@ -84,7 +84,6 @@ export function mountPublicPlanosRoutes(app: Express) {
         const plan = String(p.plan);
         const limit = Number(p.review_limit) || 0;
         const feat = FEATURES[plan] || { features: [] };
-        // Atualiza texto de feedbacks se o limite mudou no admin
         const features = (feat.features || []).map((f) =>
           /feedbacks\/mês/i.test(f)
             ? `${limit.toLocaleString('pt-BR')} feedbacks/mês`
@@ -108,7 +107,6 @@ export function mountPublicPlanosRoutes(app: Express) {
         };
       });
 
-      // ordem comercial
       const order = ['inicial', 'pro', 'ultra', 'corporativo', 'rei'];
       cards.sort((a, b) => order.indexOf(a.plan) - order.indexOf(b.plan));
 

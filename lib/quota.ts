@@ -5,8 +5,8 @@ import { getCurrentMonth } from './planUtils.js';
 export const PLAN_FEEDBACK_LIMITS: Record<string, number> = {
   trial: 30,
   teste: 30,
-  inicial: 150,
-  pro: 400,
+  inicial: 100,
+  pro: 300,
   ultra: 800,
   corporativo: 2500,
   rei: 8000,

@@ -13,8 +13,8 @@ export type PlanPriceRow = {
 };
 
 const DEFAULTS: PlanPriceRow[] = [
-  { plan: 'inicial', month_brl: 69.9, year_monthly_brl: 49.9, review_limit: 150 },
-  { plan: 'pro', month_brl: 109.9, year_monthly_brl: 99.9, review_limit: 400 },
+  { plan: 'inicial', month_brl: 69.9, year_monthly_brl: 49.9, review_limit: 100 },
+  { plan: 'pro', month_brl: 109.9, year_monthly_brl: 99.9, review_limit: 300 },
   { plan: 'ultra', month_brl: 199.9, year_monthly_brl: 149.9, review_limit: 800 },
   { plan: 'corporativo', month_brl: 499.9, year_monthly_brl: 429.9, review_limit: 2500 },
   { plan: 'rei', month_brl: 999.9, year_monthly_brl: 899.9, review_limit: 8000 },
@@ -47,6 +47,15 @@ export async function ensurePlanPricingSchema(db: Database = getDb()) {
       );
     }
   }
+  // Migração pontual: limites de feedback oficial (não sobrescreve se admin já customizou outros valores)
+  await db.run(
+    `UPDATE plan_prices SET review_limit = 100, updated_at = datetime('now')
+     WHERE plan = 'inicial' AND review_limit IN (150, 0)`
+  );
+  await db.run(
+    `UPDATE plan_prices SET review_limit = 300, updated_at = datetime('now')
+     WHERE plan = 'pro' AND review_limit IN (400, 0)`
+  );
 }
 
 export async function getAnnualDiscountPct(db: Database = getDb()): Promise<number> {
