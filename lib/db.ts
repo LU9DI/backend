@@ -3,7 +3,7 @@
  * - Dev / testes: SQLite (padrão)
  * - Produção: Postgres obrigatório (DATABASE_URL), salvo SQLITE_ALLOW_PROD=1
  *
- * Tipos de data: TIMESTAMP (não DATETIME) — portável SQLite + Postgres.
+ * Tipos de data: TIMESTAMPTZ (Postgres) — SQLite aceita o literal e ISO strings.
  */
 import path from 'path';
 import fs from 'fs';
@@ -81,6 +81,7 @@ export async function initDB(): Promise<Database> {
     _db = await initSqlite();
   }
 
+  // TIMESTAMPTZ funciona no Postgres; no SQLite vira afinidade e aceita ISO
   await _db.exec(`
     CREATE TABLE IF NOT EXISTS empresas (
       id TEXT PRIMARY KEY,
@@ -89,8 +90,8 @@ export async function initDB(): Promise<Database> {
       slug TEXT UNIQUE,
       status TEXT DEFAULT 'trial',
       plan TEXT DEFAULT 'trial',
-      criado_em TIMESTAMP NOT NULL,
-      expira_em TIMESTAMP NOT NULL,
+      criado_em TIMESTAMPTZ NOT NULL,
+      expira_em TIMESTAMPTZ NOT NULL,
       google_review_url TEXT,
       voice_style TEXT,
       empresa_pai_id TEXT,
@@ -115,7 +116,7 @@ export async function initDB(): Promise<Database> {
       comment TEXT,
       ai_reply TEXT,
       ai_tags TEXT,
-      createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      createdAt TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     )
   `);
   await _db.exec(`
@@ -124,7 +125,7 @@ export async function initDB(): Promise<Database> {
       empresa_id TEXT,
       tipo TEXT NOT NULL,
       tokens INTEGER NOT NULL DEFAULT 0,
-      criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     )
   `);
   await _db.exec(`

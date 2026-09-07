@@ -61,16 +61,15 @@ export async function ensureAuthColumns(db: Database) {
     /* ok */
   }
 
-  // TIMESTAMP (não DATETIME) — funciona em SQLite e Postgres
+  // TIMESTAMPTZ = Postgres; SQLite aceita como afinidade numérica/texto e ainda funciona com ISO strings
   await db.exec(`
     CREATE TABLE IF NOT EXISTS password_resets (
       id TEXT PRIMARY KEY,
       usuario_id TEXT NOT NULL,
       token_hash TEXT NOT NULL,
-      expira_em TIMESTAMP NOT NULL,
+      expira_em TIMESTAMPTZ NOT NULL,
       usado INTEGER DEFAULT 0,
-      criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
+      criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     )
   `);
 

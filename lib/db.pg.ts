@@ -14,7 +14,10 @@ function convertPlaceholders(sql: string): string {
   return sql.replace(/\?/g, () => `$${++n}`);
 }
 
-/** Traduções leves SQLite → Postgres para o código legado. */
+/**
+ * Traduções SQLite → Postgres.
+ * Ordem importa: funções datetime('now') ANTES de tipos DATETIME.
+ */
 function adaptSql(sql: string): string {
   let s = sql;
 
@@ -25,14 +28,17 @@ function adaptSql(sql: string): string {
     }
   }
 
-  // Tipos SQLite → Postgres (sem depender só de word-boundary)
-  s = s.replace(/DATETIME/gi, 'TIMESTAMPTZ');
-  s = s.replace(/\bREAL\b/gi, 'DOUBLE PRECISION');
-  s = s.replace(/INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT/gi, 'SERIAL PRIMARY KEY');
-
+  // Funções de data SQLite → Postgres (antes de trocar o tipo DATETIME)
   s = s.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'NOW()');
+  s = s.replace(/datetime\s*\(\s*"now"\s*\)/gi, 'NOW()');
   s = s.replace(/CURRENT_TIMESTAMP/gi, 'NOW()');
   s = s.replace(/IFNULL\s*\(/gi, 'COALESCE(');
+
+  // Tipos SQLite → Postgres
+  s = s.replace(/\bDATETIME\b/gi, 'TIMESTAMPTZ');
+  s = s.replace(/\bREAL\b/gi, 'DOUBLE PRECISION');
+  s = s.replace(/INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT/gi, 'SERIAL PRIMARY KEY');
+  s = s.replace(/AUTOINCREMENT/gi, '');
 
   return s;
 }
@@ -102,9 +108,17 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
           try {
             await c.query(st);
           } catch (e: any) {
-            // Log SQL adaptado ajuda a depurar tipos inválidos no Render
-            console.error('pg.exec falhou:', e?.message || e);
-            console.error('SQL:', st.slice(0, 400));
+            // Já existe / coluna duplicada — não derruba o boot
+            const msg = String(e?.message || e);
+            if (
+              /already exists/i.test(msg) ||
+              e?.code === '42P07' ||
+              e?.code === '42701'
+            ) {
+              continue;
+            }
+            console.error('pg.exec falhou:', msg);
+            console.error('SQL:', st.slice(0, 500));
             throw e;
           }
         }
