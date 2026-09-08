@@ -15,6 +15,7 @@ import { fileURLToPath } from 'url';
 import { ensureAuthColumns } from '../passwordResetRoutes.js';
 import { ensureMfaColumns } from '../mfa.js';
 import { initPgDatabase, isPostgresUrl, asSqliteDb } from './db.pg.js';
+import { ensureRuntimeSchema } from './schemaEnsure.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -81,7 +82,6 @@ export async function initDB(): Promise<Database> {
     _db = await initSqlite();
   }
 
-  // TIMESTAMPTZ funciona no Postgres; no SQLite vira afinidade e aceita ISO
   await _db.exec(`
     CREATE TABLE IF NOT EXISTS empresas (
       id TEXT PRIMARY KEY,
@@ -148,6 +148,7 @@ export async function initDB(): Promise<Database> {
 
   await ensureAuthColumns(_db);
   await ensureMfaColumns(_db);
+  await ensureRuntimeSchema(_db);
 
   const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
   const adminExiste = await _db.get('SELECT * FROM usuarios WHERE email = ?', [adminMail]);
@@ -190,7 +191,7 @@ export function slugify(texto: string): string {
 
 export async function slugUnico(base: string): Promise<string> {
   const db = getDb();
-  let slug = base;
+  let slug = base || 'empresa';
   let n = 0;
   while (true) {
     const existe = await db.get('SELECT id FROM empresas WHERE slug = ?', [slug]);

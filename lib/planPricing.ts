@@ -46,14 +46,22 @@ export async function ensurePlanPricingSchema(db: Database = getDb()) {
       );
     }
   }
-  // Oficial: inicial 100, pro 300 (corrige legado 150/400)
+
+  // Oficial do produto (sempre alinhado — corrige legado 150/400 na nuvem)
   await db.run(
-    `UPDATE plan_prices SET review_limit = 100, updated_at = datetime('now')
-     WHERE plan = 'inicial' AND (review_limit = 150 OR review_limit = 0 OR review_limit IS NULL)`
+    `UPDATE plan_prices SET review_limit = 100, updated_at = datetime('now') WHERE plan = 'inicial'`
   );
   await db.run(
-    `UPDATE plan_prices SET review_limit = 300, updated_at = datetime('now')
-     WHERE plan = 'pro' AND (review_limit = 400 OR review_limit = 0 OR review_limit IS NULL)`
+    `UPDATE plan_prices SET review_limit = 300, updated_at = datetime('now') WHERE plan = 'pro'`
+  );
+  await db.run(
+    `UPDATE plan_prices SET review_limit = 800, updated_at = datetime('now') WHERE plan = 'ultra'`
+  );
+  await db.run(
+    `UPDATE plan_prices SET review_limit = 2500, updated_at = datetime('now') WHERE plan = 'corporativo'`
+  );
+  await db.run(
+    `UPDATE plan_prices SET review_limit = 8000, updated_at = datetime('now') WHERE plan = 'rei'`
   );
 }
 
