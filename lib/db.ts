@@ -29,6 +29,16 @@ export function dbEngine(): 'sqlite' | 'postgres' {
   return _engine;
 }
 
+export async function pingDb(): Promise<{ ok: boolean; engine: string; error?: string }> {
+  try {
+    const db = getDb();
+    await db.get('SELECT 1');
+    return { ok: true, engine: dbEngine() };
+  } catch (e: any) {
+    return { ok: false, engine: dbEngine(), error: String(e?.message || e) };
+  }
+}
+
 async function initSqlite(): Promise<Database> {
   // Import dinâmico — sqlite3 NÃO vai no bundle de produção (só devDependency)
   let sqlite3: any;
