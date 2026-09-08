@@ -2,7 +2,7 @@
  * Pontos de disparo n8n a partir dos fluxos internos (trial, review, pagamento).
  * Fire-and-forget — nunca quebra a requisição principal.
  */
-import { dispatchN8nEvent } from './n8n.js';
+import { notifyN8n as dispatchN8nEvent } from './n8n';
 
 export function n8nOnTrialActivated(opts: {
   empresaId: string;
@@ -23,8 +23,7 @@ export function n8nOnTrialActivated(opts: {
       whatsapp: opts.whatsapp || null,
       painel_path: `/painel/${opts.slug}`,
       avaliacao_path: `/avaliacao/${opts.slug}`,
-    },
-    { empresaId: opts.empresaId, slug: opts.slug }
+    }
   ).catch(() => null);
 }
 
@@ -48,8 +47,7 @@ export function n8nOnReview(opts: {
       comment: (opts.comment || '').slice(0, 500),
       review_id: opts.reviewId ?? null,
       critical: opts.critical,
-    },
-    { empresaId: opts.empresaId, slug: opts.slug }
+    }
   ).catch(() => null);
 }
 
@@ -68,7 +66,6 @@ export function n8nOnPaymentActivated(opts: {
       plan: opts.plan,
       gateway: opts.gateway || null,
       expira_em: opts.expiraEm || null,
-    },
-    { empresaId: opts.empresaId, slug: opts.slug }
+    }
   ).catch(() => null);
 }

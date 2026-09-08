@@ -1,0 +1,9 @@
+export const ERR_INVALID_CREDENTIALS = 'Credenciais inválidas.';
+export const ERR_EMAIL_REQUIRED = 'E-mail e senha são obrigatórios.';
+export const ERR_ADMIN_ACCESS = 'Acesso restrito ao painel administrativo. Use /login com CNPJ para o painel da empresa.';
+export const ERR_TOKEN_NOT_PROVIDED = 'Token não fornecido.';
+export const ERR_TOKEN_INVALID = 'Token inválido ou expirado.';
+export const ERR_NOT_AUTHENTICATED = 'Não autenticado.';
+export const ERR_NOT_ADMIN = 'Não é admin.';
+export const ERR_INTERNAL_SERVER = 'Erro interno do servidor.';
+export const ERR_MFA_REQUIRED = 'Informe o código do autenticador.';

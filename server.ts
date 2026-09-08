@@ -276,9 +276,9 @@ async function main() {
   mountAuditRoutes(app);
   mountN8nRoutes(app);
 
-  mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
+  mountAdminLoginRoute(app, getDb, JWT_SECRET);
   mountAdminPasswordResetRoutes(app, getDb);
-  mountMfaRoutes(app, getDb, { JWT_SECRET, setAuthCookie, autenticarToken });
+  mountMfaRoutes(app, getDb, JWT_SECRET, setAuthCookie, autenticarToken);
   mountPasswordResetRoutes(app, getDb);
   mountStripeRoutes(app, getDb);
 

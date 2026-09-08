@@ -92,7 +92,7 @@ export function mountPublicPlanosRoutes(app: Express) {
 
       const cards = planos.map((p: any) => {
         const plan = String(p.plan);
-        const limit = OFFICIAL_LIMITS[plan] ?? Number(p.review_limit) || 0;
+        const limit = (OFFICIAL_LIMITS[plan] ?? Number(p.review_limit)) || 0;
         const feat = FEATURES[plan] || { features: [] };
         const features = (feat.features || []).map((f) =>
           /feedbacks\/mês/i.test(f)
