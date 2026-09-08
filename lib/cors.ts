@@ -1,10 +1,6 @@
 /**
  * CORS com lista de origens em produção.
- *
- * Env:
- *   CORS_ORIGINS=https://app.vercel.app,https://seudominio.com
- *   (vírgula-separado). Se vazio em prod, usa APP_URL + FRONTEND_URL.
- *   Em development: reflete qualquer origin (credentials ok).
+ * Em origem bloqueada: falha sem ecoar o domínio na mensagem ao cliente.
  */
 import type { CorsOptions } from 'cors';
 
@@ -13,14 +9,19 @@ export function buildCorsOptions(): CorsOptions {
 
   const fromEnv = (process.env.CORS_ORIGINS || '')
     .split(',')
-    .map((s) => s.trim())
+    .map((s) => s.trim().replace(/\/$/, ''))
     .filter(Boolean);
 
   const defaults = [process.env.APP_URL, process.env.FRONTEND_URL]
     .filter(Boolean)
     .map((s) => String(s).replace(/\/$/, ''));
 
-  const allowlist = [...new Set([...fromEnv, ...defaults])];
+  // sempre inclui filtraai.com em produção
+  const hardDefaults = isProd
+    ? ['https://filtraai.com', 'https://www.filtraai.com']
+    : [];
+
+  const allowlist = [...new Set([...fromEnv, ...defaults, ...hardDefaults])];
 
   if (!isProd || allowlist.length === 0) {
     return { origin: true, credentials: true };
@@ -28,11 +29,12 @@ export function buildCorsOptions(): CorsOptions {
 
   return {
     origin(origin, callback) {
-      // requests sem Origin (curl, healthchecks, webhooks server-to-server)
       if (!origin) return callback(null, true);
-      if (allowlist.includes(origin)) return callback(null, true);
-      console.warn(`[cors] origem bloqueada: ${origin}`);
-      callback(new Error(`Origin não permitida: ${origin}`));
+      const o = origin.replace(/\/$/, '');
+      if (allowlist.includes(o)) return callback(null, true);
+      // log interno só — cliente recebe 403 genérico via error handler / cors
+      console.warn('[cors] origem bloqueada');
+      callback(new Error('Forbidden'));
     },
     credentials: true,
   };

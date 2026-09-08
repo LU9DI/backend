@@ -1,12 +1,6 @@
 /**
  * Recuperação de senha por e-mail (clientes / empresas).
- * A conta ADMIN do SaaS NÃO usa este fluxo — ver adminPasswordReset.ts.
- *
- * Segurança do token:
- * - randomBytes(32), só SHA-256 no banco
- * - uso único (usado=1)
- * - expira em 1h
- * - ao gerar novo token, todos os anteriores do usuário são invalidados
+ * Admin NÃO usa este fluxo — ver adminPasswordReset.ts.
  */
 import type { Express, Request, Response } from 'express';
 import type { Database } from 'sqlite';
@@ -15,11 +9,7 @@ import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
 import { enviarEmail, smtpConfigured } from './mailer.js';
 import { validarSenhaEmpresa } from './passwordPolicy.js';
-
-const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(
-  /\/$/,
-  ''
-);
+import { safeAppUrl, maskEmail } from './lib/security.js';
 
 function normalizarCnpj(cnpj: string): string {
   return String(cnpj || '').replace(/\D/g, '');
@@ -31,20 +21,19 @@ function emailValido(email: string): boolean {
 
 function isAdminAccount(usuario: any): boolean {
   if (!usuario) return false;
-  const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
+  const adminMail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
   const email = String(usuario.email || '').toLowerCase();
-  return usuario.empresa_id === 'admin' || email === adminMail;
+  if (usuario.empresa_id === 'admin') return true;
+  if (adminMail && email === adminMail) return true;
+  return false;
 }
 
-/** Invalida todos os tokens ainda válidos do usuário (uso único efetivo por “geração”). */
 export async function invalidatePasswordResetTokens(
   db: Database,
   usuarioId: string
 ): Promise<number> {
   const result = await db.run(
-    `UPDATE password_resets
-     SET usado = 1
-     WHERE usuario_id = ? AND usado = 0`,
+    `UPDATE password_resets SET usado = 1 WHERE usuario_id = ? AND usado = 0`,
     [usuarioId]
   );
   return Number(result.changes || 0);
@@ -61,7 +50,6 @@ export async function ensureAuthColumns(db: Database) {
     /* ok */
   }
 
-  // TIMESTAMPTZ = Postgres; SQLite aceita como afinidade e ISO strings
   await db.exec(`
     CREATE TABLE IF NOT EXISTS password_resets (
       id TEXT PRIMARY KEY,
@@ -171,7 +159,7 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
         [crypto.randomUUID(), usuario.id, tokenHash, expira]
       );
 
-      const link = `${APP_URL}/recuperar-senha?token=${token}`;
+      const link = safeAppUrl(`/recuperar-senha?token=${token}`);
       await enviarEmail({
         to: usuario.email,
         subject: 'Filtra.IA — redefinição de senha',
@@ -190,6 +178,10 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
         ].join('\n'),
       });
 
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('[forgot-password] enviado para', maskEmail(usuario.email));
+      }
+
       res.json({
         success: true,
         message: okMsg,
@@ -197,7 +189,7 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
       });
     } catch (e: any) {
       console.error('forgot-password:', e.message || e);
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+      res.status(500).json({ error: 'Erro ao processar a solicitação.' });
     }
   });
 
@@ -250,7 +242,7 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
       res.json({ success: true, message: 'Senha atualizada com sucesso. Você já pode entrar.' });
     } catch (e: any) {
       console.error('reset-password:', e.message || e);
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+      res.status(500).json({ error: 'Erro ao processar a solicitação.' });
     }
   });
 }

@@ -1,6 +1,6 @@
 /**
- * Login do painel administrativo (e-mail + senha [+ MFA se ativo]).
- * JWT com rotação de chave (signAccessToken / verifyAccessToken).
+ * Login do painel administrativo.
+ * Rate limit restrito; sem credenciais padrão hardcoded.
  */
 import type { Express, Request, Response } from 'express';
 import type { Database } from 'sqlite';
@@ -11,16 +11,17 @@ import { signAccessToken, verifyAccessToken } from './lib/auth.js';
 
 const adminLoginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 30,
+  max: 12,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: { error: 'Muitas tentativas de login. Tente novamente mais tarde.' },
 });
 
 function isAdminUser(usuario: any): boolean {
-  const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
-  return (
-    usuario.empresa_id === 'admin' ||
-    String(usuario.email || '').toLowerCase() === adminMail
-  );
+  const adminMail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+  if (usuario.empresa_id === 'admin') return true;
+  if (adminMail && String(usuario.email || '').toLowerCase() === adminMail) return true;
+  return false;
 }
 
 export function mountAdminLoginRoute(
@@ -42,19 +43,17 @@ export function mountAdminLoginRoute(
         return res.status(400).json({ error: 'E-mail e senha são obrigatórios.' });
       }
 
+      if (!(process.env.ADMIN_EMAIL || '').trim()) {
+        console.error('[admin login] ADMIN_EMAIL não configurado no ambiente');
+      }
+
       const db = getDb();
       await ensureMfaColumns(db);
       const usuario = await db.get('SELECT * FROM usuarios WHERE email = ?', [email]);
 
-      if (!usuario || !usuario.senha_hash) {
+      // resposta uniforme — não revela se o e-mail existe
+      if (!usuario || !usuario.senha_hash || !isAdminUser(usuario)) {
         return res.status(401).json({ error: 'Credenciais inválidas.' });
-      }
-
-      if (!isAdminUser(usuario)) {
-        return res.status(403).json({
-          error:
-            'Acesso restrito ao painel administrativo. Use /login com CNPJ para o painel da empresa.',
-        });
       }
 
       const ok = await bcrypt.compare(senha, usuario.senha_hash);
@@ -92,8 +91,8 @@ export function mountAdminLoginRoute(
         },
       });
     } catch (e) {
-      console.error('Erro no admin login:', e);
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
+      console.error('Erro no admin login');
+      return res.status(500).json({ error: 'Erro ao processar a solicitação.' });
     }
   });
 
