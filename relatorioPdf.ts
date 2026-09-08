@@ -7,7 +7,6 @@
  */
 import type { Database } from 'sqlite';
 import PDFDocument from 'pdfkit';
-import { honestNoteForRating } from './lib/notes';
 
 // ─── Tipos ───────────────────────────────────────────────────────────
 
@@ -497,7 +496,7 @@ Analise o bloco de comentários e devolva JSON com:
   drawKpi(
     doc,
     'Satisfação',
-    notaMedia ? `${notaMedia.toFixed(1)} / 5 (${honestNoteForRating(Math.round(notaMedia))})` : '—',
+    notaMedia ? `${notaMedia.toFixed(1)} / 5` : '—',
     'Nota média',
     42 + kw + gap,
     ky,

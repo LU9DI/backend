@@ -7,7 +7,7 @@ import type { Database } from 'sqlite';
 import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
 import { ensureMfaColumns, issueMfaChallenge } from './mfa.js';
-import { signAccessToken, verifyAccessToken, setAuthCookie } from './lib/auth.js';
+import { signAccessToken, verifyAccessToken } from './lib/auth.js';
 
 const adminLoginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -26,7 +26,10 @@ function isAdminUser(usuario: any): boolean {
 export function mountAdminLoginRoute(
   app: Express,
   getDb: () => Database,
-  JWT_SECRET: string
+  opts: {
+    setAuthCookie: (res: Response, token: string) => void;
+    JWT_SECRET: string;
+  }
 ) {
   app.post('/api/admin/login', adminLoginLimiter, async (req: Request, res: Response) => {
     try {
@@ -60,7 +63,7 @@ export function mountAdminLoginRoute(
       }
 
       if (usuario.mfa_enabled) {
-        const challenge = issueMfaChallenge(usuario, JWT_SECRET);
+        const challenge = issueMfaChallenge(usuario, opts.JWT_SECRET);
         return res.json({
           success: true,
           ...challenge,
@@ -75,7 +78,7 @@ export function mountAdminLoginRoute(
         role: 'admin',
       });
 
-      setAuthCookie(res, token);
+      opts.setAuthCookie(res, token);
 
       return res.json({
         success: true,

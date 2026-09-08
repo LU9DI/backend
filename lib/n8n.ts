@@ -7,13 +7,12 @@
  *   N8N_TIMEOUT_MS=8000
  *
  * Eventos enviados (JSON):
- *   trial.activated | review.critical | review.created | payment.activated | lead.captured
+ *   trial.activated | review.critical | payment.activated | lead.captured
  */
 
 export type N8nEvent =
   | 'trial.activated'
   | 'review.critical'
-  | 'review.created'
   | 'payment.activated'
   | 'lead.captured'
   | 'ping';
