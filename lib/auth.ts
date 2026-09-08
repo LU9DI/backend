@@ -2,7 +2,7 @@
  * JWT + cookies de sessão (com rotação de chave).
  */
 import type { Request, Response, NextFunction } from 'express';
-import {
+import { supabase } from './supabaseClient.js';
   requireJwtSecret as _require,
   signAccessToken,
   verifyAccessToken,
@@ -63,18 +63,23 @@ export interface AuthRequest extends Request {
 export function autenticarToken(req: AuthRequest, res: Response, next: NextFunction) {
   const token = extrairToken(req);
   if (!token) return res.status(401).json({ error: 'Token não fornecido.' });
-  try {
-    const payload = verifyAccessToken(token);
+  // Use Supabase auth to validate token and retrieve user
+  supabase.auth.getUser(token).then(({ data, error }) => {
+    if (error || !data?.user) {
+      return res.status(401).json({ error: 'Token inválido ou expirado.' });
+    }
+    const { id, user_metadata } = data.user;
+    // Assuming user_metadata contains nome_funcionario, empresa_id, role
     req.user = {
-      id: payload.id,
-      nome_funcionario: payload.nome_funcionario,
-      empresa_id: payload.empresa_id,
-      role: payload.role,
+      id: id,
+      nome_funcionario: (user_metadata as any)?.nome_funcionario || '',
+      empresa_id: (user_metadata as any)?.empresa_id || '',
+      role: (user_metadata as any)?.role,
     };
     next();
-  } catch {
+  }).catch(() => {
     return res.status(401).json({ error: 'Token inválido ou expirado.' });
-  }
+  });
 }
 
 export function isAdminUser(user?: { empresa_id?: string; role?: string }): boolean {

@@ -1,5 +1,6 @@
 /**
- * Adapter Postgres com API compatível com sqlite (get/run/all/exec).
+ * Adapter Postgres (Supabase / Render / local).
+ * Supabase: use Connection string "Transaction" (pooler :6543) em free tier.
  */
 import pg from 'pg';
 import type { Database } from 'sqlite';
@@ -7,6 +8,7 @@ import type { Database } from 'sqlite';
 const { Pool } = pg;
 
 let pool: pg.Pool | null = null;
+let connectedUrlHost = '';
 
 function convertPlaceholders(sql: string): string {
   let n = 0;
@@ -23,7 +25,6 @@ function adaptSql(sql: string): string {
     }
   }
 
-  // date('now', 'start of month') → date_trunc
   s = s.replace(
     /date\s*\(\s*'now'\s*,\s*'start of month'\s*\)/gi,
     "date_trunc('month', NOW())"
@@ -34,12 +35,10 @@ function adaptSql(sql: string): string {
   );
   s = s.replace(/date\s*\(\s*'now'\s*\)/gi, 'CURRENT_DATE');
   s = s.replace(/date\s*\(\s*"now"\s*\)/gi, 'CURRENT_DATE');
-
   s = s.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'NOW()');
   s = s.replace(/datetime\s*\(\s*"now"\s*\)/gi, 'NOW()');
   s = s.replace(/CURRENT_TIMESTAMP/gi, 'NOW()');
   s = s.replace(/IFNULL\s*\(/gi, 'COALESCE(');
-
   s = s.replace(/\bDATETIME\b/gi, 'TIMESTAMPTZ');
   s = s.replace(/\bREAL\b/gi, 'DOUBLE PRECISION');
   s = s.replace(/INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT/gi, 'SERIAL PRIMARY KEY');
@@ -72,6 +71,27 @@ async function handlePragma(client: pg.PoolClient, sql: string): Promise<any[]> 
   return r.rows;
 }
 
+function resolveDatabaseUrl(explicit?: string): string {
+  const url = (
+    explicit ||
+    process.env.DATABASE_URL ||
+    process.env.SUPABASE_DB_URL ||
+    process.env.SUPABASE_DATABASE_URL ||
+    ''
+  ).trim();
+  if (!url) throw new Error('DATABASE_URL / SUPABASE_DB_URL ausente.');
+  return url;
+}
+
+function isSupabaseUrl(url: string): boolean {
+  return /supabase\.(co|com)/i.test(url) || /pooler\.supabase/i.test(url);
+}
+
+/** Detecta pooler Supabase (porta 6543 ou host pooler). */
+function isPoolerUrl(url: string): boolean {
+  return /:6543\b/.test(url) || /pooler\.supabase/i.test(url);
+}
+
 export type PgDatabase = {
   exec: (sql: string) => Promise<void>;
   run: (sql: string, params?: any[]) => Promise<{ changes: number; lastID?: number }>;
@@ -80,24 +100,46 @@ export type PgDatabase = {
   close: () => Promise<void>;
 };
 
-export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
+export async function initPgDatabase(databaseUrl?: string): Promise<PgDatabase> {
+  const url = resolveDatabaseUrl(databaseUrl);
+  connectedUrlHost = (() => {
+    try {
+      return new URL(url.replace(/^postgres(ql)?:/i, 'https:')).host;
+    } catch {
+      return 'postgres';
+    }
+  })();
+
+  const supabase = isSupabaseUrl(url);
+  const pooler = isPoolerUrl(url);
+  // Free tier Supabase: poucas conexões; pooler transaction mode → pool pequeno
+  const defaultMax = supabase ? (pooler ? 4 : 8) : 10;
+  const max = Math.max(1, Number(process.env.PG_POOL_MAX || defaultMax));
+
   pool = new Pool({
-    connectionString: databaseUrl,
+    connectionString: url,
     ssl:
       process.env.PGSSL === '0'
         ? false
-        : databaseUrl.includes('localhost')
+        : /localhost|127\.0\.0\.1/.test(url)
           ? false
           : { rejectUnauthorized: false },
-    max: Number(process.env.PG_POOL_MAX || 10),
+    max,
+    idleTimeoutMillis: Number(process.env.PG_IDLE_MS || 20_000),
+    connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS || 12_000),
+    allowExitOnIdle: true,
   });
 
   const client = await pool.connect();
   try {
-    await client.query('SELECT 1');
+    await client.query('SELECT 1 AS ok');
   } finally {
     client.release();
   }
+
+  console.log(
+    `🐘 Postgres ok host=${connectedUrlHost} supabase=${supabase} pooler=${pooler} max=${max}`
+  );
 
   const db: PgDatabase = {
     async exec(sql: string) {
@@ -114,11 +156,7 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
             await c.query(st);
           } catch (e: any) {
             const msg = String(e?.message || e);
-            if (
-              /already exists/i.test(msg) ||
-              e?.code === '42P07' ||
-              e?.code === '42701'
-            ) {
+            if (/already exists/i.test(msg) || e?.code === '42P07' || e?.code === '42701') {
               continue;
             }
             console.error('pg.exec falhou:', msg);
@@ -134,9 +172,7 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
     async run(sql: string, params: any[] = []) {
       const c = await pool!.connect();
       try {
-        if (/^PRAGMA/i.test(sql.trim())) {
-          return { changes: 0 };
-        }
+        if (/^PRAGMA/i.test(sql.trim())) return { changes: 0 };
         const adapted = adaptSql(sql);
         const q = convertPlaceholders(adapted);
         const r = await c.query(q, params);
@@ -184,6 +220,10 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
   };
 
   return db;
+}
+
+export function postgresHostLabel(): string {
+  return connectedUrlHost || 'unknown';
 }
 
 export function isPostgresUrl(url?: string | null): boolean {

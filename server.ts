@@ -8,14 +8,14 @@ import 'dotenv/config';
 import type { Server } from 'http';
 
 import { assertEnvOrExit } from './lib/env.js';
-import { initDB, getDb, dbEngine, pingDb } from './lib/db.js';
+import { initDB, getDb } from './lib/db.js';
 import { requireJwtSecret, setAuthCookie, autenticarToken } from './lib/auth.js';
-import { jwtRotationStatus } from './lib/jwtKeys.js';
 import { buildCorsOptions } from './lib/cors.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { requestIdMiddleware, securityHeaders } from './middleware/security.js';
 import { latencyMiddleware, getHttpMetrics } from './lib/metrics.js';
 import { getBuildInfo } from './lib/buildInfo.js';
+import { mountHealthRoutes } from './lib/healthMonitor.js';
 import { mountTrialRoutes } from './routes/trialRoutes.js';
 import { mountAuthRoutes } from './routes/authRoutes.js';
 import { mountEmpresaRoutes } from './routes/empresaRoutes.js';
@@ -46,10 +46,10 @@ import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
 import { paypalConfigured } from './lib/paypal.js';
 import { mpConfigured } from './lib/mercadopago.js';
 import { n8nConfigured, n8nStatus } from './lib/n8n.js';
-import { aiConfigured, listAiProviders, getAiLoadStats } from './groqService.js';
+import { getAiLoadStats } from './groqService.js';
 import { ensureUnidadesSchema } from './lib/unidades.js';
-import { ensureWebAuthnSchema, webauthnConfig } from './lib/webauthn.js';
-import { ensurePushSchema, pushConfigured, initWebPush } from './lib/push.js';
+import { ensureWebAuthnSchema } from './lib/webauthn.js';
+import { ensurePushSchema, initWebPush } from './lib/push.js';
 import { ensureAiUsageSchema } from './lib/aiUsage.js';
 import { ensureOpsTables } from './lib/opsLog.js';
 import { ensureAuditSchema } from './lib/auditLog.js';
@@ -57,8 +57,6 @@ import { ensureRetryQueue, startRetryWorker } from './lib/retryQueue.js';
 import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
 import { ensureRuntimeSchema } from './lib/schemaEnsure.js';
-import { allowPlanSwitch } from './lib/plans.js';
-import { smtpConfigured } from './lib/mailer.js';
 import {
   anonymizeOldClientWhatsapp,
   ensureReviewTreatmentColumns,
@@ -83,44 +81,8 @@ app.use((req, res, next) => {
 });
 app.use(cors(buildCorsOptions()));
 
-app.get('/api/health', async (_req, res) => {
-  const ai = getAiLoadStats();
-  let dbPing: { ok: boolean; engine: string; error?: string } = {
-    ok: false,
-    engine: 'unknown',
-  };
-  try {
-    dbPing = await pingDb();
-  } catch (e: any) {
-    dbPing = { ok: false, engine: 'unknown', error: String(e?.message || e) };
-  }
-
-  res.status(dbPing.ok ? 200 : 503).json({
-    ok: dbPing.ok,
-    build: getBuildInfo(),
-    db: dbPing.engine || (typeof dbEngine === 'function' ? dbEngine() : 'sqlite'),
-    db_ok: dbPing.ok,
-    stripe: stripeConfigured(),
-    paypal: paypalConfigured(),
-    pix: mpConfigured(),
-    n8n: n8nConfigured(),
-    n8n_status: n8nStatus(),
-    ai: aiConfigured(),
-    ai_providers: listAiProviders(),
-    plan_switch: allowPlanSwitch(),
-    jwt: jwtRotationStatus(),
-    webauthn: webauthnConfig(),
-    push: pushConfigured(),
-    smtp: smtpConfigured(),
-    ai_latency: {
-      groq: ai.stats.groq.latency,
-      gemini: ai.stats.gemini.latency,
-    },
-    http_latency: getHttpMetrics().global,
-    env: process.env.NODE_ENV || 'development',
-    time: new Date().toISOString(),
-  });
-});
+// live / ready / health (monitoramento)
+mountHealthRoutes(app);
 
 app.get('/api/metrics', (req, res) => {
   const secret = process.env.JOBS_SECRET?.trim();
