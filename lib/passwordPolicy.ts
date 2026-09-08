@@ -1,16 +1,13 @@
 /**
- * Política de senha forte (empresas + reset).
- * Mín. 12 caracteres, maiúscula, minúscula, número e símbolo.
+ * Política de senha da empresa.
+ * Mín. 8 caracteres, maiúscula, número e caractere especial.
  */
 const ESPECIAL = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/;
 
 export function validarSenhaEmpresa(senha: string): { ok: true } | { ok: false; error: string } {
   const s = String(senha || '');
-  if (s.length < 12) {
-    return { ok: false, error: 'A senha deve ter pelo menos 12 caracteres.' };
-  }
-  if (!/[a-z]/.test(s)) {
-    return { ok: false, error: 'A senha deve conter pelo menos uma letra minúscula.' };
+  if (s.length < 8) {
+    return { ok: false, error: 'A senha deve ter pelo menos 8 caracteres.' };
   }
   if (!/[A-Z]/.test(s)) {
     return { ok: false, error: 'A senha deve conter pelo menos uma letra maiúscula.' };
@@ -27,7 +24,6 @@ export function validarSenhaEmpresa(senha: string): { ok: true } | { ok: false; 
   return { ok: true };
 }
 
-/** Alias usado por lib/security e rotas novas. */
 export function validateStrongPassword(password: string): {
   ok: boolean;
   error?: string;
@@ -37,4 +33,4 @@ export function validateStrongPassword(password: string): {
 }
 
 export const SENHA_EMPRESA_HINT =
-  'Mín. 12 caracteres, maiúscula, minúscula, número e símbolo (!@#$%)';
+  'Mín. 8 caracteres, 1 maiúscula, 1 número e 1 símbolo (!@#$%)';

@@ -1,13 +1,12 @@
 /**
- * Preços públicos dos planos (mesmos valores editados no admin).
- * GET /api/planos — sem auth, para a landing.
- * Pagamentos: Pix (Mercado Pago) e PayPal — Stripe desligado.
+ * GET /api/planos — preços públicos.
+ * Pagamentos: Mercado Pago + PayPal.
  */
 import type { Express, Request, Response } from 'express';
 import { getDb } from '../lib/db.js';
 import { listPlanPrices, ensurePlanPricingSchema } from '../lib/planPricing.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { refreshPlanPricesFromDb, stripeConfigured } from '../stripeBilling.js';
+import { refreshPlanPricesFromDb } from '../stripeBilling.js';
 import { paypalConfigured } from '../lib/paypal.js';
 import { mpConfigured, mpTokenMode } from '../lib/mercadopago.js';
 
@@ -19,16 +18,24 @@ const LABELS: Record<string, string> = {
   rei: 'REI',
 };
 
+const OFFICIAL_LIMITS: Record<string, number> = {
+  inicial: 100,
+  pro: 300,
+  ultra: 800,
+  corporativo: 2500,
+  rei: 8000,
+};
+
 const FEATURES: Record<
   string,
   { features: string[]; missingFeatures?: string[]; highlight?: boolean }
 > = {
   inicial: {
-    features: ['150 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos'],
+    features: ['100 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos'],
     missingFeatures: ['Integrado com IA'],
   },
   pro: {
-    features: ['400 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos', '1 Relatório PDF/mês'],
+    features: ['300 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos', '1 Relatório PDF/mês'],
     missingFeatures: ['Integrado com IA'],
   },
   ultra: {
@@ -66,7 +73,8 @@ const FEATURES: Record<
 };
 
 function fmtBrl(n: number): string {
-  return `R$ ${Number(n).toFixed(2).replace('.', ',')}`;
+  const num = Number(n).toFixed(2).replace('.', ',');
+  return `R$\u00a0${num}`;
 }
 
 export function mountPublicPlanosRoutes(app: Express) {
@@ -85,7 +93,7 @@ export function mountPublicPlanosRoutes(app: Express) {
 
       const cards = planos.map((p: any) => {
         const plan = String(p.plan);
-        const limit = Number(p.review_limit) || 0;
+        const limit = OFFICIAL_LIMITS[plan] ?? Number(p.review_limit) || 0;
         const feat = FEATURES[plan] || { features: [] };
         const features = (feat.features || []).map((f) =>
           /feedbacks\/mês/i.test(f)
@@ -107,34 +115,23 @@ export function mountPublicPlanosRoutes(app: Express) {
           features,
           missingFeatures: feat.missingFeatures || [],
           highlight: Boolean(feat.highlight),
-          // métodos de pagamento deste plano (sem Stripe)
-          pagamento: ['pix', 'paypal'],
+          pagamento: ['mercadopago', 'paypal'],
         };
       });
 
       const order = ['inicial', 'pro', 'ultra', 'corporativo', 'rei'];
       cards.sort((a, b) => order.indexOf(a.plan) - order.indexOf(b.plan));
 
-      const pagamentos = {
-        stripe: false,
-        paypal: paypalConfigured(),
-        pix: mpConfigured(),
-        pix_token_mode: mpConfigured() ? mpTokenMode() : null,
-        preferidos: ['pix', 'paypal'].filter((m) =>
-          m === 'pix' ? mpConfigured() : paypalConfigured()
-        ),
-        endpoints: {
-          pix_avulso: 'POST /api/pix/avulso',
-          pix_recorrente: 'POST /api/pix/recorrente',
-          paypal: '/api/paypal/...',
-        },
-      };
-
-      res.setHeader('Cache-Control', 'public, max-age=30');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
       res.json({
         planos: cards,
         annual_discount_pct,
-        pagamentos,
+        pagamentos: {
+          stripe: false,
+          paypal: paypalConfigured(),
+          mercadopago: mpConfigured(),
+          pix_token_mode: mpConfigured() ? mpTokenMode() : null,
+        },
         updated_at: new Date().toISOString(),
       });
     })

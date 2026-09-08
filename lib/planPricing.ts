@@ -1,6 +1,6 @@
 /**
- * Preços dos planos editáveis pelo admin (SQLite), sem mexer no código.
- * Defaults = tabela oficial do produto.
+ * Preços dos planos editáveis pelo admin.
+ * Defaults oficiais: inicial=100, pro=300.
  */
 import type { Database } from 'sqlite';
 import { getDb } from './db.js';
@@ -13,8 +13,8 @@ export type PlanPriceRow = {
 };
 
 const DEFAULTS: PlanPriceRow[] = [
-  { plan: 'inicial', month_brl: 69.9, year_monthly_brl: 49.9, review_limit: 150 },
-  { plan: 'pro', month_brl: 109.9, year_monthly_brl: 99.9, review_limit: 400 },
+  { plan: 'inicial', month_brl: 69.9, year_monthly_brl: 49.9, review_limit: 100 },
+  { plan: 'pro', month_brl: 109.9, year_monthly_brl: 99.9, review_limit: 300 },
   { plan: 'ultra', month_brl: 199.9, year_monthly_brl: 149.9, review_limit: 800 },
   { plan: 'corporativo', month_brl: 499.9, year_monthly_brl: 429.9, review_limit: 2500 },
   { plan: 'rei', month_brl: 999.9, year_monthly_brl: 899.9, review_limit: 8000 },
@@ -46,6 +46,14 @@ export async function ensurePlanPricingSchema(db: Database = getDb()) {
         [d.plan, d.month_brl, d.year_monthly_brl, d.review_limit]
       );
     }
+  }
+
+  // Força limites oficiais (corrige legado 150/400 na nuvem)
+  for (const d of DEFAULTS) {
+    await db.run(
+      `UPDATE plan_prices SET review_limit = ?, updated_at = datetime('now') WHERE plan = ?`,
+      [d.review_limit, d.plan]
+    );
   }
 }
 
@@ -136,7 +144,6 @@ export async function updatePlanPrices(
   return listPlanPrices(db);
 }
 
-/** Aplica preços do banco sobre o mapa estático PLANOS (centavos). */
 export async function applyDbPricesToPlanos(
   planos: Record<string, any>,
   db: Database = getDb()

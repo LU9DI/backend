@@ -1,13 +1,14 @@
 /**
- * Filtra.IA — bootstrap da API
+ * Filtra.IA — bootstrap da API (produção)
  */
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import 'dotenv/config';
+import type { Server } from 'http';
 
 import { assertEnvOrExit } from './lib/env.js';
-import { initDB, getDb, dbEngine } from './lib/db.js';
+import { initDB, getDb, dbEngine, pingDb } from './lib/db.js';
 import { requireJwtSecret, setAuthCookie, autenticarToken } from './lib/auth.js';
 import { jwtRotationStatus } from './lib/jwtKeys.js';
 import { buildCorsOptions } from './lib/cors.js';
@@ -34,6 +35,7 @@ import { mountUnidadeRoutes } from './routes/unidadeRoutes.js';
 import { mountExportRoutes } from './routes/exportRoutes.js';
 import { mountPublicPlanosRoutes } from './routes/publicPlanosRoutes.js';
 import { mountAuditRoutes } from './routes/auditRoutes.js';
+import { mountN8nRoutes } from './routes/n8nRoutes.js';
 import { mountPasswordResetRoutes } from './passwordResetRoutes.js';
 import { mountAdminLoginRoute } from './adminLoginRoute.js';
 import { mountAdminPasswordResetRoutes } from './adminPasswordReset.js';
@@ -42,6 +44,7 @@ import { mountStripeRoutes } from './stripeRoutes.js';
 import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
 import { paypalConfigured } from './lib/paypal.js';
 import { mpConfigured } from './lib/mercadopago.js';
+import { n8nConfigured, n8nStatus } from './lib/n8n.js';
 import { aiConfigured, listAiProviders, getAiLoadStats } from './groqService.js';
 import { ensureUnidadesSchema } from './lib/unidades.js';
 import { ensureWebAuthnSchema, webauthnConfig } from './lib/webauthn.js';
@@ -52,6 +55,7 @@ import { ensureAuditSchema } from './lib/auditLog.js';
 import { ensureRetryQueue, startRetryWorker } from './lib/retryQueue.js';
 import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
+import { ensureRuntimeSchema } from './lib/schemaEnsure.js';
 import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
 import {
@@ -74,18 +78,31 @@ app.use(cookieParser());
 app.use(latencyMiddleware as any);
 app.use((req, res, next) => {
   if (req.originalUrl?.startsWith('/api/webhook/stripe')) return next();
-  return express.json({ limit: '20kb' })(req, res, next);
+  return express.json({ limit: '40kb' })(req, res, next);
 });
 app.use(cors(buildCorsOptions()));
 
-app.get('/api/health', (_req, res) => {
+app.get('/api/health', async (_req, res) => {
   const ai = getAiLoadStats();
-  res.json({
-    ok: true,
-    db: typeof dbEngine === 'function' ? dbEngine() : 'sqlite',
+  let dbPing: { ok: boolean; engine: string; error?: string } = {
+    ok: false,
+    engine: 'unknown',
+  };
+  try {
+    dbPing = await pingDb();
+  } catch (e: any) {
+    dbPing = { ok: false, engine: 'unknown', error: String(e?.message || e) };
+  }
+
+  res.status(dbPing.ok ? 200 : 503).json({
+    ok: dbPing.ok,
+    db: dbPing.engine || (typeof dbEngine === 'function' ? dbEngine() : 'sqlite'),
+    db_ok: dbPing.ok,
     stripe: stripeConfigured(),
     paypal: paypalConfigured(),
     pix: mpConfigured(),
+    n8n: n8nConfigured(),
+    n8n_status: n8nStatus(),
     ai: aiConfigured(),
     ai_providers: listAiProviders(),
     plan_switch: allowPlanSwitch(),
@@ -103,15 +120,25 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-app.get('/api/metrics', (_req, res) => {
+app.get('/api/metrics', (req, res) => {
+  const secret = process.env.JOBS_SECRET?.trim();
+  if (process.env.NODE_ENV === 'production' && secret) {
+    const got = String(req.headers['x-jobs-secret'] || '');
+    if (got !== secret) {
+      return res.status(401).json({ error: 'Não autorizado.' });
+    }
+  }
   res.json({
     time: new Date().toISOString(),
     http: getHttpMetrics(),
     ai: getAiLoadStats(),
+    n8n: n8nStatus(),
   });
 });
 
 const PORT = Number(process.env.PORT || 5000);
+let server: Server | null = null;
+let shuttingDown = false;
 
 async function runSentimentBackfillOnBoot() {
   if (process.env.BACKFILL_SENTIMENT === '0') return;
@@ -141,57 +168,50 @@ async function runLgpdSweepOnBoot() {
   }
 }
 
+function gracefulShutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`⏹  ${signal} — encerrando...`);
+  const force = setTimeout(() => process.exit(1), 10_000);
+  force.unref();
+  if (server) {
+    server.close(() => process.exit(0));
+  } else {
+    process.exit(0);
+  }
+}
+
 async function main() {
   await initDB();
-  try {
-    await ensureUnidadesSchema(getDb());
-  } catch (e) {
-    console.warn('ensureUnidadesSchema:', e);
-  }
-  try {
-    await ensureWebAuthnSchema(getDb());
-  } catch (e) {
-    console.warn('ensureWebAuthnSchema:', e);
-  }
-  try {
+
+  const boot = async (label: string, fn: () => Promise<void>) => {
+    try {
+      await fn();
+    } catch (e) {
+      console.warn(`${label}:`, e);
+    }
+  };
+
+  await boot('ensureRuntimeSchema', () => ensureRuntimeSchema(getDb()));
+  await boot('ensureUnidadesSchema', () => ensureUnidadesSchema(getDb()));
+  await boot('ensureWebAuthnSchema', () => ensureWebAuthnSchema(getDb()));
+  await boot('ensurePushSchema', async () => {
     await ensurePushSchema(getDb());
     initWebPush();
-  } catch (e) {
-    console.warn('ensurePushSchema:', e);
-  }
-  try {
-    await ensureAiUsageSchema(getDb());
-  } catch (e) {
-    console.warn('ensureAiUsageSchema:', e);
-  }
-  try {
-    await ensureOpsTables(getDb());
-  } catch (e) {
-    console.warn('ensureOpsTables:', e);
-  }
-  try {
-    await ensureAuditSchema(getDb());
-  } catch (e) {
-    console.warn('ensureAuditSchema:', e);
-  }
-  try {
+  });
+  await boot('ensureAiUsageSchema', () => ensureAiUsageSchema(getDb()));
+  await boot('ensureOpsTables', () => ensureOpsTables(getDb()));
+  await boot('ensureAuditSchema', () => ensureAuditSchema(getDb()));
+  await boot('plan pricing', async () => {
     await ensurePlanPricingSchema(getDb());
     await refreshPlanPricesFromDb(getDb());
-  } catch (e) {
-    console.warn('plan pricing:', e);
-  }
-  try {
+  });
+  await boot('retry queue', async () => {
     await ensureRetryQueue(getDb());
     registerAllRetryHandlers();
     startRetryWorker();
-  } catch (e) {
-    console.warn('retry queue:', e);
-  }
-  try {
-    await ensureReviewTreatmentColumns(getDb());
-  } catch (e) {
-    console.warn('treatment columns:', e);
-  }
+  });
+  await boot('treatment columns', () => ensureReviewTreatmentColumns(getDb()));
 
   await runSentimentBackfillOnBoot();
   await runLgpdSweepOnBoot();
@@ -216,6 +236,7 @@ async function main() {
   mountExportRoutes(app);
   mountPublicPlanosRoutes(app);
   mountAuditRoutes(app);
+  mountN8nRoutes(app);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
@@ -226,10 +247,16 @@ async function main() {
   app.use(notFoundHandler);
   app.use(errorHandler);
 
-  console.log(`💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'}`);
-  app.listen(PORT, () => {
+  console.log(
+    `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix/MP: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | n8n: ${n8nConfigured() ? 'ok' : 'OFF'}`
+  );
+
+  server = app.listen(PORT, () => {
     console.log(`🚀 API Filtra.IA em http://localhost:${PORT}`);
   });
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }
 
 main().catch((e) => {
