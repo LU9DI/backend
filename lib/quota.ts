@@ -5,15 +5,15 @@ import { getCurrentMonth } from './planUtils.js';
 export const PLAN_FEEDBACK_LIMITS: Record<string, number> = {
   trial: 30,
   teste: 30,
-  inicial: 150,
-  pro: 400,
+  inicial: 100,
+  pro: 300,
   ultra: 800,
   corporativo: 2500,
   rei: 8000,
 };
 
 /**
- * Teto mensal de tokens de IA por empresa (economia no início).
+ * Teto mensal de tokens de IA por empresa.
  * Inicial/Pro = 0 (sem IA). Trial baixo. Ultra+ sobe gradualmente.
  */
 export const PLAN_TOKEN_LIMITS: Record<string, number> = {
@@ -26,10 +26,7 @@ export const PLAN_TOKEN_LIMITS: Record<string, number> = {
   rei: 1_200_000,
 };
 
-/**
- * Respostas/tags de IA: trial (demo), Ultra, Corporativo e Rei.
- * Inicial e Pro NÃO têm IA (só volume + WPP + gráficos).
- */
+/** Inicial e Pro NÃO têm IA. */
 export function planTemIA(plan: string | null | undefined): boolean {
   const p = String(plan || '').toLowerCase();
   if (p === 'inicial' || p === 'pro') return false;
@@ -51,16 +48,18 @@ export async function tokensUsadosMes(empresaId: string): Promise<number> {
   const mes = getCurrentMonth();
   const row = await db.get(
     `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
-     WHERE empresa_id = ? AND substr(criado_em, 1, 7) = ?`,
+     WHERE empresa_id = ? AND substr(criado_em::text, 1, 7) = ?`,
     [empresaId, mes]
+  ).catch(async () =>
+    db.get(
+      `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
+       WHERE empresa_id = ? AND substr(criado_em, 1, 7) = ?`,
+      [empresaId, mes]
+    )
   );
-  return Number(row?.t || 0);
+  return Number((row as any)?.t || 0);
 }
 
-/**
- * Bloqueia chamada de IA se a empresa estourou o teto mensal de tokens do plano.
- * Retorna { ok, used, limit }.
- */
 export async function assertEmpresaTokenQuota(
   empresaId: string | null | undefined,
   plan: string | null | undefined
@@ -95,10 +94,19 @@ export async function checkQuota(plan: string, type: 'tags' | 'respostas'): Prom
 export async function contarReviewsMes(empresaId: string): Promise<number> {
   const db = getDb();
   const mes = getCurrentMonth();
-  const row = await db.get(
-    `SELECT COUNT(*) as c FROM reviews
-     WHERE empresa_id = ? AND substr(createdAt, 1, 7) = ?`,
-    [empresaId, mes]
-  );
-  return Number(row?.c || 0);
+  try {
+    const row = await db.get(
+      `SELECT COUNT(*) as c FROM reviews
+       WHERE empresa_id = ? AND substr(createdAt::text, 1, 7) = ?`,
+      [empresaId, mes]
+    );
+    return Number(row?.c || 0);
+  } catch {
+    const row = await db.get(
+      `SELECT COUNT(*) as c FROM reviews
+       WHERE empresa_id = ? AND substr(createdAt, 1, 7) = ?`,
+      [empresaId, mes]
+    );
+    return Number(row?.c || 0);
+  }
 }
