@@ -15,6 +15,7 @@ import { buildCorsOptions } from './lib/cors.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { requestIdMiddleware, securityHeaders } from './middleware/security.js';
 import { latencyMiddleware, getHttpMetrics } from './lib/metrics.js';
+import { getBuildInfo } from './lib/buildInfo.js';
 import { mountTrialRoutes } from './routes/trialRoutes.js';
 import { mountAuthRoutes } from './routes/authRoutes.js';
 import { mountEmpresaRoutes } from './routes/empresaRoutes.js';
@@ -96,6 +97,7 @@ app.get('/api/health', async (_req, res) => {
 
   res.status(dbPing.ok ? 200 : 503).json({
     ok: dbPing.ok,
+    build: getBuildInfo(),
     db: dbPing.engine || (typeof dbEngine === 'function' ? dbEngine() : 'sqlite'),
     db_ok: dbPing.ok,
     stripe: stripeConfigured(),
@@ -130,6 +132,7 @@ app.get('/api/metrics', (req, res) => {
   }
   res.json({
     time: new Date().toISOString(),
+    build: getBuildInfo(),
     http: getHttpMetrics(),
     ai: getAiLoadStats(),
     n8n: n8nStatus(),
@@ -247,6 +250,8 @@ async function main() {
   app.use(notFoundHandler);
   app.use(errorHandler);
 
+  const build = getBuildInfo();
+  console.log(`📦 build ${build.version} marker=${build.marker}`);
   console.log(
     `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix/MP: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | n8n: ${n8nConfigured() ? 'ok' : 'OFF'}`
   );

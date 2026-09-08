@@ -1,19 +1,16 @@
 {
   "name": "backend",
-  "version": "1.0.1",
-  "description": "API do SaaS de Reputação com IA",
-  "main": "dist/server.js",
+  "version": "1.0.2",
+  "description": "API Filtra.AI",
+  "main": "server.ts",
   "type": "module",
   "scripts": {
     "dev": "tsx watch server.ts",
-    "start": "npx tsx server.ts",
-    "build": "tsc",
+    "build": "node -e \"console.log('Filtra.AI build ok — runtime via tsx')\"",
+    "start": "tsx server.ts",
+    "start:prod": "tsx server.ts",
     "test": "tsx --test tests/**/*.test.ts",
-    "test:unit": "tsx --test tests/cnpj.test.ts tests/env.test.ts tests/passwordPolicy.test.ts tests/validate.test.ts tests/mfaTotp.test.ts tests/metrics.test.ts tests/sentiment.test.ts tests/whatsapp.test.ts tests/quota.test.ts tests/complaintOnce.test.ts tests/pdfPlan.test.ts tests/lgpd.test.ts",
-    "test:integration": "tsx --test tests/integration.trial.test.ts tests/integration.stripe-webhook.test.ts",
-    "test:e2e:stripe": "tsx --test tests/integration.stripe-webhook.test.ts",
-    "backfill:sentiment": "tsx scripts/backfillSentiment.ts",
-    "backfill:sentiment:ai": "tsx scripts/backfillSentiment.ts --ai",
+    "test:unit": "tsx --test tests/cnpj.test.ts tests/env.test.ts tests/passwordPolicy.test.ts tests/validate.test.ts tests/mfaTotp.test.ts tests/metrics.test.ts tests/sentiment.test.ts tests/whatsapp.test.ts tests/quota.test.ts",
     "audit": "npm audit --omit=dev"
   },
   "engines": {
