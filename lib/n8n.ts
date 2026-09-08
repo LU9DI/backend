@@ -5,14 +5,12 @@
  *   N8N_WEBHOOK_URL=https://seu-n8n.../webhook/filtra
  *   N8N_WEBHOOK_SECRET=opcional (header X-Filtra-Secret)
  *   N8N_TIMEOUT_MS=8000
- *
- * Eventos enviados (JSON):
- *   trial.activated | review.critical | payment.activated | lead.captured
  */
 
 export type N8nEvent =
   | 'trial.activated'
   | 'review.critical'
+  | 'review.created'
   | 'payment.activated'
   | 'lead.captured'
   | 'ping';
@@ -38,11 +36,10 @@ function timeoutMs(): number {
 
 /**
  * Dispara evento para o n8n. Nunca lança — falhas só logam.
- * Retorna true se HTTP 2xx.
  */
 export async function notifyN8n(
-  event: N8nEvent,
-  payload: Record<string, unknown>
+  event: N8nEvent | string,
+  payload: Record<string, unknown> = {}
 ): Promise<boolean> {
   const url = process.env.N8N_WEBHOOK_URL?.trim();
   if (!url) return false;
@@ -59,9 +56,7 @@ export async function notifyN8n(
     'User-Agent': 'Filtra.AI/1.0',
   };
   const secret = process.env.N8N_WEBHOOK_SECRET?.trim();
-  if (secret) {
-    headers['X-Filtra-Secret'] = secret;
-  }
+  if (secret) headers['X-Filtra-Secret'] = secret;
 
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs());
@@ -87,13 +82,25 @@ export async function notifyN8n(
   }
 }
 
+/** Alias usado pelos hooks internos. */
+export async function dispatchN8nEvent(
+  event: string,
+  payload: Record<string, unknown>,
+  context?: { empresaId?: string; slug?: string | null }
+): Promise<boolean> {
+  return notifyN8n(event, {
+    ...payload,
+    ...(context?.empresaId ? { _empresa_id: context.empresaId } : {}),
+    ...(context?.slug ? { _slug: context.slug } : {}),
+  });
+}
+
 export function verifyInboundSecret(headerVal: string | undefined): boolean {
   const expected = (
     process.env.N8N_INBOUND_SECRET ||
     process.env.N8N_WEBHOOK_SECRET ||
     ''
   ).trim();
-  // Sem secret configurado: em produção bloqueia; em dev libera
   if (!expected) {
     return process.env.NODE_ENV !== 'production';
   }

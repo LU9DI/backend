@@ -2,15 +2,7 @@
  * Pontos de disparo n8n a partir dos fluxos internos (trial, review, pagamento).
  * Fire-and-forget — nunca quebra a requisição principal.
  */
-import * as n8n from './n8n.js';
-
-const dispatchN8nEvent = (n8n as unknown as {
-  dispatchN8nEvent: (
-    event: string,
-    payload: Record<string, unknown>,
-    context: { empresaId: string; slug?: string | null }
-  ) => Promise<unknown>;
-}).dispatchN8nEvent;
+import { dispatchN8nEvent } from './n8n.js';
 
 export function n8nOnTrialActivated(opts: {
   empresaId: string;
