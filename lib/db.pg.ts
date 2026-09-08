@@ -1,6 +1,5 @@
 /**
  * Adapter Postgres com API compatível com sqlite (get/run/all/exec).
- * Ativado quando DATABASE_URL começa com postgres.
  */
 import pg from 'pg';
 import type { Database } from 'sqlite';
@@ -14,10 +13,6 @@ function convertPlaceholders(sql: string): string {
   return sql.replace(/\?/g, () => `$${++n}`);
 }
 
-/**
- * Traduções SQLite → Postgres.
- * Ordem importa: funções datetime('now') ANTES do tipo DATETIME.
- */
 function adaptSql(sql: string): string {
   let s = sql;
 
@@ -28,13 +23,23 @@ function adaptSql(sql: string): string {
     }
   }
 
-  // Funções de data SQLite → Postgres (antes de trocar o tipo DATETIME)
+  // date('now', 'start of month') → date_trunc
+  s = s.replace(
+    /date\s*\(\s*'now'\s*,\s*'start of month'\s*\)/gi,
+    "date_trunc('month', NOW())"
+  );
+  s = s.replace(
+    /date\s*\(\s*"now"\s*,\s*"start of month"\s*\)/gi,
+    "date_trunc('month', NOW())"
+  );
+  s = s.replace(/date\s*\(\s*'now'\s*\)/gi, 'CURRENT_DATE');
+  s = s.replace(/date\s*\(\s*"now"\s*\)/gi, 'CURRENT_DATE');
+
   s = s.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'NOW()');
   s = s.replace(/datetime\s*\(\s*"now"\s*\)/gi, 'NOW()');
   s = s.replace(/CURRENT_TIMESTAMP/gi, 'NOW()');
   s = s.replace(/IFNULL\s*\(/gi, 'COALESCE(');
 
-  // Tipos SQLite → Postgres (word-boundary evita tocar em TIMESTAMPTZ)
   s = s.replace(/\bDATETIME\b/gi, 'TIMESTAMPTZ');
   s = s.replace(/\bREAL\b/gi, 'DOUBLE PRECISION');
   s = s.replace(/INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT/gi, 'SERIAL PRIMARY KEY');
@@ -109,7 +114,6 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
             await c.query(st);
           } catch (e: any) {
             const msg = String(e?.message || e);
-            // Já existe / coluna duplicada — não derruba o boot
             if (
               /already exists/i.test(msg) ||
               e?.code === '42P07' ||
