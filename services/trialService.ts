@@ -1,5 +1,6 @@
 /**
  * Regras de negócio do trial (7 dias).
+ * Compatível com SQLite e Postgres.
  */
 import crypto from 'crypto';
 import type { Database } from 'sqlite';
@@ -9,6 +10,7 @@ import { createUsuarioForEmpresa } from '../passwordResetRoutes.js';
 import { normalizarWhatsapp } from '../lib/whatsapp.js';
 import { notificarTrialAtivado } from '../lib/notifications.js';
 import { setAuthCookie, signAccessToken } from '../lib/auth.js';
+import { normalizarCnpj } from '../lib/cnpj.js';
 
 const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(
   /\/$/,
@@ -56,14 +58,24 @@ export class TrialValidationError extends Error {
   }
 }
 
+function isUniqueViolation(e: any): boolean {
+  const code = String(e?.code || '');
+  const msg = String(e?.message || e || '');
+  return (
+    code === '23505' || // Postgres
+    code === 'SQLITE_CONSTRAINT' ||
+    /unique|duplicate|constraint/i.test(msg)
+  );
+}
+
 export async function ativarTrial(
   input: TrialInput,
   db: Database = getDb(),
   res?: Response
 ): Promise<TrialResult> {
-  const cnpj = String(input.cnpj);
-  const nome = String(input.nome_empresa);
-  const email = String(input.email);
+  const cnpj = normalizarCnpj(String(input.cnpj));
+  const nome = String(input.nome_empresa).trim();
+  const email = String(input.email).trim().toLowerCase();
   const senha = String(input.senha);
   const googleReviewUrl = input.google_review_url ? String(input.google_review_url) : '';
   const wpp = normalizarWhatsapp(input.whatsapp || null);
@@ -74,63 +86,85 @@ export async function ativarTrial(
     );
   }
 
+  // Conflito antecipado (mensagem clara)
+  const existente = await db.get(`SELECT id FROM empresas WHERE cnpj = ?`, [cnpj]);
+  if (existente) {
+    throw new TrialConflictError();
+  }
+
   const id = crypto.randomUUID();
   const slug = await slugUnico(slugify(nome));
-  const criadoEm = new Date();
-  const expiraEm = new Date(criadoEm.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const criadoEm = new Date().toISOString();
+  const expiraEm = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
   try {
     await db.run(
       `INSERT INTO empresas (id, cnpj, nome_empresa, slug, google_review_url, whatsapp_suporte, status, plan, criado_em, expira_em)
        VALUES (?, ?, ?, ?, ?, ?, 'trial', 'trial', ?, ?)`,
-      [
-        id,
-        cnpj,
-        nome,
-        slug,
-        googleReviewUrl || null,
-        wpp,
-        criadoEm.toISOString(),
-        expiraEm.toISOString(),
-      ]
+      [id, cnpj, nome, slug, googleReviewUrl || null, wpp, criadoEm, expiraEm]
     );
   } catch (e: any) {
-    if (String(e.code) === 'SQLITE_CONSTRAINT') {
+    console.error('[trial] insert empresa:', e?.code, e?.message || e);
+    if (isUniqueViolation(e)) {
       throw new TrialConflictError();
     }
-    throw e;
+    throw new TrialValidationError(
+      `Falha ao criar empresa: ${String(e?.message || e).slice(0, 180)}`
+    );
   }
 
   let usuarioId: string;
   try {
-    const u = await createUsuarioForEmpresa(db, { empresaId: id, cnpj, nome, email, senha });
-    usuarioId = (u as any)?.id || crypto.randomUUID();
+    const u = await createUsuarioForEmpresa(db, {
+      empresaId: id,
+      cnpj,
+      nome,
+      email,
+      senha,
+    });
+    usuarioId = u.id;
   } catch (e: any) {
-    await db.run('DELETE FROM empresas WHERE id = ?', [id]);
-    throw new TrialValidationError(e.message || 'Falha ao criar usuário.');
+    console.error('[trial] create usuario:', e?.message || e);
+    try {
+      await db.run('DELETE FROM empresas WHERE id = ?', [id]);
+    } catch {
+      /* */
+    }
+    if (e instanceof TrialValidationError) throw e;
+    throw new TrialValidationError(e?.message || 'Falha ao criar usuário.');
   }
 
-  // Busca usuário real para JWT
-  const usuario = await db.get(
-    `SELECT id, nome_funcionario, empresa_id FROM usuarios WHERE empresa_id = ? ORDER BY rowid DESC LIMIT 1`,
-    [id]
-  );
+  // Postgres não tem rowid — ordenar por id / created
+  const usuario =
+    (await db.get(
+      `SELECT id, nome_funcionario, empresa_id FROM usuarios WHERE empresa_id = ? LIMIT 1`,
+      [id]
+    )) ||
+    (await db.get(`SELECT id, nome_funcionario, empresa_id FROM usuarios WHERE id = ?`, [
+      usuarioId,
+    ]));
 
   const tokenPayload = {
     id: String(usuario?.id || usuarioId),
     nome_funcionario: String(usuario?.nome_funcionario || nome),
     empresa_id: id,
   };
-  const token = signAccessToken(tokenPayload);
-  if (res) setAuthCookie(res, token);
 
-  // E-mail de boas-vindas (não bloqueia a resposta)
+  let token: string;
+  try {
+    token = signAccessToken(tokenPayload);
+    if (res) setAuthCookie(res, token);
+  } catch (e: any) {
+    console.error('[trial] JWT:', e?.message || e);
+    throw new TrialValidationError('Falha ao gerar token de acesso. Verifique JWT_SECRET.');
+  }
+
   notificarTrialAtivado({
     email,
     nomeEmpresa: nome,
     slug,
     empresaId: id,
-    expiraEm: expiraEm.toISOString(),
+    expiraEm,
     locale: input.locale,
   }).catch((e) => console.warn('e-mail trial:', e?.message || e));
 
@@ -140,7 +174,7 @@ export async function ativarTrial(
     slug,
     link_acesso: `${APP_URL}/avaliacao/${slug}`,
     link_painel: `${APP_URL}/painel/${slug}`,
-    expira_em: expiraEm.toISOString(),
+    expira_em: expiraEm,
     token,
     tokenPayload,
   };

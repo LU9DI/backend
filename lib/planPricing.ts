@@ -1,6 +1,5 @@
 /**
- * Preços dos planos editáveis pelo admin (SQLite), sem mexer no código.
- * Defaults = tabela oficial do produto.
+ * Preços dos planos editáveis pelo admin, sem mexer no código.
  */
 import type { Database } from 'sqlite';
 import { getDb } from './db.js';
@@ -47,14 +46,14 @@ export async function ensurePlanPricingSchema(db: Database = getDb()) {
       );
     }
   }
-  // Migração pontual: limites de feedback oficial (não sobrescreve se admin já customizou outros valores)
+  // Oficial: inicial 100, pro 300 (corrige legado 150/400)
   await db.run(
     `UPDATE plan_prices SET review_limit = 100, updated_at = datetime('now')
-     WHERE plan = 'inicial' AND review_limit IN (150, 0)`
+     WHERE plan = 'inicial' AND (review_limit = 150 OR review_limit = 0 OR review_limit IS NULL)`
   );
   await db.run(
     `UPDATE plan_prices SET review_limit = 300, updated_at = datetime('now')
-     WHERE plan = 'pro' AND review_limit IN (400, 0)`
+     WHERE plan = 'pro' AND (review_limit = 400 OR review_limit = 0 OR review_limit IS NULL)`
   );
 }
 
@@ -145,7 +144,6 @@ export async function updatePlanPrices(
   return listPlanPrices(db);
 }
 
-/** Aplica preços do banco sobre o mapa estático PLANOS (centavos). */
 export async function applyDbPricesToPlanos(
   planos: Record<string, any>,
   db: Database = getDb()

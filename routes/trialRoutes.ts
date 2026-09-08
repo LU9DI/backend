@@ -31,6 +31,7 @@ export function mountTrialRoutes(app: Express) {
               ? String(req.body.google_review_url)
               : undefined,
             whatsapp: req.body.whatsapp ? String(req.body.whatsapp) : undefined,
+            locale: req.body.locale ? String(req.body.locale) : undefined,
           },
           undefined,
           res
@@ -41,7 +42,12 @@ export function mountTrialRoutes(app: Express) {
           return res.status(e.status).json({ error: e.message });
         }
         if (e?.status) return res.status(e.status).json({ error: e.message });
-        throw e;
+        console.error('[trial/ativar]', e?.code, e?.message || e);
+        // Mensagem útil sem vazar stack
+        return res.status(500).json({
+          error: 'Erro ao ativar trial.',
+          detail: String(e?.message || e).slice(0, 200),
+        });
       }
     })
   );
