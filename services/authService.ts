@@ -37,12 +37,23 @@ export async function loginEmpresa(
   db: Database = getDb(),
   req?: Request
 ): Promise<LoginResult> {
-  const cnpj = String(input.cnpj);
-  const senha = String(input.senha);
+  const cnpj = String(input.cnpj || '').replace(/\D/g, '');
+  const senha = String(input.senha || '');
   const ip = req ? clientIp(req) : null;
   const ua = req ? String(req.headers['user-agent'] || '').slice(0, 200) : null;
 
-  const usuario = await db.get('SELECT * FROM usuarios WHERE cnpj = ?', [cnpj]);
+  if (cnpj.length !== 14 || !senha) {
+    throw new AuthUnauthorizedError();
+  }
+
+  let usuario: any;
+  try {
+    usuario = await db.get('SELECT * FROM usuarios WHERE cnpj = ?', [cnpj]);
+  } catch (e: any) {
+    console.error('[auth] select usuario:', e?.message || e);
+    throw e;
+  }
+
   if (!usuario?.senha_hash) {
     await writeAudit(db, {
       action: 'auth.login_failed',
