@@ -1,14 +1,13 @@
 /**
  * Inicialização e acesso ao banco.
- * - Dev / testes: SQLite (padrão)
- * - Produção: Postgres se DATABASE_URL estiver definido (recomendado)
+ * - Produção: Postgres obrigatório (DATABASE_URL)
+ * - Dev: SQLite opcional (pacotes em devDependencies)
  */
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
-import sqlite3 from 'sqlite3';
-import { open, type Database } from 'sqlite';
+import type { Database } from 'sqlite';
 import { fileURLToPath } from 'url';
 import { ensureAuthColumns } from '../passwordResetRoutes.js';
 import { ensureMfaColumns } from '../mfa.js';
@@ -31,17 +30,28 @@ export function dbEngine(): 'sqlite' | 'postgres' {
 }
 
 async function initSqlite(): Promise<Database> {
+  // Import dinâmico — sqlite3 NÃO vai no bundle de produção (só devDependency)
+  let sqlite3: any;
+  let open: any;
+  try {
+    sqlite3 = (await import('sqlite3')).default;
+    open = (await import('sqlite')).open;
+  } catch {
+    throw new Error(
+      'SQLite não instalado. Em produção use DATABASE_URL=postgresql://... ' +
+        'Em dev: npm i -D sqlite sqlite3'
+    );
+  }
+
   const dbPath =
     process.env.SQLITE_DB_PATH ||
-    (isProd
-      ? '/data/database.sqlite'
-      : path.resolve(__dirname, '..', '..', 'data', 'database.sqlite'));
+    path.resolve(__dirname, '..', '..', 'data', 'database.sqlite');
 
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = await open({ filename: dbPath, driver: sqlite3.Database });
   _engine = 'sqlite';
   console.log(`💾 SQLite: ${dbPath}`);
-  return db;
+  return db as Database;
 }
 
 async function initPostgres(): Promise<Database> {
@@ -57,12 +67,10 @@ export async function initDB(): Promise<Database> {
 
   if (isPostgresUrl(url)) {
     _db = await initPostgres();
-  } else if (isProd && !process.env.SQLITE_ALLOW_PROD) {
-    console.warn(
-      '⚠️  PRODUÇÃO sem DATABASE_URL Postgres. Usando SQLite. ' +
-        'Defina DATABASE_URL=postgresql://... ou SQLITE_ALLOW_PROD=1 para silenciar.'
+  } else if (isProd) {
+    throw new Error(
+      'PRODUÇÃO exige DATABASE_URL Postgres. SQLite não é permitido em produção.'
     );
-    _db = await initSqlite();
   } else {
     _db = await initSqlite();
   }
@@ -130,20 +138,25 @@ export async function initDB(): Promise<Database> {
   await ensureAuthColumns(_db);
   await ensureMfaColumns(_db);
 
-  const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
-  const adminExiste = await _db.get('SELECT * FROM usuarios WHERE email = ?', [adminMail]);
-  if (!adminExiste) {
-    const senhaPadrao = process.env.ADMIN_PASSWORD || 'MudeEstaSenha123!';
-    const hash = await bcrypt.hash(senhaPadrao, 12);
-    try {
-      await _db.run(
-        'INSERT INTO usuarios (id, cnpj, nome_funcionario, empresa_id, senha_hash, email) VALUES (?, ?, ?, ?, ?, ?)',
-        [crypto.randomUUID(), '00000000000000', 'Admin', 'admin', hash, adminMail]
-      );
-      console.log(`🔑 Admin criado: ${adminMail}`);
-    } catch (e: any) {
-      console.warn('Admin seed:', e?.message || e);
+  // Admin seed: só se ADMIN_EMAIL + ADMIN_PASSWORD definidos (sem senha padrão fraca)
+  const adminMail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+  const adminPass = process.env.ADMIN_PASSWORD || '';
+  if (adminMail && adminPass.length >= 12) {
+    const adminExiste = await _db.get('SELECT id FROM usuarios WHERE email = ?', [adminMail]);
+    if (!adminExiste) {
+      const hash = await bcrypt.hash(adminPass, 12);
+      try {
+        await _db.run(
+          'INSERT INTO usuarios (id, cnpj, nome_funcionario, empresa_id, senha_hash, email) VALUES (?, ?, ?, ?, ?, ?)',
+          [crypto.randomUUID(), '00000000000000', 'Admin', 'admin', hash, adminMail]
+        );
+        console.log(`🔑 Admin criado: ${adminMail}`);
+      } catch (e: any) {
+        console.warn('Admin seed:', e?.message || e);
+      }
     }
+  } else if (isProd && !adminMail) {
+    console.warn('⚠️  ADMIN_EMAIL não definido — crie o admin manualmente se ainda não existir.');
   }
 
   return _db;
