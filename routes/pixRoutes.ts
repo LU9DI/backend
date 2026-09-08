@@ -1,5 +1,12 @@
 /**
  * Rotas Pix (Mercado Pago): avulso, agendado, recorrente + webhook.
+ *
+ * Segurança:
+ * - verifica x-signature quando MP_WEBHOOK_SECRET está definido
+ * - idempotência por payment id + action
+ * - registra payment_events
+ * - trata approved / rejected / refunded / charged_back
+ * - X-Idempotency-Key nas chamadas de saída (lib/mercadopago)
  */
 import type { Express, Request, Response } from 'express';
 import type { Database } from 'sqlite';
@@ -20,6 +27,11 @@ import { resolvePlano } from '../stripeBilling.js';
 import { activatePlan, blockEmpresa } from '../services/billingService.js';
 import { logWebhookEvent } from '../lib/opsLog.js';
 import { enqueueRetry } from '../lib/retryQueue.js';
+import {
+  logPaymentEvent,
+  claimWebhookOnce,
+  markWebhookResult,
+} from '../lib/paymentEvents.js';
 
 async function ensurePixTables(db: Database) {
   await db.exec(`
@@ -108,10 +120,11 @@ async function savePixRow(
     );
   } catch (e: any) {
     console.warn('[pix] INSERT falhou, tentando UPDATE:', e?.message || e);
-    await db.run(
-      `UPDATE pix_payments SET status = ?, updated_at = ? WHERE id = ?`,
-      [row.status, now, row.id]
-    );
+    await db.run(`UPDATE pix_payments SET status = ?, updated_at = ? WHERE id = ?`, [
+      row.status,
+      now,
+      row.id,
+    ]);
   }
 }
 
@@ -173,6 +186,7 @@ export function mountPixRoutes(app: Express) {
       provider: 'mercadopago',
       token_mode: mpTokenMode(),
       modes: ['avulso', 'agendado', 'recorrente'],
+      webhook_signature: Boolean(process.env.MP_WEBHOOK_SECRET?.trim()),
       endpoints: {
         avulso: 'POST /api/pix/avulso',
         agendado: 'POST /api/pix/agendado',
@@ -180,13 +194,7 @@ export function mountPixRoutes(app: Express) {
         poll: 'GET /api/pix/payment/:id',
         webhook: 'POST /api/webhook/mercadopago',
       },
-      dica:
-        mpTokenMode() === 'unknown'
-          ? 'MP_ACCESS_TOKEN deve começar com APP_USR- (produção) ou TEST- (sandbox).'
-          : mpTokenMode() === 'test'
-            ? 'Token de TESTE ativo.'
-            : 'Token de PRODUÇÃO ativo.',
-      fix: 'v2-postgres-insert',
+      fix: 'v3-payment-events-idempotency',
     });
   });
 
@@ -218,10 +226,17 @@ export function mountPixRoutes(app: Express) {
           cpf: req.body?.cpf ? String(req.body.cpf) : null,
         });
       } catch (e: any) {
+        await logPaymentEvent(getDb(), {
+          source: 'mercadopago',
+          event_type: 'pix_avulso_create',
+          empresa_id: empresaId,
+          plano_key: plano,
+          status: 'error',
+          detail: e?.message || 'create failed',
+        }).catch(() => {});
         return mpHttpError(res, e);
       }
 
-      // Persistência não pode derrubar a resposta se o Pix já foi gerado no MP
       try {
         const db = getDb();
         await ensurePixTables(db);
@@ -237,6 +252,16 @@ export function mountPixRoutes(app: Express) {
           ticket_url: created.ticketUrl,
           external_reference: created.externalReference,
           expires_at: created.expiresAt,
+        });
+        await logPaymentEvent(db, {
+          source: 'mercadopago',
+          event_type: 'pix_avulso_create',
+          external_id: created.paymentId,
+          empresa_id: empresaId,
+          plano_key: plano,
+          amount: created.amount,
+          status: created.status,
+          detail: 'qr gerado',
         });
       } catch (e: any) {
         console.error('[pix] falha ao salvar no banco (Pix já criado no MP):', e?.message || e);
@@ -463,15 +488,34 @@ export function mountPixRoutes(app: Express) {
       const xSig = (req.headers['x-signature'] as string) || '';
       const xReq = (req.headers['x-request-id'] as string) || '';
 
-      if (process.env.MP_WEBHOOK_SECRET?.trim() && xSig) {
+      // Assinatura: obrigatória em produção se MP_WEBHOOK_SECRET estiver setado
+      const secret = process.env.MP_WEBHOOK_SECRET?.trim();
+      if (secret) {
+        if (!xSig) {
+          await logWebhookEvent(db, {
+            source: 'mercadopago',
+            event_type: type || 'unknown',
+            status: 'error',
+            detail: 'x-signature ausente',
+          });
+          return res.status(401).json({ error: 'Assinatura ausente' });
+        }
         const okSig = verifyMpWebhookSignature({
           xSignature: xSig,
           xRequestId: xReq,
           dataId: dataId || null,
         });
         if (!okSig) {
+          await logWebhookEvent(db, {
+            source: 'mercadopago',
+            event_type: type || 'unknown',
+            status: 'error',
+            detail: 'assinatura inválida',
+          });
           return res.status(401).json({ error: 'Assinatura inválida' });
         }
+      } else if (process.env.NODE_ENV === 'production') {
+        console.warn('[mp webhook] MP_WEBHOOK_SECRET não definido — assinatura não verificada');
       }
 
       const topic = String(req.query.topic || body.topic || type || '');
@@ -482,11 +526,19 @@ export function mountPixRoutes(app: Express) {
           const paymentId = qid || dataId;
           if (!paymentId) return res.json({ ok: true, action: 'no_id' });
 
+          // Idempotência: mesmo payment+tipo só processa 1x
+          const idemKey = `${paymentId}:${type || topic || 'payment'}`;
+          const first = await claimWebhookOnce(db, 'mercadopago', idemKey);
+          if (!first) {
+            return res.json({ ok: true, action: 'duplicate', payment_id: paymentId });
+          }
+
           const remote = await getPayment(paymentId);
           const status = String(remote.status || '');
           const parsed = parseExternalRef(remote.external_reference);
           const empresaId = remote.metadata?.empresa_id || parsed.empresaId || null;
           const planoKey = remote.metadata?.plano || parsed.planoKey || null;
+          const amount = Number(remote.transaction_amount) || null;
 
           await db.run(`UPDATE pix_payments SET status = ?, updated_at = ? WHERE id = ?`, [
             status,
@@ -494,20 +546,52 @@ export function mountPixRoutes(app: Express) {
             paymentId,
           ]);
 
+          await logPaymentEvent(db, {
+            source: 'mercadopago',
+            event_type: type || topic || 'payment',
+            external_id: paymentId,
+            empresa_id: empresaId ? String(empresaId) : null,
+            plano_key: planoKey,
+            amount,
+            status,
+            detail: remote.status_detail || null,
+          });
+
           if (status === 'approved' && empresaId) {
             const result = await activateFromPix(db, {
               empresaId: String(empresaId),
               planoKey,
               paymentId,
             });
+            await markWebhookResult(db, 'mercadopago', idemKey, 'activate');
+            await logWebhookEvent(db, {
+              source: 'mercadopago',
+              event_type: type || topic,
+              status: 'ok',
+              detail: `activate ${empresaId}`,
+            });
             return res.json({ ok: true, action: 'activate', ...result });
+          }
+
+          // Pagamentos falhos / estorno
+          if (['rejected', 'cancelled'].includes(status)) {
+            await markWebhookResult(db, 'mercadopago', idemKey, status);
+            await logWebhookEvent(db, {
+              source: 'mercadopago',
+              event_type: type || topic,
+              status: 'ok',
+              detail: `failed ${status} ${paymentId}`,
+            });
+            return res.json({ ok: true, action: 'failed', status });
           }
 
           if (['refunded', 'charged_back'].includes(status) && empresaId) {
             await blockEmpresa(db, String(empresaId), { notify: true, tipo: 'assinatura' });
-            return res.json({ ok: true, action: 'block' });
+            await markWebhookResult(db, 'mercadopago', idemKey, 'block');
+            return res.json({ ok: true, action: 'block', status });
           }
 
+          await markWebhookResult(db, 'mercadopago', idemKey, status);
           return res.json({ ok: true, action: 'status', status });
         }
 
@@ -530,6 +614,7 @@ export function mountPixRoutes(app: Express) {
           status: 'error',
           detail: e?.message || 'webhook error',
         });
+        // 200 evita storm de reenvios; retry interno cuida
         return res.status(200).json({ ok: false, retry: true, error: e?.message });
       }
     })
