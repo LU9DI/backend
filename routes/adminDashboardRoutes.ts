@@ -15,10 +15,28 @@ const PRECO_MENSAL: Record<string, number> = {
   rei: 999.9,
 };
 
+const ALLOWED_EMPRESA_COLS = new Set([
+  'billing_cycle',
+  'cancel_at_period_end',
+  'stripe_customer_id',
+  'stripe_subscription_id',
+  'bloqueado_motivo',
+]);
+
 async function ensureAdminColumns(db: any) {
   const cols = (await db.all(`PRAGMA table_info(empresas)`)).map((c: any) => c.name);
   const add = async (name: string, def: string) => {
-    if (!cols.includes(name)) await db.exec(`ALTER TABLE empresas ADD COLUMN ${name} ${def}`);
+    if (!ALLOWED_EMPRESA_COLS.has(name)) return;
+    if (!cols.includes(name)) {
+      // def whitelist only
+      const safeDef =
+        name === 'billing_cycle'
+          ? `TEXT DEFAULT 'month'`
+          : name === 'cancel_at_period_end'
+            ? `INTEGER DEFAULT 0`
+            : `TEXT`;
+      await db.exec(`ALTER TABLE empresas ADD COLUMN ${name} ${safeDef}`);
+    }
   };
   await add('billing_cycle', `TEXT DEFAULT 'month'`);
   await add('cancel_at_period_end', `INTEGER DEFAULT 0`);
@@ -39,6 +57,11 @@ function csvEscape(v: unknown): string {
   const s = v == null ? '' : String(v);
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
+}
+
+function startOfMonthIso(): string {
+  const d = new Date();
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();
 }
 
 export function mountAdminDashboardRoutes(app: Express) {
@@ -109,14 +132,16 @@ export function mountAdminDashboardRoutes(app: Express) {
         });
       }
 
+      const mesInicio = startOfMonthIso();
       const totalTokensMes = await db.get(
-        `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
-         WHERE criado_em >= date('now', 'start of month')`
+        `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage WHERE criado_em >= ?`,
+        [mesInicio]
       );
 
       const reviewsMes = await db.get(
         `SELECT COUNT(*) as c FROM reviews
-         WHERE createdAt >= date('now', 'start of month') AND IFNULL(is_test,0)=0`
+         WHERE "createdAt" >= ? AND COALESCE(is_test,0)=0`,
+        [mesInicio]
       );
 
       res.json({
@@ -448,7 +473,7 @@ export function mountAdminDashboardRoutes(app: Express) {
         `SELECT r.*, e.nome_empresa
          FROM reviews r
          LEFT JOIN empresas e ON e.id = r.empresa_id
-         ORDER BY r.createdAt DESC LIMIT 100`
+         ORDER BY r."createdAt" DESC LIMIT 100`
       );
       res.json(rows);
     })

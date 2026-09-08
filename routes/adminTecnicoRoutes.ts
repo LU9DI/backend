@@ -135,6 +135,7 @@ export function mountAdminTecnicoRoutes(app: Express) {
       const mpLast24hOk =
         mpHealth.total === 0 ? null : mpHealth.errors === 0 && mpHealth.ok > 0;
 
+      // Garante colunas opcionais sem quebrar se já existirem
       const cols = (await db.all(`PRAGMA table_info(reviews)`)).map((c: any) => c.name);
       if (!cols.includes('client_whatsapp')) {
         try {
@@ -143,15 +144,34 @@ export function mountAdminTecnicoRoutes(app: Express) {
           /* */
         }
       }
+      if (!cols.includes('origin')) {
+        try {
+          await db.exec(`ALTER TABLE reviews ADD COLUMN origin TEXT`);
+        } catch {
+          /* */
+        }
+      }
 
+      // Não seleciona r.origin se a coluna ainda não existir em algum ambiente antigo
+      const hasOrigin = cols.includes('origin') || true; // após ALTER acima
       const criticas = await db.all(
-        `SELECT r.id, r.name, r.rating, r.comment, r.ai_reply, r.ai_tags, r.createdAt,
-                r.client_whatsapp, r.empresa_id, r.origin,
+        hasOrigin
+          ? `SELECT r.id, r.name, r.rating, r.comment, r.ai_reply, r.ai_tags, r."createdAt",
+                r.client_whatsapp, r.empresa_id,
+                COALESCE(r.origin, 'publico') as origin,
                 e.nome_empresa, e.plan, e.slug
          FROM reviews r
          LEFT JOIN empresas e ON e.id = r.empresa_id
-         WHERE r.rating <= 3 AND IFNULL(r.is_test, 0) = 0
-         ORDER BY r.createdAt DESC
+         WHERE r.rating <= 3 AND COALESCE(r.is_test, 0) = 0
+         ORDER BY r."createdAt" DESC
+         LIMIT 80`
+          : `SELECT r.id, r.name, r.rating, r.comment, r.ai_reply, r.ai_tags, r."createdAt",
+                r.client_whatsapp, r.empresa_id,
+                e.nome_empresa, e.plan, e.slug
+         FROM reviews r
+         LEFT JOIN empresas e ON e.id = r.empresa_id
+         WHERE r.rating <= 3 AND COALESCE(r.is_test, 0) = 0
+         ORDER BY r."createdAt" DESC
          LIMIT 80`
       );
 
@@ -325,12 +345,12 @@ export function mountAdminTecnicoRoutes(app: Express) {
       if (!requireAdmin(req, res)) return;
       const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 80));
       const rows = await getDb().all(
-        `SELECT r.id, r.name, r.rating, r.comment, r.ai_reply, r.ai_tags, r.createdAt,
+        `SELECT r.id, r.name, r.rating, r.comment, r.ai_reply, r.ai_tags, r."createdAt",
                 r.client_whatsapp, r.empresa_id, e.nome_empresa, e.plan
          FROM reviews r
          LEFT JOIN empresas e ON e.id = r.empresa_id
-         WHERE r.rating <= 3 AND IFNULL(r.is_test, 0) = 0
-         ORDER BY r.createdAt DESC
+         WHERE r.rating <= 3 AND COALESCE(r.is_test, 0) = 0
+         ORDER BY r."createdAt" DESC
          LIMIT ?`,
         [limit]
       );
