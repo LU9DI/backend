@@ -1,9 +1,6 @@
 /**
  * Camada de IA com balanceamento + failover + métricas de latência + tokens.
  * Respostas e tags respeitam locale (pt|en|es|zh).
- *
- * Modelo padrão Groq: openai/gpt-oss-120b (GPT OSS 120B).
- * Override: GROQ_MODEL=...
  */
 
 import {
@@ -26,9 +23,6 @@ const GEMINI_BASE =
   process.env.GEMINI_API_BASE ||
   'https://generativelanguage.googleapis.com/v1beta';
 
-/** GPT OSS 120B na Groq — override via GROQ_MODEL */
-export const DEFAULT_GROQ_MODEL = 'openai/gpt-oss-120b';
-
 const LATENCY_WINDOW = Math.max(50, Number(process.env.METRICS_WINDOW || 200));
 
 export type AiProvider = 'groq' | 'gemini';
@@ -39,7 +33,6 @@ export type AiCallResult = {
   provider: AiProvider;
   latency_ms: number;
   tokens: number;
-  model?: string;
 };
 
 let rrIndex = 0;
@@ -55,7 +48,6 @@ type ProviderStats = {
   latencySum: number;
   latencyCount: number;
   lastLatencyMs?: number;
-  lastModel?: string;
 };
 
 function emptyStats(): ProviderStats {
@@ -113,17 +105,15 @@ function latencySummary(s: ProviderStats) {
     max_ms: sorted.length ? sorted[sorted.length - 1] : null,
     p50_ms: pct(samples, 50),
     p95_ms: pct(samples, 95),
-    last_model: s.lastModel ?? null,
   };
 }
 
-function markSuccess(p: AiProvider, ms: number, model?: string) {
+function markSuccess(p: AiProvider, ms: number) {
   const s = stats[p];
   s.success += 1;
   s.consecutiveFails = 0;
   s.cooldownUntil = 0;
   s.lastUsedAt = Date.now();
-  if (model) s.lastModel = model;
   recordLatency(p, ms);
 }
 
@@ -164,8 +154,6 @@ export function getAiLoadStats() {
   return {
     mode: getLoadBalanceMode(),
     providers: listAiProviders(),
-    groq_model: process.env.GROQ_MODEL?.trim() || DEFAULT_GROQ_MODEL,
-    gemini_model: process.env.GEMINI_MODEL?.trim() || 'gemini-2.0-flash',
     stats: {
       groq: pack('groq'),
       gemini: pack('gemini'),
@@ -201,13 +189,12 @@ export function aiConfigured(): boolean {
 function getLoadBalanceMode(): LoadBalanceMode {
   const m = (process.env.AI_LOAD_BALANCE || '').toLowerCase();
   if (m === 'weighted' || m === 'failover' || m === 'round_robin') return m;
-  // Com 2 providers: failover (Groq primeiro, Gemini se falhar/cota)
-  return listAiProviders().length > 1 ? 'failover' : 'failover';
+  return listAiProviders().length > 1 ? 'round_robin' : 'failover';
 }
 
 function weightOf(p: AiProvider): number {
-  if (p === 'groq') return Math.max(0, Number(process.env.AI_WEIGHT_GROQ || 70));
-  return Math.max(0, Number(process.env.AI_WEIGHT_GEMINI || 30));
+  if (p === 'groq') return Math.max(0, Number(process.env.AI_WEIGHT_GROQ || 50));
+  return Math.max(0, Number(process.env.AI_WEIGHT_GEMINI || 50));
 }
 
 function buildAttemptOrder(): AiProvider[] {
@@ -255,7 +242,7 @@ function shouldFailover(status: number, body: string): boolean {
   );
 }
 
-type ProviderRaw = { text: string; tokens: number; model: string };
+type ProviderRaw = { text: string; tokens: number };
 
 async function callGroq(
   system: string,
@@ -266,10 +253,8 @@ async function callGroq(
   const key = groqKey();
   if (!key) throw new Error('GROQ_API_KEY não configurada');
 
-  const model = (process.env.GROQ_MODEL || DEFAULT_GROQ_MODEL).trim();
-
   const body = {
-    model,
+    model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
@@ -303,7 +288,7 @@ async function callGroq(
   const tokens =
     Number(usage?.total_tokens) ||
     estimateTokens(system, user, String(text));
-  return { text: String(text).trim(), tokens, model };
+  return { text: String(text).trim(), tokens };
 }
 
 async function callGemini(
@@ -351,7 +336,7 @@ async function callGemini(
     Number(meta?.totalTokenCount) ||
     Number(meta?.promptTokenCount || 0) + Number(meta?.candidatesTokenCount || 0) ||
     estimateTokens(system, user, text);
-  return { text: text.trim(), tokens, model };
+  return { text: text.trim(), tokens };
 }
 
 async function invokeProvider(
@@ -388,8 +373,8 @@ export async function callAI(
     try {
       const raw = await invokeProvider(provider, system, user, maxTokens, temperature);
       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
-      markSuccess(provider, ms, raw.model);
-      if (i > 0) console.warn(`[IA] Fallback: ${provider}/${raw.model} (${ms}ms)`);
+      markSuccess(provider, ms);
+      if (i > 0) console.warn(`[IA] Fallback: ${provider} (${ms}ms)`);
 
       if (opts?.empresaId || opts?.tipo) {
         try {
@@ -404,22 +389,11 @@ export async function callAI(
         }
       }
 
-      return {
-        text: raw.text,
-        provider,
-        latency_ms: ms,
-        tokens: raw.tokens,
-        model: raw.model,
-      };
+      return { text: raw.text, provider, latency_ms: ms, tokens: raw.tokens };
     } catch (e: any) {
       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
       markFail(provider, e, ms);
       lastError = e;
-      const canFailOver = e?.failover !== false && i < order.length - 1;
-      if (canFailOver) {
-        console.warn(`[IA] ${provider} falhou → tentando próximo:`, e?.message || e);
-        continue;
-      }
       if (i < order.length - 1) continue;
     }
   }

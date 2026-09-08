@@ -36,7 +36,6 @@ import { mountUnidadeRoutes } from './routes/unidadeRoutes.js';
 import { mountExportRoutes } from './routes/exportRoutes.js';
 import { mountPublicPlanosRoutes } from './routes/publicPlanosRoutes.js';
 import { mountAuditRoutes } from './routes/auditRoutes.js';
-import { mountN8nRoutes } from './routes/n8nRoutes.js';
 import { mountPasswordResetRoutes } from './passwordResetRoutes.js';
 import { mountAdminLoginRoute } from './adminLoginRoute.js';
 import { mountAdminPasswordResetRoutes } from './adminPasswordReset.js';
@@ -46,7 +45,6 @@ import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
 import { paypalConfigured } from './lib/paypal.js';
 import { mpConfigured } from './lib/mercadopago.js';
 import { wechatConfigured } from './lib/wechat.js';
-import { n8nConfigured, n8nStatus } from './lib/n8n.js';
 import { aiConfigured, listAiProviders, getAiLoadStats } from './groqService.js';
 import { ensureUnidadesSchema } from './lib/unidades.js';
 import { ensureWebAuthnSchema, webauthnConfig } from './lib/webauthn.js';
@@ -57,7 +55,6 @@ import { ensureAuditSchema } from './lib/auditLog.js';
 import { ensureRetryQueue, startRetryWorker } from './lib/retryQueue.js';
 import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
-import { ensureRuntimeSchema } from './lib/schemaEnsure.js';
 import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
 import {
@@ -80,10 +77,11 @@ app.use(cookieParser());
 app.use(latencyMiddleware as any);
 app.use((req, res, next) => {
   if (req.originalUrl?.startsWith('/api/webhook/stripe')) return next();
-  return express.json({ limit: '40kb' })(req, res, next);
+  return express.json({ limit: '20kb' })(req, res, next);
 });
 app.use(cors(buildCorsOptions()));
 
+/** Health com ping real no banco — Render usa para saber se o serviço está vivo. */
 app.get('/api/health', async (_req, res) => {
   const ai = getAiLoadStats();
   let dbPing: { ok: boolean; engine: string; error?: string } = {
@@ -104,8 +102,6 @@ app.get('/api/health', async (_req, res) => {
     paypal: paypalConfigured(),
     pix: mpConfigured(),
     wechat: wechatConfigured(),
-    n8n: n8nConfigured(),
-    n8n_status: n8nStatus(),
     ai: aiConfigured(),
     ai_providers: listAiProviders(),
     plan_switch: allowPlanSwitch(),
@@ -137,7 +133,6 @@ app.get('/api/metrics', (req, res) => {
     time: new Date().toISOString(),
     http: getHttpMetrics(),
     ai: getAiLoadStats(),
-    n8n: n8nStatus(),
   });
 });
 
@@ -195,11 +190,6 @@ function gracefulShutdown(signal: string) {
 
 async function main() {
   await initDB();
-  try {
-    await ensureRuntimeSchema(getDb());
-  } catch (e) {
-    console.warn('ensureRuntimeSchema:', e);
-  }
   try {
     await ensureUnidadesSchema(getDb());
   } catch (e) {
@@ -274,11 +264,10 @@ async function main() {
   mountExportRoutes(app);
   mountPublicPlanosRoutes(app);
   mountAuditRoutes(app);
-  mountN8nRoutes(app);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
-  mountMfaRoutes(app, getDb, JWT_SECRET, setAuthCookie, autenticarToken);
+  mountMfaRoutes(app, getDb, { JWT_SECRET, setAuthCookie, autenticarToken });
   mountPasswordResetRoutes(app, getDb);
   mountStripeRoutes(app, getDb);
 
@@ -286,10 +275,10 @@ async function main() {
   app.use(errorHandler);
 
   console.log(
-    `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | WeChat: ${wechatConfigured() ? 'ok' : 'OFF'} | n8n: ${n8nConfigured() ? 'ok' : 'OFF'}`
+    `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | WeChat: ${wechatConfigured() ? 'ok' : 'OFF'}`
   );
-  if (!n8nConfigured()) {
-    console.log('⚠️  n8n OFF — defina N8N_WEBHOOK_URL no Render para automação de captação.');
+  if (!wechatConfigured()) {
+    console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
   }
 
   server = app.listen(PORT, () => {

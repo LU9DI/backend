@@ -11,10 +11,10 @@
  *  - máx. credentials por usuário
  *  - rate limit nas rotas
  *
- * Env (opcional — se omitir, deriva de FRONTEND_URL / APP_URL):
- *   WEBAUTHN_RP_ID=seudominio.com
+ * Env:
+ *   WEBAUTHN_RP_ID=localhost          (ou seudominio.com)
  *   WEBAUTHN_RP_NAME=Filtra.IA
- *   WEBAUTHN_ORIGIN=https://seudominio.com
+ *   WEBAUTHN_ORIGIN=http://localhost:3000
  *   WEBAUTHN_MAX_CREDENTIALS=5
  */
 import crypto from 'crypto';
@@ -37,31 +37,8 @@ const challenges = new Map<
   { challenge: string; userId?: string; cnpj?: string; type: 'reg' | 'auth'; expires: number }
 >();
 
-function frontBase(): string {
-  return (
-    process.env.WEBAUTHN_ORIGIN ||
-    process.env.APP_URL ||
-    process.env.FRONTEND_URL ||
-    process.env.CORS_ORIGINS?.split(',')[0] ||
-    'http://localhost:3000'
-  )
-    .trim()
-    .replace(/\/$/, '');
-}
-
-function hostnameFromUrl(url: string): string {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return 'localhost';
-  }
-}
-
 function rpId(): string {
-  const explicit = process.env.WEBAUTHN_RP_ID?.trim();
-  if (explicit) return explicit;
-  // Produção: hostname do front (ex.: filtra-ia.vercel.app)
-  return hostnameFromUrl(frontBase());
+  return (process.env.WEBAUTHN_RP_ID || 'localhost').trim();
 }
 
 function rpName(): string {
@@ -69,7 +46,14 @@ function rpName(): string {
 }
 
 function expectedOrigin(): string {
-  return frontBase();
+  return (
+    process.env.WEBAUTHN_ORIGIN ||
+    process.env.APP_URL ||
+    process.env.FRONTEND_URL ||
+    'http://localhost:3000'
+  )
+    .trim()
+    .replace(/\/$/, '');
 }
 
 function maxCreds(): number {
@@ -77,19 +61,11 @@ function maxCreds(): number {
 }
 
 export function webauthnConfig() {
-  const origin = expectedOrigin();
-  const id = rpId();
-  const productionReady =
-    id !== 'localhost' &&
-    !origin.includes('localhost') &&
-    (origin.startsWith('https://') || origin.startsWith('http://127.'));
   return {
-    rpId: id,
+    rpId: rpId(),
     rpName: rpName(),
-    origin,
+    origin: expectedOrigin(),
     maxCredentials: maxCreds(),
-    enabled: productionReady || process.env.NODE_ENV !== 'production',
-    production_ready: productionReady,
   };
 }
 
@@ -140,6 +116,7 @@ export function createChallenge(
     type,
     expires: Date.now() + 5 * 60 * 1000,
   });
+  // limpa expirados
   for (const [k, v] of challenges) {
     if (v.expires < Date.now()) challenges.delete(k);
   }
@@ -181,6 +158,9 @@ export async function findCredentialByCredId(
   return db.get(`SELECT * FROM webauthn_credentials WHERE credential_id = ?`, [credentialId]);
 }
 
+/**
+ * Opções de registro (PublicKeyCredentialCreationOptions JSON-friendly).
+ */
 export async function registrationOptions(
   db: Database,
   user: { id: string; nome: string; cnpj: string }
@@ -203,8 +183,8 @@ export async function registrationOptions(
         displayName: user.nome || 'Usuário',
       },
       pubKeyCredParams: [
-        { type: 'public-key', alg: -7 },
-        { type: 'public-key', alg: -257 },
+        { type: 'public-key', alg: -7 }, // ES256
+        { type: 'public-key', alg: -257 }, // RS256
       ],
       timeout: 120000,
       attestation: 'none',
@@ -223,6 +203,11 @@ export async function registrationOptions(
   };
 }
 
+/**
+ * Persistência após navigator.credentials.create
+ * Client envia: id, rawId, type, response.clientDataJSON, response.attestationObject (base64url)
+ * Validação de clientData + challenge; guarda publicKey extraída pelo client (COSE→SPKI) ou raw.
+ */
 export async function finishRegistration(
   db: Database,
   opts: {
@@ -304,6 +289,11 @@ export async function authenticationOptions(db: Database, cnpj: string) {
   };
 }
 
+/**
+ * Verificação de login por digital.
+ * Client envia assinatura + authenticatorData + clientDataJSON (base64url)
+ * e publicKey já armazenada no servidor.
+ */
 export async function finishAuthentication(
   db: Database,
   opts: {
@@ -333,23 +323,27 @@ export async function finishAuthentication(
   const authData = fromB64url(opts.authenticatorData);
   if (authData.length < 37) throw new Error('authenticatorData inválido.');
 
+  // RP ID hash (primeiros 32 bytes)
   const rpHash = authData.subarray(0, 32);
   const expectedRpHash = crypto.createHash('sha256').update(rpId()).digest();
   if (!rpHash.equals(expectedRpHash)) {
     throw new Error('RP ID hash não confere (anti-phishing).');
   }
 
+  // flags: bit 0 user present, bit 2 user verified
   const flags = authData[32];
   const userPresent = (flags & 0x01) !== 0;
   const userVerified = (flags & 0x04) !== 0;
   if (!userPresent) throw new Error('Usuário não presente no autenticador.');
   if (!userVerified) throw new Error('Verificação biométrica obrigatória não satisfeita.');
 
+  // counter (big-endian uint32)
   const counter = authData.readUInt32BE(33);
   if (counter > 0 && counter <= Number(cred.counter)) {
     throw new Error('Possível clone de credential detectado (contador).');
   }
 
+  // signed data = authenticatorData || SHA256(clientDataJSON)
   const clientHash = crypto.createHash('sha256').update(clientDataBuf).digest();
   const signed = Buffer.concat([authData, clientHash]);
   const signature = fromB64url(opts.signature);
@@ -372,6 +366,7 @@ function verifyWebAuthnSignature(
   data: Buffer,
   signature: Buffer
 ): boolean {
+  // Aceita SPKI PEM/DER ou base64url de SPKI
   try {
     let keyInput = publicKeyB64.trim();
     let keyObject: crypto.KeyObject;
@@ -382,6 +377,7 @@ function verifyWebAuthnSignature(
       keyObject = crypto.createPublicKey({ key: der, format: 'der', type: 'spki' });
     }
 
+    // WebAuthn usa ASN.1 DER para ES256 às vezes; tenta ambos
     try {
       return crypto.verify(null, data, keyObject, signature);
     } catch {

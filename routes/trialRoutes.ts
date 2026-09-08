@@ -10,8 +10,8 @@ import {
 
 const trialLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 30,
-  message: { error: 'Limite de ativações excedido. Tente mais tarde.' },
+  max: 20,
+  message: { error: 'Limite de ativações excedido.' },
 });
 
 export function mountTrialRoutes(app: Express) {
@@ -31,27 +31,17 @@ export function mountTrialRoutes(app: Express) {
               ? String(req.body.google_review_url)
               : undefined,
             whatsapp: req.body.whatsapp ? String(req.body.whatsapp) : undefined,
-            locale: req.body.locale ? String(req.body.locale) : undefined,
           },
           undefined,
           res
         );
-        return res.status(201).json(result);
+        res.status(201).json(result);
       } catch (e: any) {
-        if (e instanceof TrialConflictError || e?.name === 'TrialConflictError') {
-          return res.status(409).json({ error: e.message || 'CNPJ já cadastrado.' });
-        }
-        if (e instanceof TrialValidationError || e?.name === 'TrialValidationError') {
-          return res.status(400).json({ error: e.message });
-        }
-        if (e?.status && e.status < 500) {
+        if (e instanceof TrialConflictError || e instanceof TrialValidationError) {
           return res.status(e.status).json({ error: e.message });
         }
-        console.error('[trial/ativar]', e?.code, e?.message || e);
-        return res.status(500).json({
-          error: 'Erro ao ativar trial.',
-          detail: String(e?.message || e).slice(0, 240),
-        });
+        if (e?.status) return res.status(e.status).json({ error: e.message });
+        throw e;
       }
     })
   );

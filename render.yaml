@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: filtra-ia-api
+    runtime: node
+    region: ohio
+    plan: free
+    branch: master
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    autoDeploy: true
+    healthCheckPath: /api/health

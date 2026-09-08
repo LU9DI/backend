@@ -12,6 +12,10 @@ export const PLAN_FEEDBACK_LIMITS: Record<string, number> = {
   rei: 8000,
 };
 
+/**
+ * Teto mensal de tokens de IA por empresa (economia no início).
+ * Inicial/Pro = 0 (sem IA). Trial baixo. Ultra+ sobe gradualmente.
+ */
 export const PLAN_TOKEN_LIMITS: Record<string, number> = {
   trial: 25_000,
   teste: 25_000,
@@ -22,6 +26,10 @@ export const PLAN_TOKEN_LIMITS: Record<string, number> = {
   rei: 1_200_000,
 };
 
+/**
+ * Respostas/tags de IA: trial (demo), Ultra, Corporativo e Rei.
+ * Inicial e Pro NÃO têm IA (só volume + WPP + gráficos).
+ */
 export function planTemIA(plan: string | null | undefined): boolean {
   const p = String(plan || '').toLowerCase();
   if (p === 'inicial' || p === 'pro') return false;
@@ -43,12 +51,16 @@ export async function tokensUsadosMes(empresaId: string): Promise<number> {
   const mes = getCurrentMonth();
   const row = await db.get(
     `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
-     WHERE empresa_id = ? AND substr(CAST(criado_em AS TEXT), 1, 7) = ?`,
+     WHERE empresa_id = ? AND substr(criado_em, 1, 7) = ?`,
     [empresaId, mes]
   );
   return Number(row?.t || 0);
 }
 
+/**
+ * Bloqueia chamada de IA se a empresa estourou o teto mensal de tokens do plano.
+ * Retorna { ok, used, limit }.
+ */
 export async function assertEmpresaTokenQuota(
   empresaId: string | null | undefined,
   plan: string | null | undefined
@@ -85,7 +97,7 @@ export async function contarReviewsMes(empresaId: string): Promise<number> {
   const mes = getCurrentMonth();
   const row = await db.get(
     `SELECT COUNT(*) as c FROM reviews
-     WHERE empresa_id = ? AND substr(CAST(createdAt AS TEXT), 1, 7) = ?`,
+     WHERE empresa_id = ? AND substr(createdAt, 1, 7) = ?`,
     [empresaId, mes]
   );
   return Number(row?.c || 0);
