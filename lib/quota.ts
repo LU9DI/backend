@@ -1,5 +1,5 @@
 /** Limites de feedbacks/mês e cotas de IA (tokens). */
-import { getDb } from './db.js';
+import { getDb, dbEngine } from './db.js';
 import { getCurrentMonth } from './planUtils.js';
 
 export const PLAN_FEEDBACK_LIMITS: Record<string, number> = {
@@ -12,10 +12,6 @@ export const PLAN_FEEDBACK_LIMITS: Record<string, number> = {
   rei: 8000,
 };
 
-/**
- * Teto mensal de tokens de IA por empresa (economia no início).
- * Inicial/Pro = 0 (sem IA). Trial baixo. Ultra+ sobe gradualmente.
- */
 export const PLAN_TOKEN_LIMITS: Record<string, number> = {
   trial: 25_000,
   teste: 25_000,
@@ -26,10 +22,6 @@ export const PLAN_TOKEN_LIMITS: Record<string, number> = {
   rei: 1_200_000,
 };
 
-/**
- * Respostas/tags de IA: trial (demo), Ultra, Corporativo e Rei.
- * Inicial e Pro NÃO têm IA (só volume + WPP + gráficos).
- */
 export function planTemIA(plan: string | null | undefined): boolean {
   const p = String(plan || '').toLowerCase();
   if (p === 'inicial' || p === 'pro') return false;
@@ -46,21 +38,41 @@ export function getTokenLimit(plan: string): number {
   return PLAN_TOKEN_LIMITS[key] ?? PLAN_TOKEN_LIMITS.trial;
 }
 
+function monthStartIso(mes?: string): string {
+  const m = mes || getCurrentMonth();
+  return `${m}-01T00:00:00.000Z`;
+}
+
+function nextMonthStartIso(mes?: string): string {
+  const m = mes || getCurrentMonth();
+  const [y, mo] = m.split('-').map(Number);
+  // mo 1-12 → Date.UTC monthIndex = mo (próximo mês no calendário 0-based)
+  return new Date(Date.UTC(y, mo, 1)).toISOString();
+}
+
 export async function tokensUsadosMes(empresaId: string): Promise<number> {
   const db = getDb();
   const mes = getCurrentMonth();
-  const row = await db.get(
-    `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
-     WHERE empresa_id = ? AND substr(criado_em, 1, 7) = ?`,
-    [empresaId, mes]
-  );
-  return Number(row?.t || 0);
+  try {
+    if (dbEngine() === 'postgres') {
+      const row = await db.get(
+        `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
+         WHERE empresa_id = ? AND criado_em >= ? AND criado_em < ?`,
+        [empresaId, monthStartIso(mes), nextMonthStartIso(mes)]
+      );
+      return Number(row?.t || 0);
+    }
+    const row = await db.get(
+      `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
+       WHERE empresa_id = ? AND substr(criado_em, 1, 7) = ?`,
+      [empresaId, mes]
+    );
+    return Number(row?.t || 0);
+  } catch {
+    return 0;
+  }
 }
 
-/**
- * Bloqueia chamada de IA se a empresa estourou o teto mensal de tokens do plano.
- * Retorna { ok, used, limit }.
- */
 export async function assertEmpresaTokenQuota(
   empresaId: string | null | undefined,
   plan: string | null | undefined
@@ -95,10 +107,30 @@ export async function checkQuota(plan: string, type: 'tags' | 'respostas'): Prom
 export async function contarReviewsMes(empresaId: string): Promise<number> {
   const db = getDb();
   const mes = getCurrentMonth();
-  const row = await db.get(
-    `SELECT COUNT(*) as c FROM reviews
-     WHERE empresa_id = ? AND substr(createdAt, 1, 7) = ?`,
-    [empresaId, mes]
-  );
-  return Number(row?.c || 0);
+  const start = monthStartIso(mes);
+  const end = nextMonthStartIso(mes);
+  try {
+    const row = await db.get(
+      `SELECT COUNT(*) as c FROM reviews
+       WHERE empresa_id = ?
+         AND COALESCE(is_test, 0) = 0
+         AND createdAt >= ?
+         AND createdAt < ?`,
+      [empresaId, start, end]
+    );
+    return Number(row?.c || 0);
+  } catch {
+    try {
+      const row = await db.get(
+        `SELECT COUNT(*) as c FROM reviews
+         WHERE empresa_id = ?
+           AND created_at >= ?
+           AND created_at < ?`,
+        [empresaId, start, end]
+      );
+      return Number(row?.c || 0);
+    } catch {
+      return 0;
+    }
+  }
 }
