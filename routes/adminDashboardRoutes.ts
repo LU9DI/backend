@@ -15,25 +15,24 @@ const PRECO_MENSAL: Record<string, number> = {
   rei: 999.9,
 };
 
-/** Início do mês UTC em ISO — evita date('now','start of month') do SQLite no Postgres. */
-function startOfMonthIso(): string {
-  const d = new Date();
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1, 0, 0, 0, 0)).toISOString();
-}
-
 async function ensureAdminColumns(db: any) {
-  try {
-    const cols = (await db.all(`PRAGMA table_info(empresas)`)).map((c: any) => c.name);
-    const add = async (name: string, def: string) => {
-      if (!cols.includes(name)) await db.exec(`ALTER TABLE empresas ADD COLUMN ${name} ${def}`);
-    };
-    await add('billing_cycle', `TEXT DEFAULT 'month'`);
-    await add('cancel_at_period_end', `INTEGER DEFAULT 0`);
-    await add('stripe_customer_id', `TEXT`);
-    await add('stripe_subscription_id', `TEXT`);
-    await add('bloqueado_motivo', `TEXT`);
-  } catch (e: any) {
-    console.warn('ensureAdminColumns:', e?.message || e);
+  const cols = [
+    ['billing_cycle', `TEXT DEFAULT 'month'`],
+    ['cancel_at_period_end', `INTEGER DEFAULT 0`],
+    ['stripe_customer_id', `TEXT`],
+    ['stripe_subscription_id', `TEXT`],
+    ['bloqueado_motivo', `TEXT`],
+  ];
+  for (const [name, def] of cols) {
+    try {
+      await db.exec(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS ${name} ${def}`);
+    } catch {
+      try {
+        await db.exec(`ALTER TABLE empresas ADD COLUMN ${name} ${def}`);
+      } catch {
+        /* já existe */
+      }
+    }
   }
 }
 
@@ -51,6 +50,23 @@ function csvEscape(v: unknown): string {
   return s;
 }
 
+function parseCicloDias(body: any): { dias: number; ciclo: 'month' | 'year' } {
+  const rawCiclo = String(body?.ciclo || body?.period || '').toLowerCase().trim();
+  const rawDias = Number(body?.dias);
+
+  if (rawCiclo === 'year' || rawCiclo === 'anual' || rawCiclo === 'ano' || rawCiclo === '1y') {
+    return { dias: 365, ciclo: 'year' };
+  }
+  if (rawCiclo === 'month' || rawCiclo === 'mensal' || rawCiclo === 'mes' || rawCiclo === '1m') {
+    return { dias: 30, ciclo: 'month' };
+  }
+  if (Number.isFinite(rawDias) && rawDias > 0) {
+    const dias = Math.min(730, Math.floor(rawDias));
+    return { dias, ciclo: dias >= 360 ? 'year' : 'month' };
+  }
+  return { dias: 30, ciclo: 'month' };
+}
+
 export function mountAdminDashboardRoutes(app: Express) {
   app.get(
     '/api/admin/dashboard',
@@ -61,32 +77,36 @@ export function mountAdminDashboardRoutes(app: Express) {
       await ensureAdminColumns(db);
 
       const agora = new Date().toISOString();
-      const mesIni = startOfMonthIso();
       const empresas = await db.all(`SELECT * FROM empresas ORDER BY criado_em DESC LIMIT 500`);
 
       const ativos = empresas.filter(
         (e: any) =>
           (e.status === 'ativo' || e.status === 'trial' || e.status === 'teste') &&
           e.expira_em &&
-          e.expira_em >= agora &&
+          String(e.expira_em) >= agora &&
           e.status !== 'bloqueado' &&
           e.status !== 'cancelado'
       );
       const trials = empresas.filter(
         (e: any) =>
           (e.status === 'trial' || e.status === 'teste' || e.plan === 'trial' || e.plan === 'teste') &&
-          e.expira_em >= agora
+          e.expira_em &&
+          String(e.expira_em) >= agora
       );
       const pagos = empresas.filter(
         (e: any) =>
           e.status === 'ativo' &&
           ['inicial', 'pro', 'ultra', 'corporativo', 'rei'].includes(String(e.plan || '').toLowerCase()) &&
-          e.expira_em >= agora
+          e.expira_em &&
+          String(e.expira_em) >= agora
       );
       const atrasados = empresas.filter((e: any) => {
         if (e.status === 'bloqueado' || e.status === 'cancelado') return false;
         if (!e.expira_em) return false;
-        return e.expira_em < agora && (e.status === 'ativo' || e.status === 'trial' || e.status === 'teste');
+        return (
+          String(e.expira_em) < agora &&
+          (e.status === 'ativo' || e.status === 'trial' || e.status === 'teste')
+        );
       });
       const cancelamentoPendente = empresas.filter((e: any) => Number(e.cancel_at_period_end) === 1);
 
@@ -112,7 +132,6 @@ export function mountAdminDashboardRoutes(app: Express) {
       } catch {
         tokenRows = [];
       }
-
       const topTokens = [];
       for (const row of tokenRows || []) {
         const emp = empresas.find((x: any) => x.id === row.empresa_id);
@@ -126,35 +145,30 @@ export function mountAdminDashboardRoutes(app: Express) {
         });
       }
 
-      let tokensMes = 0;
-      let reviewsMes = 0;
+      const monthStart = new Date();
+      monthStart.setUTCDate(1);
+      monthStart.setUTCHours(0, 0, 0, 0);
+      const monthIso = monthStart.toISOString();
+
+      let totalTokensMes: any = { t: 0 };
       try {
-        const totalTokensMes = await db.get(
+        totalTokensMes = await db.get(
           `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage WHERE criado_em >= ?`,
-          [mesIni]
+          [monthIso]
         );
-        tokensMes = Number(totalTokensMes?.t || 0);
       } catch {
-        /* tabela pode não existir ainda */
+        /* */
       }
+
+      let reviewsMes: any = { c: 0 };
       try {
-        const reviewsMesRow = await db.get(
+        reviewsMes = await db.get(
           `SELECT COUNT(*) as c FROM reviews
-           WHERE "createdAt" >= ? AND COALESCE(is_test,0)=0`,
-          [mesIni]
+           WHERE createdAt >= ? AND COALESCE(is_test,0)=0`,
+          [monthIso]
         );
-        reviewsMes = Number(reviewsMesRow?.c || 0);
       } catch {
-        try {
-          const reviewsMesRow = await db.get(
-            `SELECT COUNT(*) as c FROM reviews
-             WHERE created_at >= ? AND COALESCE(is_test,0)=0`,
-            [mesIni]
-          );
-          reviewsMes = Number(reviewsMesRow?.c || 0);
-        } catch {
-          reviewsMes = 0;
-        }
+        /* */
       }
 
       res.json({
@@ -168,8 +182,8 @@ export function mountAdminDashboardRoutes(app: Express) {
           cancelamento_pendente: cancelamentoPendente.length,
           mrr_estimado_brl: Math.round(mrr * 100) / 100,
           arr_estimado_brl: Math.round(mrr * 12 * 100) / 100,
-          tokens_mes: tokensMes,
-          reviews_mes: reviewsMes,
+          tokens_mes: Number(totalTokensMes?.t || 0),
+          reviews_mes: Number(reviewsMes?.c || 0),
         },
         por_plano: porPlano,
         top_tokens: topTokens,
@@ -360,45 +374,53 @@ export function mountAdminDashboardRoutes(app: Express) {
       const emp = await db.get(`SELECT * FROM empresas WHERE id = ?`, [id]);
       if (!emp) return res.status(404).json({ error: 'Empresa não encontrada.' });
 
-      const ciclo = String(req.body?.ciclo || req.body?.period || 'month').toLowerCase();
-      let dias = 30;
-      if (ciclo === 'year' || ciclo === 'anual' || ciclo === 'ano') dias = 365;
-      else if (ciclo === 'month' || ciclo === 'mensal' || ciclo === 'mes') dias = 30;
-      else if (Number(ciclo) > 0) dias = Math.min(730, Number(ciclo));
-      else if (Number(req.body?.dias) > 0) dias = Math.min(730, Number(req.body.dias));
+      const { dias, ciclo } = parseCicloDias(req.body || {});
 
-      const plan =
-        req.body?.plan && String(req.body.plan).toLowerCase() !== 'trial'
-          ? String(req.body.plan).toLowerCase()
-          : String(emp.plan || 'inicial').toLowerCase() === 'trial' ||
-              String(emp.plan || '').toLowerCase() === 'teste'
-            ? 'inicial'
-            : String(emp.plan || 'inicial').toLowerCase();
+      let plan = String(emp.plan || 'inicial').toLowerCase();
+      if (req.body?.plan) {
+        plan = String(req.body.plan).toLowerCase();
+      }
 
-      const base =
-        emp.expira_em && new Date(emp.expira_em).getTime() > Date.now()
-          ? new Date(emp.expira_em)
-          : new Date();
-      base.setDate(base.getDate() + dias);
+      const status = plan === 'trial' || plan === 'teste' ? 'trial' : 'ativo';
+
+      const expAtual = emp.expira_em ? new Date(emp.expira_em).getTime() : 0;
+      const baseMs = Number.isFinite(expAtual) && expAtual > Date.now() ? expAtual : Date.now();
+      const novaExp = new Date(baseMs + dias * 24 * 60 * 60 * 1000);
+      const expiraIso = novaExp.toISOString();
 
       await db.run(
         `UPDATE empresas SET
-          status = 'ativo',
+          status = ?,
           plan = ?,
           billing_cycle = ?,
           expira_em = ?,
-          cancel_at_period_end = 0,
-          bloqueado_motivo = NULL
+          cancel_at_period_end = 0
          WHERE id = ?`,
-        [plan, dias >= 360 ? 'year' : 'month', base.toISOString(), id]
+        [status, plan, ciclo, expiraIso, id]
       );
 
+      const confirm = await db.get(
+        `SELECT id, status, plan, expira_em, billing_cycle FROM empresas WHERE id = ?`,
+        [id]
+      );
+
+      if (!confirm?.expira_em) {
+        return res.status(500).json({
+          error: 'Falha ao gravar nova data de vencimento. Tente de novo.',
+        });
+      }
+
+      const label = ciclo === 'year' ? '1 ano' : '1 mês';
       res.json({
         success: true,
-        plan,
-        expira_em: base.toISOString(),
+        plan: confirm.plan,
+        status: confirm.status,
+        expira_em: confirm.expira_em,
         dias_adicionados: dias,
-        mensagem: `Acesso estendido em ${dias} dia(s). Novo vencimento: ${base.toLocaleDateString('pt-BR')}.`,
+        ciclo,
+        mensagem: `Acesso estendido em ${label} (+${dias} dias). Novo vencimento: ${new Date(
+          confirm.expira_em
+        ).toLocaleDateString('pt-BR')}.`,
       });
     })
   );
@@ -492,23 +514,13 @@ export function mountAdminDashboardRoutes(app: Express) {
     autenticarToken,
     asyncHandler(async (req: AuthRequest, res: Response) => {
       if (!requireAdmin(req, res)) return;
-      try {
-        const rows = await getDb().all(
-          `SELECT r.*, e.nome_empresa
-           FROM reviews r
-           LEFT JOIN empresas e ON e.id = r.empresa_id
-           ORDER BY r."createdAt" DESC LIMIT 100`
-        );
-        res.json(rows);
-      } catch {
-        const rows = await getDb().all(
-          `SELECT r.*, e.nome_empresa
-           FROM reviews r
-           LEFT JOIN empresas e ON e.id = r.empresa_id
-           ORDER BY r.created_at DESC LIMIT 100`
-        );
-        res.json(rows);
-      }
+      const rows = await getDb().all(
+        `SELECT r.*, e.nome_empresa
+         FROM reviews r
+         LEFT JOIN empresas e ON e.id = r.empresa_id
+         ORDER BY r.id DESC LIMIT 100`
+      );
+      res.json(rows);
     })
   );
 }
