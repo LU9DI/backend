@@ -66,7 +66,6 @@ function resolvePgUrl(): string | undefined {
   return u || undefined;
 }
 
->>>>>>> 0cdf90b54e30a5681dd483a1b9a1aaee7b3e2f3f
 async function initSqlite(): Promise<Database> {
   let sqlite3: any;
   let open: any;

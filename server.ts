@@ -53,6 +53,7 @@ import { ensurePushSchema, initWebPush } from './lib/push.js';
 import { ensureAiUsageSchema } from './lib/aiUsage.js';
 import { ensureOpsTables } from './lib/opsLog.js';
 import { ensureAuditSchema } from './lib/auditLog.js';
+import { mountDebugRoutes } from './routes/debugRoutes.js';
 import { ensureRetryQueue, startRetryWorker } from './lib/retryQueue.js';
 import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
@@ -202,6 +203,7 @@ async function main() {
   mountPublicPlanosRoutes(app);
   mountAuditRoutes(app);
   mountN8nRoutes(app);
+  mountDebugRoutes(app);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
