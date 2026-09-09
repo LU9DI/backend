@@ -1,7 +1,11 @@
 import type { Express, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { getDb, findEmpresa } from '../lib/db.js';
-import { normalizarWhatsapp, linkWhatsapp } from '../lib/whatsapp.js';
+import {
+  normalizarWhatsapp,
+  linkWhatsapp,
+  mensagemEmpresaParaCliente,
+} from '../lib/whatsapp.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { ensureReviewFraudColumns } from '../lib/reviewFraud.js';
 import {
@@ -99,7 +103,6 @@ async function ensurePainelColumns(db: any) {
   } catch (e: any) {
     console.warn('ensureReviewTreatmentColumns:', e?.message || e);
   }
-  // Postgres: ADD COLUMN IF NOT EXISTS; SQLite ignora se falhar
   const extras = [
     'sentiment TEXT',
     'sentiment_score DOUBLE PRECISION',
@@ -112,17 +115,15 @@ async function ensurePainelColumns(db: any) {
     'treated_note TEXT',
   ];
   for (const ddl of extras) {
-    const col = ddl.split(/\s+/)[0];
     try {
       await db.exec(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS ${ddl}`);
     } catch {
       try {
         await db.exec(`ALTER TABLE reviews ADD COLUMN ${ddl}`);
       } catch {
-        /* coluna já existe ou engine sem IF NOT EXISTS */
+        /* ok */
       }
     }
-    void col;
   }
 }
 
@@ -310,6 +311,15 @@ export function mountEmpresaRoutes(app: Express) {
           r.client_whatsapp === '[anonimizado]'
             ? null
             : normalizarWhatsapp(r.client_whatsapp);
+
+        // Mensagem da EMPRESA → cliente (contato sobre crítica), não “pedir desculpas à empresa”
+        const textoWpp = mensagemEmpresaParaCliente({
+          nomeEmpresa: empresa.nome_empresa,
+          nomeCliente: r.name,
+          rating: Number(r.rating),
+          comment: r.comment ? String(r.comment) : undefined,
+        });
+
         return {
           id: r.id,
           name: r.name,
@@ -325,7 +335,7 @@ export function mountEmpresaRoutes(app: Express) {
           sentiment_score: r.sentiment_score != null ? Number(r.sentiment_score) : null,
           sentiment_source: r.sentiment_source || null,
           client_whatsapp: clientWpp,
-          client_whatsapp_url: linkWhatsapp(clientWpp),
+          client_whatsapp_url: linkWhatsapp(clientWpp, textoWpp),
           client_whatsapp_anon: r.client_whatsapp === '[anonimizado]',
           treated_at: r.treated_at || null,
           treated_note: r.treated_note || null,
