@@ -16,7 +16,7 @@ function convertPlaceholders(sql: string): string {
 
 /**
  * Traduções SQLite → Postgres.
- * Ordem importa: funções datetime('now') ANTES de tipos DATETIME.
+ * Ordem importa: funções date/datetime ANTES de tipos DATETIME.
  */
 function adaptSql(sql: string): string {
   let s = sql;
@@ -28,9 +28,36 @@ function adaptSql(sql: string): string {
     }
   }
 
-  // Funções de data SQLite → Postgres (antes de trocar o tipo DATETIME)
+  // date('now', 'start of month') → início do mês
+  s = s.replace(
+    /date\s*\(\s*'now'\s*,\s*'start of month'\s*\)/gi,
+    "date_trunc('month', CURRENT_TIMESTAMP)"
+  );
+  s = s.replace(
+    /date\s*\(\s*"now"\s*,\s*"start of month"\s*\)/gi,
+    "date_trunc('month', CURRENT_TIMESTAMP)"
+  );
+
+  // datetime('now', '-N days') / date('now', '-N days')
+  s = s.replace(
+    /(?:date|datetime)\s*\(\s*'now'\s*,\s*'-(\d+)\s*days?'\s*\)/gi,
+    "(NOW() - INTERVAL '$1 days')"
+  );
+  s = s.replace(
+    /(?:date|datetime)\s*\(\s*'now'\s*,\s*"-(\d+)\s*days?"\s*\)/gi,
+    "(NOW() - INTERVAL '$1 days')"
+  );
+
+  // datetime('now', '-' || ? || ' days') — não dá para traduzir com param; deixa e preferimos SQL nativo nas rotas
+  // datetime('now') / date('now')
   s = s.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'NOW()');
   s = s.replace(/datetime\s*\(\s*"now"\s*\)/gi, 'NOW()');
+  s = s.replace(/date\s*\(\s*'now'\s*\)/gi, 'CURRENT_DATE');
+  s = s.replace(/date\s*\(\s*"now"\s*\)/gi, 'CURRENT_DATE');
+
+  // datetime(coluna) → cast seguro (1 arg)
+  s = s.replace(/datetime\s*\(\s*([a-zA-Z_][\w.]*)\s*\)/gi, '($1::timestamptz)');
+
   s = s.replace(/CURRENT_TIMESTAMP/gi, 'NOW()');
   s = s.replace(/IFNULL\s*\(/gi, 'COALESCE(');
 
@@ -108,7 +135,6 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
           try {
             await c.query(st);
           } catch (e: any) {
-            // Já existe / coluna duplicada — não derruba o boot
             const msg = String(e?.message || e);
             if (
               /already exists/i.test(msg) ||
