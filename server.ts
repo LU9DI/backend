@@ -69,6 +69,12 @@ import {
 assertEnvOrExit();
 const JWT_SECRET = requireJwtSecret();
 
+const BUILD = {
+  version: '1.1.1',
+  marker: 'main-live-ready-admin-pg',
+  started_at: new Date().toISOString(),
+};
+
 const app = express();
 app.set('trust proxy', 1);
 app.use(requestIdMiddleware);
@@ -81,7 +87,30 @@ app.use((req, res, next) => {
 });
 app.use(cors(buildCorsOptions()));
 
-/** Health com ping real no banco — Render usa para saber se o serviço está vivo. */
+/** Keep-alive / UptimeRobot — não depende do banco. */
+app.get('/api/live', (_req, res) => {
+  res.status(200).json({ ok: true, live: true, build: BUILD, time: new Date().toISOString() });
+});
+
+/** Pronto para tráfego se o Postgres responder. */
+app.get('/api/ready', async (_req, res) => {
+  try {
+    const dbPing = await pingDb();
+    if (!dbPing.ok) {
+      return res.status(503).json({ ok: false, ready: false, db: dbPing, build: BUILD });
+    }
+    res.status(200).json({ ok: true, ready: true, db: dbPing, build: BUILD });
+  } catch (e: any) {
+    res.status(503).json({
+      ok: false,
+      ready: false,
+      error: String(e?.message || e),
+      build: BUILD,
+    });
+  }
+});
+
+/** Health com ping real no banco — Render / monitoramento. */
 app.get('/api/health', async (_req, res) => {
   const ai = getAiLoadStats();
   let dbPing: { ok: boolean; engine: string; error?: string } = {
@@ -98,6 +127,7 @@ app.get('/api/health', async (_req, res) => {
     ok: dbPing.ok,
     db: dbPing.engine || (typeof dbEngine === 'function' ? dbEngine() : 'sqlite'),
     db_ok: dbPing.ok,
+    build: BUILD,
     stripe: stripeConfigured(),
     paypal: paypalConfigured(),
     pix: mpConfigured(),
@@ -131,6 +161,7 @@ app.get('/api/metrics', (req, res) => {
   }
   res.json({
     time: new Date().toISOString(),
+    build: BUILD,
     http: getHttpMetrics(),
     ai: getAiLoadStats(),
   });
@@ -141,12 +172,12 @@ let server: Server | null = null;
 let shuttingDown = false;
 
 async function runSentimentBackfillOnBoot() {
-  if (process.env.BACKFILL_SENTIMENT === '0') return;
+  if (process.env.BACKFILL_SENTIMENT !== '1') return;
   try {
     const db = getDb();
     const missing = await countMissingSentiment(db);
     if (missing === 0) return;
-    const limit = Math.max(1, Number(process.env.BACKFILL_SENTIMENT_LIMIT || 2000));
+    const limit = Math.max(1, Number(process.env.BACKFILL_SENTIMENT_LIMIT || 500));
     const r = await backfillSentiment(db, {
       limit,
       useAi: process.env.BACKFILL_SENTIMENT_AI === '1',
@@ -158,7 +189,8 @@ async function runSentimentBackfillOnBoot() {
 }
 
 async function runLgpdSweepOnBoot() {
-  if (process.env.LGPD_SWEEP === '0') return;
+  // Só roda se explicitamente ligado — evita erro Postgres no boot
+  if (process.env.LGPD_SWEEP !== '1') return;
   try {
     const db = getDb();
     await ensureReviewTreatmentColumns(db);
@@ -274,6 +306,7 @@ async function main() {
   app.use(notFoundHandler);
   app.use(errorHandler);
 
+  console.log(`📦 build ${BUILD.version} marker=${BUILD.marker}`);
   console.log(
     `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | WeChat: ${wechatConfigured() ? 'ok' : 'OFF'}`
   );
@@ -284,6 +317,8 @@ async function main() {
   server = app.listen(PORT, () => {
     console.log(`🚀 API Filtra.IA em http://localhost:${PORT}`);
   });
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
 
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
