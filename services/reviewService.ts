@@ -1,6 +1,5 @@
 /**
  * Regras de negócio de avaliações (reviews) + anti-fraude + sentimento + push + e-mail.
- * Respostas de IA respeitam locale (pt|en|es|zh).
  */
 import type { Database } from 'sqlite';
 import { getDb, findEmpresa } from '../lib/db.js';
@@ -82,42 +81,52 @@ export class ReviewValidationError extends Error {
 export { ReviewFraudError };
 
 async function ensureSentimentColumns(db: Database) {
-  try {
-    const cols = (await db.all(`PRAGMA table_info(reviews)`)).map((c: any) => c.name);
-    if (!cols.includes('sentiment')) {
-      await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment TEXT`);
+  const extras = [
+    'sentiment TEXT',
+    'sentiment_score DOUBLE PRECISION',
+    'sentiment_source TEXT',
+    'client_whatsapp TEXT',
+    'locale TEXT',
+  ];
+  for (const ddl of extras) {
+    try {
+      await db.exec(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS ${ddl}`);
+    } catch {
+      try {
+        await db.exec(`ALTER TABLE reviews ADD COLUMN ${ddl}`);
+      } catch {
+        /* ok */
+      }
     }
-    if (!cols.includes('sentiment_score')) {
-      await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_score REAL`);
-    }
-    if (!cols.includes('sentiment_source')) {
-      await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_source TEXT`);
-    }
-    if (!cols.includes('client_whatsapp')) {
-      await db.exec(`ALTER TABLE reviews ADD COLUMN client_whatsapp TEXT`);
-    }
-    if (!cols.includes('locale')) {
-      await db.exec(`ALTER TABLE reviews ADD COLUMN locale TEXT`);
-    }
-  } catch {
-    /* Postgres: colunas podem já existir via ensure em outro caminho */
   }
 }
 
 async function emailDaEmpresa(db: Database, empresaId: string): Promise<string | null> {
-  const row = await db.get(
-    `SELECT email FROM usuarios WHERE empresa_id = ? AND email IS NOT NULL AND email != '' LIMIT 1`,
-    [empresaId]
-  );
-  return row?.email ? String(row.email) : null;
+  try {
+    const row = await db.get(
+      `SELECT email FROM usuarios WHERE empresa_id = ? AND email IS NOT NULL AND email != '' LIMIT 1`,
+      [empresaId]
+    );
+    return row?.email ? String(row.email) : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function criarReview(
   input: ReviewInput,
   db: Database = getDb()
 ): Promise<ReviewResult> {
-  await ensureReviewFraudColumns(db);
-  await ensureSentimentColumns(db);
+  try {
+    await ensureReviewFraudColumns(db);
+  } catch (e: any) {
+    console.warn('ensureReviewFraudColumns:', e?.message || e);
+  }
+  try {
+    await ensureSentimentColumns(db);
+  } catch (e: any) {
+    console.warn('ensureSentimentColumns:', e?.message || e);
+  }
 
   assertNotHoneypot(input.website);
 
@@ -190,9 +199,6 @@ export async function criarReview(
     if (!q.ok) {
       useAi = false;
       aiSkippedQuota = true;
-      console.warn(
-        `[IA] cota tokens esgotada empresa=${empresaId} used=${q.used}/${q.limit}`
-      );
     }
   }
 
@@ -227,21 +233,25 @@ export async function criarReview(
     aiTags = JSON.stringify(rating <= 2 ? ['#NegativeExperience'] : ['#Neutral']);
   }
 
+  const baseParams = [
+    empresaId,
+    name || 'Anônimo',
+    rating,
+    comment || null,
+    aiReply,
+    aiTags,
+  ];
+
   let result: any;
-  try {
-    result = await db.run(
-      `INSERT INTO reviews (
+  const attempts: { sql: string; params: any[] }[] = [
+    {
+      sql: `INSERT INTO reviews (
         empresa_id, name, rating, comment, ai_reply, ai_tags,
         is_test, ip_hash, fraud_flags, origin,
         sentiment, sentiment_score, sentiment_source, client_whatsapp, locale
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        empresaId,
-        name || 'Anônimo',
-        rating,
-        comment || null,
-        aiReply,
-        aiTags,
+      params: [
+        ...baseParams,
         isTest ? 1 : 0,
         isTest ? null : ipHash,
         flags.length ? JSON.stringify(flags) : null,
@@ -251,32 +261,42 @@ export async function criarReview(
         sentiment.source,
         clientWpp,
         locale,
-      ]
-    );
-  } catch {
-    result = await db.run(
-      `INSERT INTO reviews (
+      ],
+    },
+    {
+      sql: `INSERT INTO reviews (
         empresa_id, name, rating, comment, ai_reply, ai_tags,
-        is_test, ip_hash, fraud_flags, origin,
-        sentiment, sentiment_score, sentiment_source, client_whatsapp
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        empresaId,
-        name || 'Anônimo',
-        rating,
-        comment || null,
-        aiReply,
-        aiTags,
+        is_test, ip_hash, fraud_flags, origin, client_whatsapp
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      params: [
+        ...baseParams,
         isTest ? 1 : 0,
         isTest ? null : ipHash,
         flags.length ? JSON.stringify(flags) : null,
         isTest ? 'painel_teste' : 'publico',
-        sentiment.label,
-        sentiment.score,
-        sentiment.source,
         clientWpp,
-      ]
-    );
+      ],
+    },
+    {
+      sql: `INSERT INTO reviews (empresa_id, name, rating, comment, ai_reply, ai_tags)
+            VALUES (?, ?, ?, ?, ?, ?)`,
+      params: baseParams,
+    },
+  ];
+
+  let lastErr: any;
+  for (const a of attempts) {
+    try {
+      result = await db.run(a.sql, a.params);
+      lastErr = null;
+      break;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  if (lastErr) {
+    console.error('INSERT review falhou:', lastErr?.message || lastErr);
+    throw lastErr;
   }
 
   if (!isTest && empresaId && rating <= 3) {
@@ -302,21 +322,25 @@ export async function criarReview(
           empresaId,
         });
 
-        const ha24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-        const row = await db.get(
-          `SELECT COUNT(*) as n FROM reviews
-           WHERE empresa_id = ? AND rating <= 2 AND IFNULL(is_test,0) = 0 AND createdAt >= ?`,
-          [empresaId, ha24h]
-        );
-        const n = Number(row?.n || 0);
-        if (n >= 3) {
-          await notificarAlertaCrise({
-            email,
-            nomeEmpresa: nomeEmpresa || 'Empresa',
-            quantidade: n,
-            slug: slugOrId,
-            empresaId,
-          });
+        try {
+          const ha24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+          const row = await db.get(
+            `SELECT COUNT(*) as n FROM reviews
+             WHERE empresa_id = ? AND rating <= 2 AND COALESCE(is_test,0) = 0 AND createdAt >= ?`,
+            [empresaId, ha24h]
+          );
+          const n = Number(row?.n || 0);
+          if (n >= 3) {
+            await notificarAlertaCrise({
+              email,
+              nomeEmpresa: nomeEmpresa || 'Empresa',
+              quantidade: n,
+              slug: slugOrId,
+              empresaId,
+            });
+          }
+        } catch {
+          /* não bloqueia */
         }
       })
       .catch((e) => console.warn('e-mail crítica:', e?.message || e));
@@ -324,7 +348,7 @@ export async function criarReview(
 
   return {
     success: true,
-    id: result.lastID,
+    id: result?.lastID,
     ai: Boolean(aiReply),
     is_test: isTest,
     sentiment: sentiment.label,
@@ -338,11 +362,12 @@ export async function listarReviews(ref: string, db: Database = getDb()) {
   if (!emp) throw new ReviewNotFoundError();
   await ensureReviewFraudColumns(db);
   await ensureSentimentColumns(db);
-  return db.all(
-    `SELECT id, name, rating, comment, ai_reply, ai_tags, createdAt,
-            IFNULL(is_test,0) as is_test, fraud_flags, origin,
-            sentiment, sentiment_score, sentiment_source, client_whatsapp
-     FROM reviews WHERE empresa_id = ? ORDER BY createdAt DESC LIMIT 100`,
-    [emp.id]
-  );
+  try {
+    return await db.all(
+      `SELECT * FROM reviews WHERE empresa_id = ? ORDER BY id DESC LIMIT 100`,
+      [emp.id]
+    );
+  } catch {
+    return [];
+  }
 }
