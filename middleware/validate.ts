@@ -51,6 +51,10 @@ function applyRule(
     if (rule.required) {
       return { error: rule.message || `${key} é obrigatório.` };
     }
+    if (rule.custom) {
+      const err = rule.custom(value, body);
+      if (err) return { error: err };
+    }
     return { value: undefined };
   }
 
