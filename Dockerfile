@@ -1,16 +1,14 @@
-# Railway / Docker — API Filtra.IA
+# API Filtra.IA — imagem slim (sem g++/python: bcryptjs puro)
 FROM node:20-bookworm-slim
 
 WORKDIR /app
 
-# Dependências de build do bcrypt/sqlite3
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 make g++ \
-    && rm -rf /var/lib/apt/lists/*
+# Copia manifests primeiro para cache de camadas
+COPY package.json package-lock.json* ./
 
-COPY package.json ./
-# Sem package-lock: npm install (não npm ci)
-RUN npm install --omit=dev && npm cache clean --force
+# Produção: sem devDependencies (sqlite/sqlite3 ficam de fora)
+RUN npm install --omit=dev --no-audit --no-fund \
+  && npm cache clean --force
 
 COPY . .
 
