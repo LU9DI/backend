@@ -1,5 +1,9 @@
 /**
  * Anti-fraude de avaliações públicas.
+ *
+ * Regra de negócio: reclamação (≤3★) = **uma vez** por dispositivo e por WhatsApp
+ * na janela (padrão 30 dias). Depois o cliente deve falar com a empresa no WPP,
+ * não abrir outro feedback (ex.: “quero que peçam desculpas”).
  */
 import crypto from 'crypto';
 import type { Database } from 'sqlite';
@@ -10,6 +14,11 @@ const MAX_PER_HOUR = 5;
 const MAX_PER_DAY = 12;
 const COMPLAINT_WINDOW_DAYS = Number(process.env.COMPLAINT_ONCE_DAYS || 30);
 const DUPLICATE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+const MSG_JA_RECLAMOU =
+  'Você já registrou uma reclamação neste estabelecimento. ' +
+  'Para resolver (ou pedir retorno), fale pelo WhatsApp da empresa — ' +
+  'não é necessário enviar outro feedback.';
 
 export class ReviewFraudError extends Error {
   status = 429;
@@ -39,6 +48,10 @@ export function clientIp(req: {
 
 function prune(ts: number[], windowMs: number, now: number) {
   return ts.filter((t) => now - t < windowMs);
+}
+
+function onlyDigits(s: string): string {
+  return String(s || '').replace(/\D/g, '');
 }
 
 export function checkMemoryRate(ip: string, empresaId: string): void {
@@ -153,11 +166,14 @@ export async function checkDbRateByIp(
     }
   } catch (e: any) {
     if (e instanceof ReviewFraudError) throw e;
-    // Coluna ausente — não bloqueia envio
     console.warn('checkDbRateByIp:', e?.message || e);
   }
 }
 
+/**
+ * Reclamação (nota ≤ 3): **1x** por IP e **1x** por WhatsApp na janela.
+ * O cliente não deve abrir outro formulário para “pedir desculpas” — usa o WPP.
+ */
 export async function checkOneComplaintOnly(
   db: Database,
   opts: {
@@ -180,25 +196,25 @@ export async function checkOneComplaintOnly(
       [opts.empresaId, opts.ipHash, since]
     );
     if (Number(byIp?.c || 0) >= 1) {
-      throw new ReviewFraudError(
-        'Você já enviou uma reclamação recentemente para este estabelecimento. Aguarde ou fale pelo WhatsApp da empresa.',
-        409
-      );
+      throw new ReviewFraudError(MSG_JA_RECLAMOU, 409);
     }
 
-    const wpp = (opts.clientWhatsapp || '').replace(/\D/g, '');
+    const wpp = onlyDigits(opts.clientWhatsapp || '');
     if (wpp.length >= 10) {
+      // Compara dígitos: armazenado pode ser 5562... ou variação
       const byWpp = await db.get(
         `SELECT COUNT(*) as c FROM reviews
-         WHERE empresa_id = ? AND client_whatsapp = ? AND rating <= 3
-           AND COALESCE(is_test,0) = 0 AND createdAt >= ?`,
-        [opts.empresaId, wpp, since]
+         WHERE empresa_id = ? AND rating <= 3
+           AND COALESCE(is_test,0) = 0 AND createdAt >= ?
+           AND client_whatsapp IS NOT NULL
+           AND (
+             client_whatsapp = ?
+             OR replace(replace(replace(client_whatsapp, '+', ''), ' ', ''), '-', '') = ?
+           )`,
+        [opts.empresaId, since, wpp, wpp]
       );
       if (Number(byWpp?.c || 0) >= 1) {
-        throw new ReviewFraudError(
-          'Este WhatsApp já registrou uma reclamação para este estabelecimento no período.',
-          409
-        );
+        throw new ReviewFraudError(MSG_JA_RECLAMOU, 409);
       }
     }
   } catch (e: any) {
