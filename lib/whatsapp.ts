@@ -1,18 +1,15 @@
 /**
- * Normaliza telefone para wa.me e monta textos de mensagem.
+ * WhatsApp: normalização e textos pré-preenchidos.
  *
- * Importante:
- * - Ao abrir o WhatsApp do **cliente** (painel da empresa), a mensagem é da
- *   EMPRESA → cliente (contato sobre a crítica privada).
- * - NÃO usar rascunho de “pedir desculpas à empresa” nem texto como se o
- *   cliente estivesse mandando feedback de novo.
+ * Dois sentidos:
+ * 1) EMPRESA → cliente (botão no painel)
+ * 2) CLIENTE → empresa (após crítica, falar com a loja)
  */
 
 export function normalizarWhatsapp(raw: string | null | undefined): string | null {
   if (!raw) return null;
   let d = String(raw).replace(/\D/g, '');
   if (!d) return null;
-  // BR sem DDI (10/11 dígitos)
   if (d.length === 10 || d.length === 11) d = `55${d}`;
   if (d.length < 12 || d.length > 15) return null;
   return d;
@@ -29,11 +26,7 @@ export function linkWhatsapp(
   return `${base}?text=${encodeURIComponent(texto.trim())}`;
 }
 
-/**
- * Texto quando a **empresa** abre o WhatsApp do cliente (painel).
- * Tom: contato profissional sobre o feedback privado — sem “pedir desculpas
- * para a empresa” e sem repetir o formulário de avaliação.
- */
+/** EMPRESA abre o WhatsApp do cliente (painel). */
 export function mensagemEmpresaParaCliente(opts: {
   nomeEmpresa?: string;
   nomeCliente?: string;
@@ -62,35 +55,47 @@ export function mensagemEmpresaParaCliente(opts: {
 }
 
 /**
- * Texto opcional se o **cliente** for direcionado ao WhatsApp da empresa
- * logo após enviar a crítica (não é o fluxo principal do painel).
+ * CLIENTE abre o WhatsApp da empresa (após avaliação negativa).
+ * Mensagem simples: não ficou satisfeito com o atendimento.
  */
 export function mensagemClienteParaEmpresa(opts: {
   nomeEmpresa?: string;
   nomeCliente?: string;
-  rating: number;
+  rating?: number;
   comment?: string;
 }): string {
-  const empresa = opts.nomeEmpresa || 'vocês';
+  const empresa = (opts.nomeEmpresa || 'vocês').trim();
   const cliente =
-    opts.nomeCliente && opts.nomeCliente !== 'Anônimo' ? opts.nomeCliente : 'Cliente';
+    opts.nomeCliente && opts.nomeCliente !== 'Anônimo'
+      ? String(opts.nomeCliente).trim()
+      : '';
+
+  // Texto curto e direto — o cliente só envia
   const linhas = [
-    `Olá! Enviei um feedback privado (${opts.rating}★) sobre ${empresa} pelo link de avaliação.`,
+    `Olá, ${empresa}!`,
+    '',
+    'Acabei de registrar um feedback pelo link de avaliação e não fiquei satisfeito com o atendimento.',
   ];
+
   if (opts.comment?.trim()) {
-    linhas.push('', `Resumo: ${opts.comment.trim().slice(0, 300)}`);
+    linhas.push('', `O que aconteceu: ${opts.comment.trim().slice(0, 280)}`);
   }
-  linhas.push('', `Fico à disposição.`, `— ${cliente}`);
+
+  linhas.push('', 'Gostaria de conversar para resolver isso.');
+
+  if (cliente) {
+    linhas.push('', `— ${cliente}`);
+  }
+
   return linhas.join('\n');
 }
 
-/** @deprecated Use mensagemEmpresaParaCliente ou mensagemClienteParaEmpresa */
+/** @deprecated Preferir mensagemEmpresaParaCliente / mensagemClienteParaEmpresa */
 export function mensagemPosCritica(opts: {
   nomeEmpresa?: string;
   nomeCliente?: string;
   rating: number;
   comment?: string;
 }): string {
-  // Compat: quem usava isso no botão “falar com cliente” deve preferir empresa→cliente
-  return mensagemEmpresaParaCliente(opts);
+  return mensagemClienteParaEmpresa(opts);
 }
