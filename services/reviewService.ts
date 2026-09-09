@@ -27,7 +27,11 @@ import {
   ReviewFraudError,
 } from '../lib/reviewFraud.js';
 import { notifyCrisisReview } from '../lib/push.js';
-import { normalizarWhatsapp } from '../lib/whatsapp.js';
+import {
+  normalizarWhatsapp,
+  linkWhatsapp,
+  mensagemClienteParaEmpresa,
+} from '../lib/whatsapp.js';
 import { notificarCriticaPrivada, notificarAlertaCrise } from '../lib/notifications.js';
 import { normalizeLocale } from '../lib/locale.js';
 
@@ -52,6 +56,9 @@ export type ReviewResult = {
   sentiment?: string;
   ai_skipped_quota?: boolean;
   locale?: string;
+  /** Só em nota ≤3: link wa.me da empresa com texto pronto do cliente */
+  whatsapp_empresa_url?: string | null;
+  whatsapp_mensagem?: string | null;
 };
 
 export class ReviewNotFoundError extends Error {
@@ -153,6 +160,7 @@ export async function criarReview(
   let nomeEmpresa: string | undefined;
   let plan = 'trial';
   let slugOrId: string | undefined;
+  let empresaWpp: string | null = null;
 
   if (empresaRef) {
     const emp = await findEmpresa(empresaRef);
@@ -161,6 +169,7 @@ export async function criarReview(
     nomeEmpresa = emp.nome_empresa;
     plan = String(emp.plan || emp.status || 'trial').toLowerCase();
     slugOrId = emp.slug || emp.id;
+    empresaWpp = normalizarWhatsapp(emp.whatsapp_suporte);
 
     if (!isTest) {
       checkMemoryRate(ip, empresaId!);
@@ -346,6 +355,19 @@ export async function criarReview(
       .catch((e) => console.warn('e-mail crítica:', e?.message || e));
   }
 
+  // Link para o CLIENTE falar com a EMPRESA (mensagem simples de insatisfação)
+  let whatsapp_empresa_url: string | null = null;
+  let whatsapp_mensagem: string | null = null;
+  if (!isTest && rating <= 3 && empresaWpp) {
+    whatsapp_mensagem = mensagemClienteParaEmpresa({
+      nomeEmpresa,
+      nomeCliente: name || undefined,
+      rating,
+      comment: comment || undefined,
+    });
+    whatsapp_empresa_url = linkWhatsapp(empresaWpp, whatsapp_mensagem);
+  }
+
   return {
     success: true,
     id: result?.lastID,
@@ -354,6 +376,8 @@ export async function criarReview(
     sentiment: sentiment.label,
     ai_skipped_quota: aiSkippedQuota,
     locale,
+    whatsapp_empresa_url,
+    whatsapp_mensagem,
   };
 }
 
