@@ -15,16 +15,26 @@ const PRECO_MENSAL: Record<string, number> = {
   rei: 999.9,
 };
 
+/** Início do mês UTC em ISO — evita date('now','start of month') do SQLite no Postgres. */
+function startOfMonthIso(): string {
+  const d = new Date();
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1, 0, 0, 0, 0)).toISOString();
+}
+
 async function ensureAdminColumns(db: any) {
-  const cols = (await db.all(`PRAGMA table_info(empresas)`)).map((c: any) => c.name);
-  const add = async (name: string, def: string) => {
-    if (!cols.includes(name)) await db.exec(`ALTER TABLE empresas ADD COLUMN ${name} ${def}`);
-  };
-  await add('billing_cycle', `TEXT DEFAULT 'month'`);
-  await add('cancel_at_period_end', `INTEGER DEFAULT 0`);
-  await add('stripe_customer_id', `TEXT`);
-  await add('stripe_subscription_id', `TEXT`);
-  await add('bloqueado_motivo', `TEXT`);
+  try {
+    const cols = (await db.all(`PRAGMA table_info(empresas)`)).map((c: any) => c.name);
+    const add = async (name: string, def: string) => {
+      if (!cols.includes(name)) await db.exec(`ALTER TABLE empresas ADD COLUMN ${name} ${def}`);
+    };
+    await add('billing_cycle', `TEXT DEFAULT 'month'`);
+    await add('cancel_at_period_end', `INTEGER DEFAULT 0`);
+    await add('stripe_customer_id', `TEXT`);
+    await add('stripe_subscription_id', `TEXT`);
+    await add('bloqueado_motivo', `TEXT`);
+  } catch (e: any) {
+    console.warn('ensureAdminColumns:', e?.message || e);
+  }
 }
 
 function requireAdmin(req: AuthRequest, res: Response): boolean {
@@ -51,6 +61,7 @@ export function mountAdminDashboardRoutes(app: Express) {
       await ensureAdminColumns(db);
 
       const agora = new Date().toISOString();
+      const mesIni = startOfMonthIso();
       const empresas = await db.all(`SELECT * FROM empresas ORDER BY criado_em DESC LIMIT 500`);
 
       const ativos = empresas.filter(
@@ -88,14 +99,20 @@ export function mountAdminDashboardRoutes(app: Express) {
         porPlano[plan] = (porPlano[plan] || 0) + 1;
       }
 
-      const tokenRows = await db.all(
-        `SELECT empresa_id, SUM(tokens) as total_tokens, COUNT(*) as eventos
-         FROM ai_usage
-         WHERE empresa_id IS NOT NULL
-         GROUP BY empresa_id
-         ORDER BY total_tokens DESC
-         LIMIT 10`
-      );
+      let tokenRows: any[] = [];
+      try {
+        tokenRows = await db.all(
+          `SELECT empresa_id, SUM(tokens) as total_tokens, COUNT(*) as eventos
+           FROM ai_usage
+           WHERE empresa_id IS NOT NULL
+           GROUP BY empresa_id
+           ORDER BY total_tokens DESC
+           LIMIT 10`
+        );
+      } catch {
+        tokenRows = [];
+      }
+
       const topTokens = [];
       for (const row of tokenRows || []) {
         const emp = empresas.find((x: any) => x.id === row.empresa_id);
@@ -109,15 +126,36 @@ export function mountAdminDashboardRoutes(app: Express) {
         });
       }
 
-      const totalTokensMes = await db.get(
-        `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
-         WHERE criado_em >= date('now', 'start of month')`
-      );
-
-      const reviewsMes = await db.get(
-        `SELECT COUNT(*) as c FROM reviews
-         WHERE createdAt >= date('now', 'start of month') AND IFNULL(is_test,0)=0`
-      );
+      let tokensMes = 0;
+      let reviewsMes = 0;
+      try {
+        const totalTokensMes = await db.get(
+          `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage WHERE criado_em >= ?`,
+          [mesIni]
+        );
+        tokensMes = Number(totalTokensMes?.t || 0);
+      } catch {
+        /* tabela pode não existir ainda */
+      }
+      try {
+        const reviewsMesRow = await db.get(
+          `SELECT COUNT(*) as c FROM reviews
+           WHERE "createdAt" >= ? AND COALESCE(is_test,0)=0`,
+          [mesIni]
+        );
+        reviewsMes = Number(reviewsMesRow?.c || 0);
+      } catch {
+        try {
+          const reviewsMesRow = await db.get(
+            `SELECT COUNT(*) as c FROM reviews
+             WHERE created_at >= ? AND COALESCE(is_test,0)=0`,
+            [mesIni]
+          );
+          reviewsMes = Number(reviewsMesRow?.c || 0);
+        } catch {
+          reviewsMes = 0;
+        }
+      }
 
       res.json({
         gerado_em: new Date().toISOString(),
@@ -130,8 +168,8 @@ export function mountAdminDashboardRoutes(app: Express) {
           cancelamento_pendente: cancelamentoPendente.length,
           mrr_estimado_brl: Math.round(mrr * 100) / 100,
           arr_estimado_brl: Math.round(mrr * 12 * 100) / 100,
-          tokens_mes: Number(totalTokensMes?.t || 0),
-          reviews_mes: Number(reviewsMes?.c || 0),
+          tokens_mes: tokensMes,
+          reviews_mes: reviewsMes,
         },
         por_plano: porPlano,
         top_tokens: topTokens,
@@ -161,9 +199,14 @@ export function mountAdminDashboardRoutes(app: Express) {
       await ensureAdminColumns(db);
 
       const rows = await db.all(`SELECT * FROM empresas ORDER BY criado_em DESC LIMIT 500`);
-      const tokensByEmp = await db.all(
-        `SELECT empresa_id, SUM(tokens) as total_tokens FROM ai_usage GROUP BY empresa_id`
-      );
+      let tokensByEmp: any[] = [];
+      try {
+        tokensByEmp = await db.all(
+          `SELECT empresa_id, SUM(tokens) as total_tokens FROM ai_usage GROUP BY empresa_id`
+        );
+      } catch {
+        tokensByEmp = [];
+      }
       const tokMap = new Map(
         (tokensByEmp || []).map((t: any) => [t.empresa_id, Number(t.total_tokens || 0)])
       );
@@ -204,9 +247,14 @@ export function mountAdminDashboardRoutes(app: Express) {
       const db = getDb();
       await ensureAdminColumns(db);
       const rows = await db.all(`SELECT * FROM empresas ORDER BY criado_em DESC LIMIT 2000`);
-      const tokensByEmp = await db.all(
-        `SELECT empresa_id, SUM(tokens) as total_tokens FROM ai_usage GROUP BY empresa_id`
-      );
+      let tokensByEmp: any[] = [];
+      try {
+        tokensByEmp = await db.all(
+          `SELECT empresa_id, SUM(tokens) as total_tokens FROM ai_usage GROUP BY empresa_id`
+        );
+      } catch {
+        tokensByEmp = [];
+      }
       const tokMap = new Map(
         (tokensByEmp || []).map((t: any) => [t.empresa_id, Number(t.total_tokens || 0)])
       );
@@ -444,13 +492,23 @@ export function mountAdminDashboardRoutes(app: Express) {
     autenticarToken,
     asyncHandler(async (req: AuthRequest, res: Response) => {
       if (!requireAdmin(req, res)) return;
-      const rows = await getDb().all(
-        `SELECT r.*, e.nome_empresa
-         FROM reviews r
-         LEFT JOIN empresas e ON e.id = r.empresa_id
-         ORDER BY r.createdAt DESC LIMIT 100`
-      );
-      res.json(rows);
+      try {
+        const rows = await getDb().all(
+          `SELECT r.*, e.nome_empresa
+           FROM reviews r
+           LEFT JOIN empresas e ON e.id = r.empresa_id
+           ORDER BY r."createdAt" DESC LIMIT 100`
+        );
+        res.json(rows);
+      } catch {
+        const rows = await getDb().all(
+          `SELECT r.*, e.nome_empresa
+           FROM reviews r
+           LEFT JOIN empresas e ON e.id = r.empresa_id
+           ORDER BY r.created_at DESC LIMIT 100`
+        );
+        res.json(rows);
+      }
     })
   );
 }
