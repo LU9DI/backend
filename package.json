@@ -1,12 +1,12 @@
 {
   "name": "backend",
-  "version": "1.0.2",
-  "description": "API Filtra.AI",
+  "version": "1.0.3",
+  "description": "API Filtra.IA",
   "main": "server.ts",
   "type": "module",
   "scripts": {
     "dev": "tsx watch server.ts",
-    "build": "node -e \"console.log('Filtra.AI build ok — runtime via tsx')\"",
+    "build": "node -e \"console.log('Filtra.IA build ok')\"",
     "start": "tsx server.ts",
     "start:prod": "tsx server.ts",
     "test": "tsx --test tests/**/*.test.ts",
@@ -24,11 +24,11 @@
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",
     "jsonwebtoken": "^9.0.2",
-    "nodemailer": "^10.0.1",
+    "nodemailer": "^6.9.16",
     "pdfkit": "^0.16.0",
     "pg": "^8.13.3",
     "tsx": "^4.19.3",
-    "@supabase/supabase-js": "^2.45.0"
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",

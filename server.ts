@@ -1,5 +1,5 @@
 /**
- * Filtra.IA — bootstrap da API (produção)
+ * Filtra.AI API — bootstrap estável (cold start rápido no Render).
  */
 import express from 'express';
 import cors from 'cors';
@@ -53,7 +53,6 @@ import { ensurePushSchema, initWebPush } from './lib/push.js';
 import { ensureAiUsageSchema } from './lib/aiUsage.js';
 import { ensureOpsTables } from './lib/opsLog.js';
 import { ensureAuditSchema } from './lib/auditLog.js';
-import { mountDebugRoutes } from './routes/debugRoutes.js';
 import { ensureRetryQueue, startRetryWorker } from './lib/retryQueue.js';
 import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
@@ -82,14 +81,12 @@ app.use((req, res, next) => {
 });
 app.use(cors(buildCorsOptions()));
 
-// live / ready / health (monitoramento)
 mountHealthRoutes(app);
 
 app.get('/api/metrics', (req, res) => {
   const secret = process.env.JOBS_SECRET?.trim();
   if (process.env.NODE_ENV === 'production' && secret) {
-    const got = String(req.headers['x-jobs-secret'] || '');
-    if (got !== secret) {
+    if (String(req.headers['x-jobs-secret'] || '') !== secret) {
       return res.status(401).json({ error: 'Não autorizado.' });
     }
   }
@@ -106,82 +103,87 @@ const PORT = Number(process.env.PORT || 5000);
 let server: Server | null = null;
 let shuttingDown = false;
 
-async function runSentimentBackfillOnBoot() {
-  if (process.env.BACKFILL_SENTIMENT === '0') return;
+async function bootSafe(label: string, fn: () => Promise<void>) {
   try {
-    const db = getDb();
-    const missing = await countMissingSentiment(db);
-    if (missing === 0) return;
-    const limit = Math.max(1, Number(process.env.BACKFILL_SENTIMENT_LIMIT || 2000));
-    const r = await backfillSentiment(db, {
-      limit,
-      useAi: process.env.BACKFILL_SENTIMENT_AI === '1',
-    });
-    console.log(`🧠 Backfill sentimento: updated=${r.updated} errors=${r.errors}`);
+    await fn();
   } catch (e: any) {
-    console.warn('Backfill sentimento:', e?.message || e);
+    console.warn(`[boot] ${label}:`, e?.message || e);
   }
 }
 
-async function runLgpdSweepOnBoot() {
-  if (process.env.LGPD_SWEEP === '0') return;
-  try {
-    const db = getDb();
-    await ensureReviewTreatmentColumns(db);
-    await anonymizeOldClientWhatsapp(db, { limit: 1000 });
-  } catch (e: any) {
-    console.warn('LGPD sweep:', e?.message || e);
+/** Trabalho pesado depois do listen — cold start mais rápido. */
+async function backgroundBoot() {
+  await bootSafe('unidades', () => ensureUnidadesSchema(getDb()));
+  await bootSafe('webauthn', () => ensureWebAuthnSchema(getDb()));
+  await bootSafe('push', async () => {
+    await ensurePushSchema(getDb());
+    initWebPush();
+  });
+  await bootSafe('aiUsage', () => ensureAiUsageSchema(getDb()));
+  await bootSafe('ops', () => ensureOpsTables(getDb()));
+  await bootSafe('audit', () => ensureAuditSchema(getDb()));
+  await bootSafe('plan pricing', async () => {
+    await ensurePlanPricingSchema(getDb());
+    await refreshPlanPricesFromDb(getDb());
+  });
+  await bootSafe('retry', async () => {
+    await ensureRetryQueue(getDb());
+    registerAllRetryHandlers();
+    startRetryWorker();
+  });
+  await bootSafe('treatment', () => ensureReviewTreatmentColumns(getDb()));
+
+  if (process.env.BACKFILL_SENTIMENT === '1') {
+    await bootSafe('sentiment', async () => {
+      const missing = await countMissingSentiment(getDb());
+      if (missing === 0) return;
+      const limit = Math.max(1, Number(process.env.BACKFILL_SENTIMENT_LIMIT || 500));
+      await backfillSentiment(getDb(), { limit, useAi: false });
+    });
   }
+
+  if (process.env.LGPD_SWEEP === '1') {
+    await bootSafe('lgpd', async () => {
+      await ensureReviewTreatmentColumns(getDb());
+      await anonymizeOldClientWhatsapp(getDb(), { limit: 500 });
+    });
+  }
+}
+
+/** Self-ping opcional (além do UptimeRobot). */
+function startSelfKeepAlive() {
+  const url = (process.env.KEEP_ALIVE_URL || process.env.RENDER_EXTERNAL_URL || '').trim();
+  if (!url) return;
+  const target = url.replace(/\/$/, '') + '/api/live';
+  const ms = Math.max(4 * 60_000, Number(process.env.KEEP_ALIVE_MS || 5 * 60_000));
+  const tick = async () => {
+    try {
+      await fetch(target, { signal: AbortSignal.timeout(8_000) });
+    } catch {
+      /* ignore */
+    }
+  };
+  setInterval(tick, ms).unref();
+  setTimeout(tick, 30_000).unref();
+  console.log(`💓 keep-alive → ${target} a cada ${Math.round(ms / 1000)}s`);
 }
 
 function gracefulShutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`⏹  ${signal} — encerrando...`);
+  console.log(`⏹  ${signal}`);
   const force = setTimeout(() => process.exit(1), 10_000);
   force.unref();
-  if (server) {
-    server.close(() => process.exit(0));
-  } else {
-    process.exit(0);
-  }
+  if (server) server.close(() => process.exit(0));
+  else process.exit(0);
 }
 
 async function main() {
+  // DB + schema mínimo ANTES de escutar
   await initDB();
+  await bootSafe('runtimeSchema', () => ensureRuntimeSchema(getDb()));
 
-  const boot = async (label: string, fn: () => Promise<void>) => {
-    try {
-      await fn();
-    } catch (e) {
-      console.warn(`${label}:`, e);
-    }
-  };
-
-  await boot('ensureRuntimeSchema', () => ensureRuntimeSchema(getDb()));
-  await boot('ensureUnidadesSchema', () => ensureUnidadesSchema(getDb()));
-  await boot('ensureWebAuthnSchema', () => ensureWebAuthnSchema(getDb()));
-  await boot('ensurePushSchema', async () => {
-    await ensurePushSchema(getDb());
-    initWebPush();
-  });
-  await boot('ensureAiUsageSchema', () => ensureAiUsageSchema(getDb()));
-  await boot('ensureOpsTables', () => ensureOpsTables(getDb()));
-  await boot('ensureAuditSchema', () => ensureAuditSchema(getDb()));
-  await boot('plan pricing', async () => {
-    await ensurePlanPricingSchema(getDb());
-    await refreshPlanPricesFromDb(getDb());
-  });
-  await boot('retry queue', async () => {
-    await ensureRetryQueue(getDb());
-    registerAllRetryHandlers();
-    startRetryWorker();
-  });
-  await boot('treatment columns', () => ensureReviewTreatmentColumns(getDb()));
-
-  await runSentimentBackfillOnBoot();
-  await runLgpdSweepOnBoot();
-
+  // Rotas críticas já disponíveis no cold start
   mountTrialRoutes(app);
   mountAuthRoutes(app);
   mountEmpresaRoutes(app);
@@ -203,7 +205,6 @@ async function main() {
   mountPublicPlanosRoutes(app);
   mountAuditRoutes(app);
   mountN8nRoutes(app);
-  mountDebugRoutes(app);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
@@ -215,17 +216,39 @@ async function main() {
   app.use(errorHandler);
 
   const build = getBuildInfo();
-  console.log(`📦 build ${build.version} marker=${build.marker}`);
+  console.log(`📦 ${build.version} ${build.marker}`);
   console.log(
-    `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix/MP: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | n8n: ${n8nConfigured() ? 'ok' : 'OFF'}`
+    `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | MP: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | n8n: ${n8nConfigured() ? 'ok' : 'OFF'}`
   );
 
   server = app.listen(PORT, () => {
-    console.log(`🚀 API Filtra.IA em http://localhost:${PORT}`);
+    console.log(`🚀 Filtra.AI :${PORT}`);
   });
+
+  // Evita timeouts prematuros atrás do proxy do Render
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
+
+  // Não bloqueia o listen
+  setImmediate(() => {
+    backgroundBoot().catch((e) => console.warn('backgroundBoot', e));
+  });
+
+  startSelfKeepAlive();
 
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+  process.on('unhandledRejection', (reason: any) => {
+    console.error('unhandledRejection:', reason?.message || reason);
+  });
+  process.on('uncaughtException', (err) => {
+    console.error('uncaughtException:', err?.message || err);
+    // Em produção, tenta graceful em vez de morrer silencioso
+    if (process.env.NODE_ENV === 'production') {
+      gracefulShutdown('uncaughtException');
+    }
+  });
 }
 
 main().catch((e) => {

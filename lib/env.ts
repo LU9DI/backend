@@ -1,7 +1,4 @@
-/**
- * Validação de variáveis de ambiente na subida.
- * NÃO coloque secrets aqui — só process.env (Render Environment / .env).
- */
+/** Validação de env na subida. */
 
 export type EnvReport = {
   ok: boolean;
@@ -9,9 +6,10 @@ export type EnvReport = {
   warnings: string[];
 };
 
+/** Stripe OFF por padrão (produto usa MP + PayPal). */
 function stripeWanted(): boolean {
-  const flag = String(process.env.STRIPE_ENABLED || '1').trim().toLowerCase();
-  return !(flag === '0' || flag === 'false' || flag === 'off' || flag === 'no');
+  const flag = String(process.env.STRIPE_ENABLED || '0').trim().toLowerCase();
+  return flag === '1' || flag === 'true' || flag === 'on' || flag === 'yes';
 }
 
 export function validateEnv(): EnvReport {
@@ -25,29 +23,31 @@ export function validateEnv(): EnvReport {
     errors.push('JWT_SECRET deve ter pelo menos 32 caracteres.');
   }
 
+  if (process.env.NODE_ENV === 'production') {
+    const db =
+      process.env.DATABASE_URL?.trim() ||
+      process.env.SUPABASE_DB_URL?.trim() ||
+      process.env.SUPABASE_DATABASE_URL?.trim();
+    if (!db) {
+      errors.push('DATABASE_URL ou SUPABASE_DB_URL obrigatório em produção.');
+    }
+  }
+
   if (stripeWanted() && !process.env.STRIPE_SECRET_KEY?.trim()) {
-    warnings.push(
-      'STRIPE_SECRET_KEY ausente — cartão Stripe OFF. Use Pix (MP) ou PayPal, ou defina STRIPE_ENABLED=0.'
-    );
-  } else if (!stripeWanted()) {
-    warnings.push('Stripe desligado (STRIPE_ENABLED=0) — pagamentos via Pix/PayPal.');
+    warnings.push('STRIPE_SECRET_KEY ausente — Stripe OFF.');
   }
 
   if (!process.env.MP_ACCESS_TOKEN?.trim()) {
-    warnings.push('MP_ACCESS_TOKEN ausente — Pix (QR/copia-cola/recorrente) desligado.');
+    warnings.push('MP_ACCESS_TOKEN ausente — Mercado Pago desligado.');
   }
 
   if (!process.env.PAYPAL_CLIENT_ID?.trim() || !process.env.PAYPAL_CLIENT_SECRET?.trim()) {
-    warnings.push(
-      'PayPal incompleto — precisa PAYPAL_CLIENT_ID e PAYPAL_CLIENT_SECRET (sandbox ou live).'
-    );
+    warnings.push('PayPal incompleto (CLIENT_ID + SECRET).');
   }
 
   const recovery = process.env.ADMIN_RECOVERY_SECRET || '';
   if (!recovery || recovery.length < 12) {
-    warnings.push(
-      'ADMIN_RECOVERY_SECRET ausente ou curta — recuperação de senha do admin fica desativada.'
-    );
+    warnings.push('ADMIN_RECOVERY_SECRET curta — reset admin desativado.');
   }
 
   const hasGroq = Boolean(process.env.GROQ_API_KEY?.trim());
@@ -55,17 +55,11 @@ export function validateEnv(): EnvReport {
     process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim()
   );
   if (!hasGroq && !hasGemini) {
-    warnings.push(
-      'Nenhuma IA configurada (GROQ_API_KEY / GEMINI_API_KEY) — respostas automáticas desligadas.'
-    );
-  } else if (!hasGroq) {
-    warnings.push('Só Gemini ativo — defina GROQ_API_KEY para usar Groq como primário.');
-  } else if (!hasGemini) {
-    warnings.push('Só Groq ativo — defina GEMINI_API_KEY para failover quando a cota acabar.');
+    warnings.push('Sem GROQ/GEMINI — IA desligada.');
   }
 
   if (!process.env.SMTP_HOST) {
-    warnings.push('SMTP não configurado — links de reset aparecem só no log do servidor.');
+    warnings.push('SMTP ausente — e-mails só no log.');
   }
 
   return { ok: errors.length === 0, errors, warnings };
@@ -73,13 +67,9 @@ export function validateEnv(): EnvReport {
 
 export function assertEnvOrExit(): void {
   const report = validateEnv();
-  for (const w of report.warnings) {
-    console.warn(`⚠️  ${w}`);
-  }
+  for (const w of report.warnings) console.warn(`⚠️  ${w}`);
   if (!report.ok) {
-    for (const e of report.errors) {
-      console.error(`❌ ${e}`);
-    }
+    for (const e of report.errors) console.error(`❌ ${e}`);
     process.exit(1);
   }
 }

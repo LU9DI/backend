@@ -1,6 +1,6 @@
-/** Identidade do deploy — valida se o Render puxou o main certo. */
-export const APP_VERSION = '1.0.3';
-export const BUILD_MARKER = 'health-monitor+n8n+quota100+pwd8';
+/** Identidade do deploy. */
+export const APP_VERSION = '1.1.0';
+export const BUILD_MARKER = 'stable-boot+supabase+keepalive';
 
 const STARTED_AT = new Date().toISOString();
 const STARTED_MS = Date.now();
