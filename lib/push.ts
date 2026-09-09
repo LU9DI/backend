@@ -7,12 +7,22 @@
  *   VAPID_SUBJECT=mailto:admin@seusaas.com
  *
  * Gerar chaves: npx web-push generate-vapid-keys
+ *
+ * Celular:
+ * - Android Chrome: permitir notificações no painel (logado).
+ * - iPhone: precisa **Adicionar à Tela de Início** (PWA); Safari sozinho não recebe push.
  */
 import webpush from 'web-push';
 import type { Database } from 'sqlite';
 import crypto from 'crypto';
 
 let configured = false;
+
+const APP_URL = (
+  process.env.APP_URL ||
+  process.env.FRONTEND_URL ||
+  'https://filtraai.com'
+).replace(/\/$/, '');
 
 export function pushConfigured(): boolean {
   return Boolean(
@@ -24,7 +34,7 @@ export function initWebPush() {
   if (!pushConfigured()) return false;
   if (configured) return true;
   webpush.setVapidDetails(
-    process.env.VAPID_SUBJECT || 'mailto:admin@seusaas.com',
+    process.env.VAPID_SUBJECT || 'mailto:admin@filtraai.com',
     process.env.VAPID_PUBLIC_KEY!.trim(),
     process.env.VAPID_PRIVATE_KEY!.trim()
   );
@@ -50,9 +60,13 @@ export async function ensurePushSchema(db: Database) {
       last_seen_at TEXT
     );
   `);
-  await db.exec(
-    `CREATE INDEX IF NOT EXISTS idx_push_empresa ON push_subscriptions(empresa_id)`
-  );
+  try {
+    await db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_push_empresa ON push_subscriptions(empresa_id)`
+    );
+  } catch {
+    /* ok */
+  }
 }
 
 export type PushSubInput = {
@@ -119,6 +133,12 @@ export type PushPayload = {
   empresaId?: string;
 };
 
+function absoluteUrl(pathOrUrl?: string): string {
+  if (!pathOrUrl) return APP_URL;
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  return `${APP_URL}${pathOrUrl.startsWith('/') ? '' : '/'}${pathOrUrl}`;
+}
+
 async function sendOne(
   db: Database,
   row: any,
@@ -134,7 +154,7 @@ async function sendOne(
       JSON.stringify({
         title: payload.title,
         body: payload.body,
-        url: payload.url || '/',
+        url: absoluteUrl(payload.url),
         tag: payload.tag || 'filtra',
       }),
       { TTL: 60 * 60 }
@@ -151,29 +171,33 @@ async function sendOne(
   }
 }
 
-/** Envia para todas as subscriptions de uma empresa (ou todas se admin). */
 export async function sendPushToEmpresa(
   db: Database,
   empresaId: string,
   payload: PushPayload
-): Promise<{ sent: number; gone: number; errors: number }> {
-  if (!initWebPush()) return { sent: 0, gone: 0, errors: 0 };
+): Promise<{ sent: number; gone: number; errors: number; subscriptions: number }> {
+  if (!initWebPush()) return { sent: 0, gone: 0, errors: 0, subscriptions: 0 };
+  await ensurePushSchema(db);
   const rows = await db.all(
-    `SELECT * FROM push_subscriptions WHERE empresa_id = ? OR empresa_id IS NULL`,
+    `SELECT * FROM push_subscriptions WHERE empresa_id = ?`,
     [empresaId]
   );
+  const list = rows || [];
+  if (list.length === 0) {
+    console.warn(
+      `[push] nenhuma subscription para empresa=${empresaId} — usuário precisa permitir notificações logado no painel (celular: PWA no iOS)`
+    );
+  }
   let sent = 0,
     gone = 0,
     errors = 0;
-  for (const row of rows) {
-    // se tem empresa_id setado, só a empresa; NULL = genérico (raro)
-    if (row.empresa_id && row.empresa_id !== empresaId) continue;
+  for (const row of list) {
     const r = await sendOne(db, row, payload);
     if (r === 'ok') sent++;
     else if (r === 'gone') gone++;
     else errors++;
   }
-  return { sent, gone, errors };
+  return { sent, gone, errors, subscriptions: list.length };
 }
 
 export async function notifyCrisisReview(
@@ -181,13 +205,19 @@ export async function notifyCrisisReview(
   opts: { empresaId: string; rating: number; name?: string; slugOrId?: string }
 ) {
   if (opts.rating > 3) return;
-  if (!pushConfigured()) return;
+  if (!pushConfigured()) {
+    console.warn('[push] crise ignorada — VAPID não configurado');
+    return;
+  }
   const ref = opts.slugOrId || opts.empresaId;
-  await sendPushToEmpresa(db, opts.empresaId, {
-    title: 'Alerta de reputação',
+  const result = await sendPushToEmpresa(db, opts.empresaId, {
+    title: 'Filtra.AI — crítica privada',
     body: `Nova avaliação ${opts.rating}★${opts.name ? ` de ${opts.name}` : ''}. Abra o painel.`,
     url: `/painel/${ref}`,
     tag: `crise-${opts.empresaId}`,
     empresaId: opts.empresaId,
   });
+  console.log(
+    `[push] crise empresa=${opts.empresaId} sent=${result.sent} subs=${result.subscriptions}`
+  );
 }
