@@ -1,16 +1,12 @@
 /**
- * Inicialização e acesso ao banco.
- * - Dev / testes: SQLite (padrão)
- * - Produção: Postgres obrigatório (DATABASE_URL), salvo SQLITE_ALLOW_PROD=1
- *
- * Tipos de data: TIMESTAMPTZ (Postgres) — SQLite aceita o literal e ISO strings.
+ * Banco: Postgres em produção (obrigatório).
+ * SQLite só em dev (import dinâmico — não quebra Docker sem sqlite3).
  */
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
-import sqlite3 from 'sqlite3';
-import { open, type Database } from 'sqlite';
+import type { Database } from 'sqlite';
 import { fileURLToPath } from 'url';
 import { ensureAuthColumns } from '../passwordResetRoutes.js';
 import { ensureMfaColumns } from '../mfa.js';
@@ -32,7 +28,6 @@ export function dbEngine(): 'sqlite' | 'postgres' {
   return _engine;
 }
 
-/** Health real: SELECT 1. */
 export async function pingDb(): Promise<{ ok: boolean; engine: string; error?: string }> {
   try {
     const db = getDb();
@@ -44,17 +39,26 @@ export async function pingDb(): Promise<{ ok: boolean; engine: string; error?: s
 }
 
 async function initSqlite(): Promise<Database> {
+  let sqlite3: any;
+  let open: any;
+  try {
+    sqlite3 = (await import('sqlite3')).default;
+    open = (await import('sqlite')).open;
+  } catch {
+    throw new Error(
+      'SQLite não instalado. Use DATABASE_URL=postgresql://... ou npm i -D sqlite sqlite3'
+    );
+  }
+
   const dbPath =
     process.env.SQLITE_DB_PATH ||
-    (isProd
-      ? '/data/database.sqlite'
-      : path.resolve(__dirname, '..', '..', 'data', 'database.sqlite'));
+    path.resolve(__dirname, '..', '..', 'data', 'database.sqlite');
 
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = await open({ filename: dbPath, driver: sqlite3.Database });
   _engine = 'sqlite';
   console.log(`💾 SQLite: ${dbPath}`);
-  return db;
+  return db as Database;
 }
 
 async function initPostgres(): Promise<Database> {
@@ -72,16 +76,15 @@ export async function initDB(): Promise<Database> {
     _db = await initPostgres();
   } else if (isProd && process.env.SQLITE_ALLOW_PROD !== '1') {
     throw new Error(
-      'Produção exige DATABASE_URL Postgres. Defina no Render (filtra-ia-db) ou SQLITE_ALLOW_PROD=1.'
+      'Produção exige DATABASE_URL Postgres. Defina no Render ou SQLITE_ALLOW_PROD=1.'
     );
   } else {
     if (isProd) {
-      console.warn('⚠️  SQLITE_ALLOW_PROD=1 — dados no disco efêmero do Render podem sumir.');
+      console.warn('⚠️  SQLITE_ALLOW_PROD=1 — disco efêmero pode apagar dados.');
     }
     _db = await initSqlite();
   }
 
-  // TIMESTAMPTZ funciona no Postgres; no SQLite vira afinidade e aceita ISO
   await _db.exec(`
     CREATE TABLE IF NOT EXISTS empresas (
       id TEXT PRIMARY KEY,
@@ -149,19 +152,21 @@ export async function initDB(): Promise<Database> {
   await ensureAuthColumns(_db);
   await ensureMfaColumns(_db);
 
-  const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
-  const adminExiste = await _db.get('SELECT * FROM usuarios WHERE email = ?', [adminMail]);
-  if (!adminExiste) {
-    const senhaPadrao = process.env.ADMIN_PASSWORD || 'MudeEstaSenha123!';
-    const hash = await bcrypt.hash(senhaPadrao, 12);
-    try {
-      await _db.run(
-        'INSERT INTO usuarios (id, cnpj, nome_funcionario, empresa_id, senha_hash, email) VALUES (?, ?, ?, ?, ?, ?)',
-        [crypto.randomUUID(), '00000000000000', 'Admin', 'admin', hash, adminMail]
-      );
-      console.log(`🔑 Admin criado: ${adminMail}`);
-    } catch (e: any) {
-      console.warn('Admin seed:', e?.message || e);
+  const adminMail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+  const adminPass = process.env.ADMIN_PASSWORD || '';
+  if (adminMail && adminPass.length >= 12) {
+    const adminExiste = await _db.get('SELECT id FROM usuarios WHERE email = ?', [adminMail]);
+    if (!adminExiste) {
+      const hash = await bcrypt.hash(adminPass, 12);
+      try {
+        await _db.run(
+          'INSERT INTO usuarios (id, cnpj, nome_funcionario, empresa_id, senha_hash, email) VALUES (?, ?, ?, ?, ?, ?)',
+          [crypto.randomUUID(), '00000000000000', 'Admin', 'admin', hash, adminMail]
+        );
+        console.log(`🔑 Admin criado: ${adminMail}`);
+      } catch (e: any) {
+        console.warn('Admin seed:', e?.message || e);
+      }
     }
   }
 
