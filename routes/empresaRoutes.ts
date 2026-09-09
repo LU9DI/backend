@@ -47,6 +47,10 @@ function nivelDashboard(plan: string): 'basico' | 'pro' | 'ultra' | 'executivo' 
   return 'basico';
 }
 
+function rowCreatedAt(r: any): string {
+  return String(r.createdAt || r.createdat || r.created_at || '') || new Date().toISOString();
+}
+
 function serieUltimosDias(
   reviews: { rating: number; createdAt: string }[],
   dias = 14
@@ -84,6 +88,44 @@ function podeGerirEmpresa(req: AuthRequest, empresaId: string): boolean {
   return Boolean(req.user?.empresa_id && req.user.empresa_id === empresaId);
 }
 
+async function ensurePainelColumns(db: any) {
+  try {
+    await ensureReviewFraudColumns(db);
+  } catch (e: any) {
+    console.warn('ensureReviewFraudColumns:', e?.message || e);
+  }
+  try {
+    await ensureReviewTreatmentColumns(db);
+  } catch (e: any) {
+    console.warn('ensureReviewTreatmentColumns:', e?.message || e);
+  }
+  // Postgres: ADD COLUMN IF NOT EXISTS; SQLite ignora se falhar
+  const extras = [
+    'sentiment TEXT',
+    'sentiment_score DOUBLE PRECISION',
+    'sentiment_source TEXT',
+    'is_test INTEGER DEFAULT 0',
+    'fraud_flags TEXT',
+    'origin TEXT',
+    'client_whatsapp TEXT',
+    'treated_at TIMESTAMPTZ',
+    'treated_note TEXT',
+  ];
+  for (const ddl of extras) {
+    const col = ddl.split(/\s+/)[0];
+    try {
+      await db.exec(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS ${ddl}`);
+    } catch {
+      try {
+        await db.exec(`ALTER TABLE reviews ADD COLUMN ${ddl}`);
+      } catch {
+        /* coluna já existe ou engine sem IF NOT EXISTS */
+      }
+    }
+    void col;
+  }
+}
+
 export function mountEmpresaRoutes(app: Express) {
   app.get(
     '/api/empresa/:ref/validar',
@@ -118,7 +160,6 @@ export function mountEmpresaRoutes(app: Express) {
     })
   );
 
-  /** Troca de plano em modo teste (sem Stripe) — requer login */
   app.patch(
     '/api/empresa/:ref/plano',
     planPatchLimiter,
@@ -200,7 +241,6 @@ export function mountEmpresaRoutes(app: Express) {
     })
   );
 
-  /** Link Google Maps / Google Review (nota ≥4 redireciona para cá) */
   app.patch(
     '/api/empresa/:ref/google',
     autenticarToken,
@@ -242,23 +282,18 @@ export function mountEmpresaRoutes(app: Express) {
       }
 
       const db = getDb();
-      await ensureReviewFraudColumns(db);
-      await ensureReviewTreatmentColumns(db);
-      const cols = (await db.all(`PRAGMA table_info(reviews)`)).map((c: any) => c.name);
-      if (!cols.includes('sentiment')) await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment TEXT`);
-      if (!cols.includes('sentiment_score'))
-        await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_score REAL`);
-      if (!cols.includes('sentiment_source'))
-        await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_source TEXT`);
+      await ensurePainelColumns(db);
 
-      const rows = await db.all(
-        `SELECT id, name, rating, comment, ai_reply, ai_tags, createdAt,
-                IFNULL(is_test,0) as is_test, fraud_flags, origin,
-                sentiment, sentiment_score, sentiment_source,
-                client_whatsapp, treated_at, treated_note
-         FROM reviews WHERE empresa_id = ? ORDER BY createdAt DESC LIMIT 500`,
-        [empresa.id]
-      );
+      let rows: any[] = [];
+      try {
+        rows = await db.all(
+          `SELECT * FROM reviews WHERE empresa_id = ? ORDER BY id DESC LIMIT 500`,
+          [empresa.id]
+        );
+      } catch (e: any) {
+        console.error('painel reviews:', e?.message || e);
+        rows = [];
+      }
 
       const reviews = (rows || []).map((r: any) => {
         let tags: string[] = [];
@@ -270,6 +305,7 @@ export function mountEmpresaRoutes(app: Express) {
             tags = [];
           }
         }
+        const createdAt = rowCreatedAt(r);
         const clientWpp =
           r.client_whatsapp === '[anonimizado]'
             ? null
@@ -281,9 +317,9 @@ export function mountEmpresaRoutes(app: Express) {
           comment: r.comment,
           ai_reply: r.ai_reply,
           ai_tags: tags,
-          createdAt: r.createdAt,
+          createdAt,
           is_test: Number(r.is_test) === 1,
-          fraud_flags: r.fraud_flags,
+          fraud_flags: r.fraud_flags || null,
           origin: r.origin || 'publico',
           sentiment: r.sentiment || null,
           sentiment_score: r.sentiment_score != null ? Number(r.sentiment_score) : null,
@@ -355,10 +391,21 @@ export function mountEmpresaRoutes(app: Express) {
       const pdf_disponivel = planTemPdf(plan);
       const tem_ia = trial || planTemIA(plan);
 
+      let feedback_usados = 0;
+      let token_usados = 0;
+      try {
+        feedback_usados = await contarReviewsMes(empresa.id);
+      } catch {
+        feedback_usados = total;
+      }
+      try {
+        token_usados = tem_ia ? await tokensUsadosMes(empresa.id) : 0;
+      } catch {
+        token_usados = 0;
+      }
+
       const feedback_limite = getFeedbackLimit(plan);
-      const feedback_usados = await contarReviewsMes(empresa.id);
       const token_limite = getTokenLimit(plan);
-      const token_usados = tem_ia ? await tokensUsadosMes(empresa.id) : 0;
 
       const base = APP_URL.replace(/\/$/, '');
       const ref = empresa.slug || empresa.id;
