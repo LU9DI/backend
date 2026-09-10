@@ -1,5 +1,5 @@
 /**
- * Ativação / bloqueio de planos via Stripe (regra de negócio).
+ * Ativação / bloqueio de planos + n8n.
  */
 import type { Database } from 'sqlite';
 import { resolvePlano } from '../stripeBilling.js';
@@ -8,6 +8,7 @@ import {
   notificarCancelamentoAgendado,
   notificarAcessoExpirado,
 } from '../lib/notifications.js';
+import { notifyN8n } from '../lib/n8n.js';
 
 function normalizePlanDb(planDb: string): string {
   const p = String(planDb || '').toLowerCase();
@@ -55,7 +56,9 @@ export async function activatePlan(
   }
 
   try {
-    const emp = await db.get('SELECT nome_empresa, slug FROM empresas WHERE id = ?', [empresaId]);
+    const emp = await db.get('SELECT nome_empresa, slug, cnpj FROM empresas WHERE id = ?', [
+      empresaId,
+    ]);
     const email = await emailDaEmpresa(db, empresaId);
     if (email) {
       await notificarPagamentoConfirmado({
@@ -67,8 +70,19 @@ export async function activatePlan(
         empresaId,
       });
     }
+    notifyN8n('payment.confirmado', {
+      empresa_id: empresaId,
+      slug: emp?.slug,
+      cnpj: emp?.cnpj,
+      nome_empresa: emp?.nome_empresa,
+      email,
+      plano: normalized,
+      expira_em: expira,
+      customer_id: customerId || null,
+      subscription_id: subscriptionId || null,
+    });
   } catch (e: any) {
-    console.warn('[billing] e-mail ativação falhou:', e?.message || e);
+    console.warn('[billing] pós-ativação:', e?.message || e);
   }
 
   console.log(`[billing] plano ativado empresa=${empresaId} plan=${normalized}`);
@@ -92,7 +106,7 @@ export async function markCancelAtPeriodEnd(
 
   try {
     const emp = await db.get(
-      'SELECT nome_empresa, slug, plan, expira_em FROM empresas WHERE id = ?',
+      'SELECT nome_empresa, slug, plan, expira_em, cnpj FROM empresas WHERE id = ?',
       [empresaId]
     );
     const email = await emailDaEmpresa(db, empresaId);
@@ -106,6 +120,15 @@ export async function markCancelAtPeriodEnd(
         empresaId,
       });
     }
+    notifyN8n('payment.cancelado', {
+      empresa_id: empresaId,
+      slug: emp?.slug,
+      cnpj: emp?.cnpj,
+      nome_empresa: emp?.nome_empresa,
+      email,
+      plano: emp?.plan,
+      expira_em: periodEndIso || emp?.expira_em,
+    });
   } catch (e: any) {
     console.warn('[billing] e-mail cancelamento falhou:', e?.message || e);
   }
@@ -119,7 +142,7 @@ export async function blockEmpresa(
   opts?: { notify?: boolean; tipo?: 'trial' | 'assinatura' | 'cancelamento' }
 ) {
   const empBefore = await db.get(
-    'SELECT nome_empresa, slug, plan, status, expira_em, cancel_at_period_end FROM empresas WHERE id = ?',
+    'SELECT nome_empresa, slug, plan, status, expira_em, cancel_at_period_end, cnpj FROM empresas WHERE id = ?',
     [empresaId]
   );
 
@@ -148,6 +171,15 @@ export async function blockEmpresa(
           slug: empBefore.slug,
           empresaId,
         });
+        notifyN8n('empresa.bloqueada', {
+          empresa_id: empresaId,
+          slug: empBefore.slug,
+          cnpj: empBefore.cnpj,
+          nome_empresa: empBefore.nome_empresa,
+          email,
+          plano: empBefore.plan,
+          tipo,
+        });
       }
     } catch (e: any) {
       console.warn('[billing] e-mail bloqueio falhou:', e?.message || e);
@@ -171,10 +203,6 @@ export function empresaTemAcesso(empresa: {
   return false;
 }
 
-/**
- * Bloqueia empresas vencidas. Não envia e-mail aqui — o job /api/jobs/expirations
- * notifica em lote com dedupe. Chamadas pontuais usam blockEmpresa({ notify: true }).
- */
 export async function enforcarExpiracoes(db: Database) {
   const agora = new Date().toISOString();
   await db.run(
