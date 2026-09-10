@@ -41,7 +41,7 @@ export async function anonymizeOldClientWhatsapp(
          AND client_whatsapp != '[anonimizado]'
          AND (
            (treated_at IS NOT NULL AND treated_at <= ?)
-           OR ("createdAt" IS NOT NULL AND "createdAt" <= ?)
+           OR (createdAt IS NOT NULL AND createdAt <= ?)
          )
        LIMIT ?`,
       [treatedCutoff, createdCutoff, limit]
