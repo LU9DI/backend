@@ -2,154 +2,21 @@ import type { Express, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { validateBody, schemaReview } from '../middleware/validate.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import {
-  criarReview,
-  listarReviews,
-  ReviewNotFoundError,
-  ReviewQuotaError,
-  ReviewFraudError,
-  ReviewValidationError,
-} from '../services/reviewService.js';
+import { criarReview, listarReviews, ReviewNotFoundError, ReviewQuotaError, ReviewFraudError, ReviewValidationError } from '../services/reviewService.js';
 import { clientIp } from '../lib/reviewFraud.js';
-import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
+import { autenticarToken, extrairToken, isAdminUser, verifyAccessToken, type AuthRequest } from '../lib/auth.js';
 import { findEmpresa, getDb } from '../lib/db.js';
 import { ensureReviewTreatmentColumns } from '../lib/lgpd.js';
-
-const reviewsLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 40,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Muitas avaliações. Tente mais tarde.' },
-});
-
-const reviewsIpStrict = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 8,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Muitas tentativas deste IP. Aguarde 15 minutos.' },
-});
-
-const treatLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Muitas marcações. Aguarde.' },
-});
-
-export function mountReviewRoutes(app: Express) {
-  app.post(
-    '/api/reviews',
-    reviewsLimiter,
-    reviewsIpStrict,
-    validateBody(schemaReview),
-    asyncHandler(async (req: Request, res: Response) => {
-      try {
-        const result = await criarReview({
-          name: req.body.name ? String(req.body.name) : undefined,
-          comment: req.body.comment ? String(req.body.comment) : undefined,
-          rating: Number(req.body.rating),
-          empresa_id: req.body.empresa_id ? String(req.body.empresa_id) : undefined,
-          empresa_ref: req.body.empresa_ref ? String(req.body.empresa_ref) : undefined,
-          website: req.body.website != null ? String(req.body.website) : undefined,
-          is_test: Boolean(req.body.is_test),
-          client_whatsapp: req.body.client_whatsapp
-            ? String(req.body.client_whatsapp)
-            : req.body.whatsapp
-              ? String(req.body.whatsapp)
-              : undefined,
-          locale: req.body.locale ? String(req.body.locale) : undefined,
-          ip: clientIp(req as any),
-        });
-        res.status(201).json(result);
-      } catch (e: any) {
-        if (
-          e instanceof ReviewNotFoundError ||
-          e instanceof ReviewQuotaError ||
-          e instanceof ReviewFraudError ||
-          e instanceof ReviewValidationError
-        ) {
-          return res.status(e.status).json({ error: e.message });
-        }
-        if (e?.status) return res.status(e.status).json({ error: e.message });
-        throw e;
-      }
-    })
-  );
-
-  app.get(
-    '/api/reviews/:ref',
-    autenticarToken,
-    asyncHandler(async (req: AuthRequest, res: Response) => {
-      try {
-        const emp = await findEmpresa(String(req.params.ref));
-        if (!emp) return res.status(404).json({ error: 'Empresa não encontrada.' });
-        const ok =
-          isAdminUser(req.user) ||
-          (req.user?.empresa_id && req.user.empresa_id === emp.id);
-        if (!ok) return res.status(403).json({ error: 'Sem permissão.' });
-
-        const rows = await listarReviews(String(req.params.ref));
-        res.json(rows);
-      } catch (e: any) {
-        if (e instanceof ReviewNotFoundError) {
-          return res.status(404).json({ error: e.message });
-        }
-        throw e;
-      }
-    })
-  );
-
-  app.patch(
-    '/api/reviews/:id/tratar',
-    treatLimiter,
-    autenticarToken,
-    asyncHandler(async (req: AuthRequest, res: Response) => {
-      const id = Number(req.params.id);
-      if (!Number.isInteger(id) || id < 1) {
-        return res.status(400).json({ error: 'ID inválido.' });
-      }
-
-      const db = getDb();
-      await ensureReviewTreatmentColumns(db);
-
-      const row = await db.get(
-        `SELECT id, empresa_id, rating, treated_at FROM reviews WHERE id = ?`,
-        [id]
-      );
-      if (!row) return res.status(404).json({ error: 'Avaliação não encontrada.' });
-
-      const ok =
-        isAdminUser(req.user) ||
-        (req.user?.empresa_id && req.user.empresa_id === row.empresa_id);
-      if (!ok) return res.status(403).json({ error: 'Sem permissão.' });
-
-      const undo = Boolean(req.body?.undo);
-      const note = req.body?.note != null ? String(req.body.note).slice(0, 200) : null;
-
-      if (undo) {
-        await db.run(
-          `UPDATE reviews SET treated_at = NULL, treated_note = NULL WHERE id = ?`,
-          [id]
-        );
-        return res.json({ success: true, treated: false, id });
-      }
-
-      const now = new Date().toISOString();
-      await db.run(
-        `UPDATE reviews SET treated_at = ?, treated_note = COALESCE(?, treated_note) WHERE id = ?`,
-        [now, note, id]
-      );
-
-      res.json({
-        success: true,
-        treated: true,
-        id,
-        treated_at: now,
-        treated_note: note,
-      });
-    })
-  );
+const reviewsLimiter=rateLimit({windowMs:60*60*1000,max:40,standardHeaders:true,legacyHeaders:false,message:{error:'Muitas avaliações. Tente mais tarde.'}});
+const reviewsIpStrict=rateLimit({windowMs:15*60*1000,max:8,standardHeaders:true,legacyHeaders:false,message:{error:'Muitas tentativas deste IP. Aguarde 15 minutos.'}});
+const treatLimiter=rateLimit({windowMs:15*60*1000,max:60,standardHeaders:true,legacyHeaders:false,message:{error:'Muitas marcações. Aguarde.'}});
+export function mountReviewRoutes(app:Express){
+  app.post('/api/reviews',reviewsLimiter,reviewsIpStrict,validateBody(schemaReview),asyncHandler(async(req:Request,res:Response)=>{try{
+    const empresaRef=String(req.body.empresa_id||req.body.empresa_ref||'').trim(); const requestedTest=Boolean(req.body.is_test); let authorizedTest=false;
+    if(requestedTest){ const token=extrairToken(req); if(!token) return res.status(403).json({error:'Avaliação de teste exige uma sessão autenticada.'}); let payload:any; try{payload=verifyAccessToken(token);}catch{return res.status(401).json({error:'Sessão inválida.'});} const emp=await findEmpresa(empresaRef); if(!emp)return res.status(404).json({error:'Empresa não encontrada.'}); if(!isAdminUser({empresa_id:payload.empresa_id,role:payload.role})&&payload.empresa_id!==emp.id)return res.status(403).json({error:'Sem permissão para criar teste nesta empresa.'}); authorizedTest=true; }
+    const result=await criarReview({name:req.body.name?String(req.body.name):undefined,comment:req.body.comment?String(req.body.comment):undefined,rating:Number(req.body.rating),empresa_id:req.body.empresa_id?String(req.body.empresa_id):undefined,empresa_ref:req.body.empresa_ref?String(req.body.empresa_ref):undefined,website:req.body.website!=null?String(req.body.website):undefined,is_test:authorizedTest,client_whatsapp:req.body.client_whatsapp?String(req.body.client_whatsapp):req.body.whatsapp?String(req.body.whatsapp):undefined,locale:req.body.locale?String(req.body.locale):undefined,ip:clientIp(req as any)});
+    res.status(201).json(result);
+  }catch(e:any){if(e instanceof ReviewNotFoundError||e instanceof ReviewQuotaError||e instanceof ReviewFraudError||e instanceof ReviewValidationError)return res.status(e.status).json({error:e.message});if(e?.status)return res.status(e.status).json({error:e.message});throw e;}}));
+  app.get('/api/reviews/:ref',autenticarToken,asyncHandler(async(req:AuthRequest,res:Response)=>{try{const emp=await findEmpresa(String(req.params.ref));if(!emp)return res.status(404).json({error:'Empresa não encontrada.'});const ok=isAdminUser(req.user)||Boolean(req.user?.empresa_id&&req.user.empresa_id===emp.id);if(!ok)return res.status(403).json({error:'Sem permissão.'});res.json(await listarReviews(String(req.params.ref)));}catch(e:any){if(e instanceof ReviewNotFoundError)return res.status(404).json({error:e.message});throw e;}}));
+  app.patch('/api/reviews/:id/tratar',treatLimiter,autenticarToken,asyncHandler(async(req:AuthRequest,res:Response)=>{const id=Number(req.params.id);if(!Number.isInteger(id)||id<1)return res.status(400).json({error:'ID inválido.'});const db=getDb();await ensureReviewTreatmentColumns(db);const row=await db.get('SELECT id,empresa_id,rating,treated_at FROM reviews WHERE id=?',[id]);if(!row)return res.status(404).json({error:'Avaliação não encontrada.'});const ok=isAdminUser(req.user)||Boolean(req.user?.empresa_id&&req.user.empresa_id===row.empresa_id);if(!ok)return res.status(403).json({error:'Sem permissão.'});const undo=Boolean(req.body?.undo);const note=req.body?.note!=null?String(req.body.note).slice(0,200):null;if(undo){await db.run('UPDATE reviews SET treated_at=NULL,treated_note=NULL WHERE id=?',[id]);return res.json({success:true,treated:false,id});}const now=new Date().toISOString();await db.run('UPDATE reviews SET treated_at=?,treated_note=COALESCE(?,treated_note) WHERE id=?',[now,note,id]);res.json({success:true,treated:true,id,treated_at:now,treated_note:note});}));
 }
