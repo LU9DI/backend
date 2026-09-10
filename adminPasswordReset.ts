@@ -1,13 +1,14 @@
 /**
  * Recuperação de senha do ADMIN (painel /admin).
  * Exige ADMIN_RECOVERY_SECRET + e-mail do admin.
+ * Se o e-mail falhar, devolve o link (só quem tem a chave secreta vê).
  */
 import type { Express, Request, Response } from 'express';
 import type { Database } from 'sqlite';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
-import { enviarEmail, smtpConfigured } from './lib/mailer.js';
+import { enviarEmail, mailConfigured, smtpConfigured } from './lib/mailer.js';
 import {
   ensureAuthColumns,
   invalidatePasswordResetTokens,
@@ -103,7 +104,12 @@ export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Databas
 
       if (!usuario || !isAdminUsuario(usuario) || !usuario.email) {
         console.warn('[admin-recovery] usuário admin não encontrado no banco para', email);
-        return res.json({ success: true, message: okMsg });
+        return res.json({
+          success: true,
+          message:
+            'Admin autenticado pela chave, mas não há usuário admin com este e-mail no banco. Crie/atualize o usuário admin.',
+          admin_user_missing: true,
+        });
       }
 
       await invalidatePasswordResetTokens(db, usuario.id);
@@ -118,7 +124,8 @@ export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Databas
         [crypto.randomUUID(), usuario.id, tokenHash, expira]
       );
 
-      const link = `${APP_URL}/admin/login?token=${token}`;
+      // Página de reset do admin (front)
+      const link = `${APP_URL}/admin/recuperar-senha?token=${token}`;
       const sent = await enviarEmail({
         to: usuario.email,
         subject: 'Filtra.IA — redefinição de senha do ADMIN',
@@ -138,23 +145,28 @@ export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Databas
       });
 
       console.log(
-        `[admin-recovery] smtp=${smtpConfigured()} sent=${sent.ok} mode=${sent.mode} err=${sent.error || '-'}`
+        `[admin-recovery] mail=${mailConfigured()} sent=${sent.ok} mode=${sent.mode} err=${sent.error || '-'}`
       );
 
+      // Quem tem a chave secreta já está autenticado → pode receber o link na resposta
       if (!sent.ok) {
-        return res.status(503).json({
-          error:
-            'Não foi possível enviar o e-mail. Verifique SMTP_HOST/USER/PASS/FROM no Render e os logs (Falha SMTP).',
+        return res.json({
+          success: true,
+          message:
+            'E-mail não pôde ser enviado (SMTP/Resend). Use o link abaixo agora (válido 30 min).',
+          delivered: false,
+          mail_error: sent.error || 'falha no envio',
+          recovery_link: link,
+          token,
           smtp: smtpConfigured(),
-          detail: process.env.NODE_ENV === 'production' ? undefined : sent.error,
         });
       }
 
       return res.json({
         success: true,
         message: okMsg,
-        smtp: true,
         delivered: true,
+        smtp: true,
       });
     } catch (e: any) {
       console.error('admin forgot-password:', e.message || e);
