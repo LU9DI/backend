@@ -8,6 +8,8 @@ import {
   verifyAccessToken,
   type JwtPayload,
 } from './jwtKeys.js';
+import { getDb } from './db.js';
+import { empresaTemAcesso } from '../services/billingService.js';
 
 export const COOKIE_NAME = 'saas_auth_token';
 const isProd = process.env.NODE_ENV === 'production';
@@ -60,7 +62,7 @@ export interface AuthRequest extends Request {
   user?: { id: string; nome_funcionario: string; empresa_id: string; role?: string };
 }
 
-export function autenticarToken(req: AuthRequest, res: Response, next: NextFunction) {
+export async function autenticarToken(req: AuthRequest, res: Response, next: NextFunction) {
   const token = extrairToken(req);
   if (!token) {
     return res.status(401).json({
@@ -70,19 +72,41 @@ export function autenticarToken(req: AuthRequest, res: Response, next: NextFunct
   }
   try {
     const payload = verifyAccessToken(token);
+
+    // O JWT é necessário, mas não é suficiente: o estado atual da empresa
+    // continua sendo a fonte de verdade. Cancelamento no fim do período
+    // permanece ativo enquanto expira_em estiver no futuro.
+    if (!isAdminPayload(payload)) {
+      const db = getDb();
+      const empresa = await db.get(
+        'SELECT status, expira_em FROM empresas WHERE id = ?',
+        [payload.empresa_id]
+      );
+      if (!empresa || !empresaTemAcesso(empresa)) {
+        return res.status(401).json({
+          error: 'Sua assinatura não está ativa. Faça uma nova contratação para continuar.',
+          code: 'SUBSCRIPTION_INACTIVE',
+        });
+      }
+    }
+
     req.user = {
       id: payload.id,
       nome_funcionario: payload.nome_funcionario,
       empresa_id: payload.empresa_id,
       role: payload.role,
     };
-    next();
+    return next();
   } catch {
     return res.status(401).json({
       error: 'Sessão expirada. Faça login novamente.',
       code: 'TOKEN_EXPIRED',
     });
   }
+}
+
+function isAdminPayload(payload?: { empresa_id?: string; role?: string }): boolean {
+  return payload?.empresa_id === 'admin' || payload?.role === 'admin';
 }
 
 export function isAdminUser(user?: { empresa_id?: string; role?: string }): boolean {
