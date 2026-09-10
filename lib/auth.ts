@@ -62,7 +62,12 @@ export interface AuthRequest extends Request {
 
 export function autenticarToken(req: AuthRequest, res: Response, next: NextFunction) {
   const token = extrairToken(req);
-  if (!token) return res.status(401).json({ error: 'Token não fornecido.' });
+  if (!token) {
+    return res.status(401).json({
+      error: 'Faça login com CNPJ e senha para acessar o painel.',
+      code: 'AUTH_REQUIRED',
+    });
+  }
   try {
     const payload = verifyAccessToken(token);
     req.user = {
@@ -73,7 +78,10 @@ export function autenticarToken(req: AuthRequest, res: Response, next: NextFunct
     };
     next();
   } catch {
-    return res.status(401).json({ error: 'Token inválido ou expirado.' });
+    return res.status(401).json({
+      error: 'Sessão expirada. Faça login novamente.',
+      code: 'TOKEN_EXPIRED',
+    });
   }
 }
 
