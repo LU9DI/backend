@@ -1,18 +1,16 @@
 /**
- * Relatório mensal em PDF — profundidade progressiva por plano.
+ * Relatório mensal PDF — mesma base factual do painel do cliente.
  *
- * Pro ............ relatório mensal + KPIs + distribuição
- * Ultra .......... + análise de desempenho e leitura avançada
- * Corporativo .... + visão multi-unidades + ranking + detalhes por unidade
- * Rei ............ + tudo do Corporativo com apresentação executiva ampliada
+ * Pro: KPIs + distribuição de notas.
+ * Ultra: Pro + mix positivo/crítico + tendência + temas já registrados pela IA.
+ * Corporativo/Rei: Ultra + visão multi-unidades e detalhes por unidade.
  *
- * O PDF respeita planTemPdf: Inicial não possui relatório mensal.
- * A rota atual não passa callGroq, portanto este arquivo não promete IA que não
- * esteja disponível nos dados recebidos. Quando callGroq é fornecido, a análise
- * textual é enriquecida de forma opcional.
+ * Regra importante: este arquivo NÃO prevê resultados, NÃO cria métricas e NÃO
+ * chama IA para inventar conteúdo. Avaliações de teste são excluídas, como no painel.
  */
 import type { Database } from 'sqlite';
 import PDFDocument from 'pdfkit';
+import { planTemPdf } from './lib/plans.js';
 
 export type PlanPdf = 'ultra' | 'corporativo' | 'rei' | 'pro';
 
@@ -22,14 +20,12 @@ type ReviewRow = {
   unidade_id?: string | null;
   origin?: string | null;
   createdAt?: string;
+  is_test?: number | boolean | null;
+  ai_tags?: string | null;
+  sentiment?: string | null;
 };
 
-type UnidadeRow = {
-  id: string;
-  nome: string;
-  slug?: string | null;
-};
-
+type UnidadeRow = { id: string; nome: string; slug?: string | null };
 type CallGroq = (system: string, user: string) => Promise<string>;
 
 type UnitGroup = {
@@ -39,23 +35,19 @@ type UnitGroup = {
 
 const COLORS = {
   navy: '#17233c',
-  blue: '#2d5b9f',
+  blue: '#4f46e5',
   ink: '#26364d',
   muted: '#65748a',
   line: '#d9e1eb',
   pale: '#f5f7fa',
-  paleBlue: '#edf3fa',
-  blueSoft: '#e8f0fa',
-  green: '#1a7f4b',
-  amber: '#b45309',
-  red: '#b91c1c',
+  paleBlue: '#eef2ff',
+  green: '#16804b',
+  red: '#b42318',
   white: '#ffffff',
   star: ['#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e'],
 };
 
-const PAGE = { left: 42, right: 42, top: 42, bottom: 48 };
-
-// ─── Schema filiais / origem ─────────────────────────────────────────
+const PAGE = { left: 42, right: 42, bottom: 46 };
 
 export async function ensureUnidadesSchema(db: Database): Promise<void> {
   await db.exec(`
@@ -69,13 +61,14 @@ export async function ensureUnidadesSchema(db: Database): Promise<void> {
       FOREIGN KEY (empresa_id) REFERENCES empresas(id)
     )
   `);
-
   const cols = (await db.all(`PRAGMA table_info(reviews)`)).map((c: any) => c.name);
   if (!cols.includes('unidade_id')) await db.exec(`ALTER TABLE reviews ADD COLUMN unidade_id TEXT`);
   if (!cols.includes('origin')) await db.exec(`ALTER TABLE reviews ADD COLUMN origin TEXT`);
 }
 
-// ─── Métricas ────────────────────────────────────────────────────────
+function isTest(r: ReviewRow): boolean {
+  return Number(r.is_test) === 1 || r.is_test === true;
+}
 
 function distNotas(reviews: ReviewRow[]): number[] {
   const d = [0, 0, 0, 0, 0];
@@ -95,95 +88,102 @@ function percent(value: number, total: number): string {
   return total ? `${Math.round((value / total) * 100)}%` : '0%';
 }
 
-function agrupadoPorUnidade(reviews: ReviewRow[], unidades: UnidadeRow[]): UnitGroup[] {
-  const map = new Map<string, ReviewRow[]>();
-  for (const review of reviews) {
-    const key = review.unidade_id || review.origin || '_matriz';
-    if (!map.has(key)) map.set(key, []);
-    map.get(key)!.push(review);
+function parseTags(reviews: ReviewRow[]): { tag: string; count: number }[] {
+  const counts: Record<string, number> = {};
+  for (const r of reviews) {
+    if (!r.ai_tags) continue;
+    try {
+      const parsed = JSON.parse(r.ai_tags);
+      if (Array.isArray(parsed)) {
+        for (const tag of parsed) {
+          const key = String(tag).trim();
+          if (key) counts[key] = (counts[key] || 0) + 1;
+        }
+      }
+    } catch {
+      // dado inválido não entra no relatório
+    }
   }
-
-  const byId = new Map(unidades.map((u) => [u.id, u]));
-  const groups: UnitGroup[] = [];
-
-  for (const [key, list] of map.entries()) {
-    if (byId.has(key)) groups.push({ unidade: byId.get(key)!, reviews: list });
-    else if (key === '_matriz') groups.push({ unidade: { id: key, nome: 'Matriz / Geral' }, reviews: list });
-    else groups.push({ unidade: { id: key, nome: key }, reviews: list });
-  }
-
-  for (const unidade of unidades) {
-    if (!map.has(unidade.id)) groups.push({ unidade, reviews: [] });
-  }
-
-  return groups.sort((a, b) => {
-    const averageDiff = media(b.reviews) - media(a.reviews);
-    return averageDiff || b.reviews.length - a.reviews.length;
-  });
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([tag, count]) => ({ tag, count }));
 }
 
-// ─── Layout ──────────────────────────────────────────────────────────
+function serieUltimosDias(reviews: ReviewRow[], dias = 14) {
+  const map = new Map<string, { total: number; positivas: number; negativas: number; soma: number }>();
+  const hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
+  for (let i = dias - 1; i >= 0; i--) {
+    const d = new Date(hoje);
+    d.setDate(d.getDate() - i);
+    map.set(d.toISOString().slice(0, 10), { total: 0, positivas: 0, negativas: 0, soma: 0 });
+  }
+  for (const r of reviews) {
+    const bucket = map.get(String(r.createdAt || '').slice(0, 10));
+    if (!bucket) continue;
+    const rating = Number(r.rating) || 0;
+    bucket.total += 1;
+    bucket.soma += rating;
+    if (rating >= 4) bucket.positivas += 1;
+    if (rating <= 3) bucket.negativas += 1;
+  }
+  return [...map.entries()].map(([dia, b]) => ({
+    dia,
+    total: b.total,
+    positivas: b.positivas,
+    negativas: b.negativas,
+    media: b.total ? Math.round((b.soma / b.total) * 10) / 10 : 0,
+  }));
+}
+
+function agrupadoPorUnidade(reviews: ReviewRow[], unidades: UnidadeRow[]): UnitGroup[] {
+  const map = new Map<string, ReviewRow[]>();
+  for (const r of reviews) {
+    const key = r.unidade_id || r.origin || '_matriz';
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(r);
+  }
+  const byId = new Map(unidades.map((u) => [u.id, u]));
+  const groups: UnitGroup[] = [];
+  for (const [key, list] of map.entries()) {
+    if (byId.has(key)) groups.push({ unidade: byId.get(key)!, reviews: list });
+    else groups.push({ unidade: { id: key, nome: key === '_matriz' ? 'Matriz / Geral' : key }, reviews: list });
+  }
+  for (const u of unidades) if (!map.has(u.id)) groups.push({ unidade: u, reviews: [] });
+  return groups.sort((a, b) => media(b.reviews) - media(a.reviews) || b.reviews.length - a.reviews.length);
+}
 
 function sectionTitle(doc: PDFKit.PDFDocument, title: string, subtitle?: string) {
   doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(13).text(title);
-  if (subtitle) {
-    doc.moveDown(0.15);
-    doc.fillColor(COLORS.muted).font('Helvetica').fontSize(8.5).text(subtitle);
-  }
+  if (subtitle) doc.moveDown(0.15).fillColor(COLORS.muted).font('Helvetica').fontSize(8.5).text(subtitle);
   doc.moveDown(0.5);
 }
 
-function drawKpi(
-  doc: PDFKit.PDFDocument,
-  title: string,
-  value: string,
-  desc: string,
-  x: number,
-  y: number,
-  width: number,
-  accent = COLORS.blue
-) {
-  doc.roundedRect(x, y, width, 78, 7).fillAndStroke(COLORS.pale, COLORS.line);
-  doc.roundedRect(x, y, 4, 78, 2).fill(accent);
-  doc.fillColor(COLORS.blue).font('Helvetica-Bold').fontSize(7.5).text(title.toUpperCase(), x + 12, y + 10, {
-    width: width - 20,
-  });
-  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(18).text(value, x + 12, y + 28, {
-    width: width - 20,
-  });
-  doc.fillColor(COLORS.muted).font('Helvetica').fontSize(7.5).text(desc, x + 12, y + 52, {
-    width: width - 20,
-  });
+function drawKpi(doc: PDFKit.PDFDocument, title: string, value: string, desc: string, x: number, y: number, width: number, accent = COLORS.blue) {
+  doc.roundedRect(x, y, width, 76, 7).fillAndStroke(COLORS.pale, COLORS.line);
+  doc.roundedRect(x, y, 4, 76, 2).fill(accent);
+  doc.fillColor(COLORS.blue).font('Helvetica-Bold').fontSize(7.5).text(title.toUpperCase(), x + 12, y + 10, { width: width - 20 });
+  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(18).text(value, x + 12, y + 28, { width: width - 20 });
+  doc.fillColor(COLORS.muted).font('Helvetica').fontSize(7.5).text(desc, x + 12, y + 52, { width: width - 20 });
 }
 
 function drawHeader(doc: PDFKit.PDFDocument, empresaNome: string, periodo: string, plan: string, subtitle: string) {
   doc.rect(0, 0, doc.page.width, 78).fill(COLORS.navy);
-  doc.fillColor(COLORS.white).font('Helvetica-Bold').fontSize(17).text('FILTRA.AI', PAGE.left, 20);
-  doc.fillColor('#c7d2e5').font('Helvetica').fontSize(8.5).text(subtitle, PAGE.left, 45);
-  doc.fillColor(COLORS.white).font('Helvetica-Bold').fontSize(8).text(plan.toUpperCase(), doc.page.width - 132, 23, {
-    width: 90,
-    align: 'right',
-  });
-  doc.fillColor('#c7d2e5').font('Helvetica').fontSize(7.5).text(periodo, doc.page.width - 132, 40, {
-    width: 90,
-    align: 'right',
-  });
+  doc.fillColor(COLORS.white).font('Helvetica-Bold').fontSize(18).text('FILTRA.AI', PAGE.left, 20);
+  doc.fillColor('#c7d2e5').font('Helvetica').fontSize(8.5).text(subtitle, PAGE.left, 46);
+  doc.fillColor(COLORS.white).font('Helvetica-Bold').fontSize(8).text(plan.toUpperCase(), doc.page.width - 132, 23, { width: 90, align: 'right' });
+  doc.fillColor('#c7d2e5').font('Helvetica').fontSize(7.5).text(periodo, doc.page.width - 132, 40, { width: 90, align: 'right' });
   doc.y = 98;
   doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(18).text(empresaNome, PAGE.left, doc.y);
-  doc.moveDown(0.15);
-  doc.fillColor(COLORS.muted).font('Helvetica').fontSize(8).text(`Período analisado: ${periodo}`);
+  doc.moveDown(0.15).fillColor(COLORS.muted).font('Helvetica').fontSize(8).text(`Período analisado: ${periodo}`);
   doc.moveDown(0.8);
 }
 
 function drawFooter(doc: PDFKit.PDFDocument, empresaNome: string, page: number, total: number) {
   const y = doc.page.height - 30;
   doc.strokeColor(COLORS.line).lineWidth(0.5).moveTo(PAGE.left, y - 8).lineTo(doc.page.width - PAGE.right, y - 8).stroke();
-  doc.fillColor(COLORS.muted).font('Helvetica').fontSize(7).text(
-    `© FILTRA.AI · uso exclusivo de ${empresaNome}`,
-    PAGE.left,
-    y,
-    { width: 280 }
-  );
+  doc.fillColor(COLORS.muted).font('Helvetica').fontSize(7).text(`© FILTRA.AI · uso exclusivo de ${empresaNome}`, PAGE.left, y, { width: 280 });
   doc.text(`Página ${page}/${total}`, doc.page.width - PAGE.right - 80, y, { width: 80, align: 'right' });
 }
 
@@ -191,532 +191,264 @@ function drawWatermark(doc: PDFKit.PDFDocument) {
   const cx = doc.page.width / 2;
   const cy = doc.page.height / 2;
   doc.save();
-  doc.opacity(0.025);
-  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(42);
+  doc.opacity(0.022);
+  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(40);
   doc.rotate(-45, { origin: [cx, cy] });
-  doc.text('FILTRA.AI', cx - 135, cy - 18, { width: 270, align: 'center', lineBreak: false });
+  doc.text('FILTRA.AI', cx - 125, cy - 16, { width: 250, align: 'center', lineBreak: false });
   doc.restore();
 }
 
-function newPage(doc: PDFKit.PDFDocument, empresaNome: string, periodo: string, plan: string, subtitle: string) {
-  doc.addPage();
-  drawHeader(doc, empresaNome, periodo, plan, subtitle);
-}
-
-function drawBarChart(
-  doc: PDFKit.PDFDocument,
-  opts: { x: number; y: number; width: number; height: number; labels: string[]; values: number[]; title: string }
-) {
-  const { x, y, width, height, labels, values, title } = opts;
+function drawBarChart(doc: PDFKit.PDFDocument, x: number, y: number, width: number, height: number, values: number[]) {
+  const labels = ['1★', '2★', '3★', '4★', '5★'];
   const max = Math.max(...values, 1);
   const gap = 10;
-  const barW = (width - gap * (values.length + 1)) / values.length;
+  const barW = (width - gap * 6) / 5;
   const top = y + 28;
-  const chartH = height - 50;
-
+  const chartH = height - 52;
   doc.roundedRect(x, y, width, height, 7).fillAndStroke(COLORS.white, COLORS.line);
-  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(9).text(title, x + 12, y + 10);
-
+  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(9).text('Quantidade por nota', x + 12, y + 10);
   for (let i = 0; i <= 4; i++) {
     const gy = top + chartH - (chartH * i) / 4;
     doc.strokeColor(COLORS.line).lineWidth(0.5).moveTo(x + 10, gy).lineTo(x + width - 10, gy).stroke();
   }
-
-  values.forEach((value, index) => {
-    const barH = (value / max) * chartH;
-    const bx = x + gap + index * (barW + gap);
+  values.forEach((v, i) => {
+    const barH = (v / max) * chartH;
+    const bx = x + gap + i * (barW + gap);
     const by = top + chartH - barH;
-    doc.roundedRect(bx, by, barW, Math.max(barH, 1), 4).fill(COLORS.star[index] || COLORS.blue);
-    doc.fillColor(COLORS.ink).font('Helvetica-Bold').fontSize(8).text(String(value), bx, by - 12, {
-      width: barW,
-      align: 'center',
-    });
-    doc.fillColor(COLORS.muted).font('Helvetica').fontSize(7.5).text(labels[index], bx, top + chartH + 5, {
-      width: barW,
-      align: 'center',
-    });
+    doc.roundedRect(bx, by, barW, Math.max(barH, 1), 4).fill(COLORS.star[i]);
+    doc.fillColor(COLORS.ink).font('Helvetica-Bold').fontSize(8).text(String(v), bx, by - 12, { width: barW, align: 'center' });
+    doc.fillColor(COLORS.muted).font('Helvetica').fontSize(7.5).text(labels[i], bx, top + chartH + 5, { width: barW, align: 'center' });
   });
 }
 
-function drawDonut(
-  doc: PDFKit.PDFDocument,
-  x: number,
-  y: number,
-  size: number,
-  positive: number,
-  negative: number,
-  title: string
-) {
+function drawDonut(doc: PDFKit.PDFDocument, x: number, y: number, size: number, positive: number, negative: number) {
   const total = Math.max(positive + negative, 1);
   const cx = x + size / 2;
   const cy = y + size / 2 + 10;
   const radius = size / 2 - 8;
   const positiveAngle = (positive / total) * Math.PI * 2;
-
   doc.roundedRect(x, y, size + 22, size + 42, 7).fillAndStroke(COLORS.white, COLORS.line);
-  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(8.5).text(title, x + 9, y + 8);
-
-  const slices = 64;
-  for (let i = 0; i < slices; i++) {
-    const a0 = -Math.PI / 2 + (i / slices) * Math.PI * 2;
-    const a1 = -Math.PI / 2 + ((i + 1) / slices) * Math.PI * 2;
-    const fromTop = ((i + 0.5) / slices) * Math.PI * 2;
-    const color = fromTop <= positiveAngle ? COLORS.green : COLORS.red;
-    doc.moveTo(cx, cy)
-      .lineTo(cx + Math.cos(a0) * radius, cy + Math.sin(a0) * radius)
-      .lineTo(cx + Math.cos(a1) * radius, cy + Math.sin(a1) * radius)
-      .closePath()
-      .fill(color);
+  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(8.5).text('Positivas vs críticas', x + 9, y + 8);
+  for (let i = 0; i < 64; i++) {
+    const a0 = -Math.PI / 2 + (i / 64) * Math.PI * 2;
+    const a1 = -Math.PI / 2 + ((i + 1) / 64) * Math.PI * 2;
+    const fromTop = ((i + 0.5) / 64) * Math.PI * 2;
+    doc.moveTo(cx, cy).lineTo(cx + Math.cos(a0) * radius, cy + Math.sin(a0) * radius).lineTo(cx + Math.cos(a1) * radius, cy + Math.sin(a1) * radius).closePath().fill(fromTop <= positiveAngle ? COLORS.green : COLORS.red);
   }
   doc.circle(cx, cy, radius * 0.55).fill(COLORS.white);
-  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(13).text(percent(positive, total), cx - 25, cy - 8, {
-    width: 50,
-    align: 'center',
-  });
-  doc.fillColor(COLORS.muted).font('Helvetica').fontSize(7).text('positivas', cx - 28, cy + 8, {
-    width: 56,
-    align: 'center',
-  });
+  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(13).text(percent(positive, total), cx - 25, cy - 8, { width: 50, align: 'center' });
+  doc.fillColor(COLORS.muted).font('Helvetica').fontSize(7).text('positivas', cx - 28, cy + 8, { width: 56, align: 'center' });
 }
 
-function drawMetricList(doc: PDFKit.PDFDocument, x: number, y: number, width: number, rows: { label: string; value: string }[]) {
-  const height = 36 + rows.length * 25;
+function drawTrend(doc: PDFKit.PDFDocument, x: number, y: number, width: number, height: number, serie: ReturnType<typeof serieUltimosDias>) {
+  const max = Math.max(...serie.map((s) => s.total), 1);
   doc.roundedRect(x, y, width, height, 7).fillAndStroke(COLORS.white, COLORS.line);
-  rows.forEach((row, i) => {
-    const ry = y + 16 + i * 25;
-    doc.fillColor(COLORS.muted).font('Helvetica').fontSize(8).text(row.label, x + 12, ry, { width: width - 100 });
-    doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(8.5).text(row.value, x + width - 88, ry, {
-      width: 76,
-      align: 'right',
-    });
-    if (i < rows.length - 1) {
-      doc.strokeColor(COLORS.line).lineWidth(0.5).moveTo(x + 12, ry + 16).lineTo(x + width - 12, ry + 16).stroke();
+  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(9).text('Tendência · últimos 14 dias', x + 12, y + 10);
+  const left = x + 14;
+  const top = y + 34;
+  const w = width - 28;
+  const h = height - 54;
+  const points = serie.map((s, i) => ({ x: left + (i / Math.max(serie.length - 1, 1)) * w, y: top + h - (s.total / max) * h }));
+  for (let i = 0; i <= 4; i++) {
+    const gy = top + h - (h * i) / 4;
+    doc.strokeColor(COLORS.line).lineWidth(0.5).moveTo(left, gy).lineTo(left + w, gy).stroke();
+  }
+  if (points.length > 1) {
+    doc.strokeColor(COLORS.blue).lineWidth(2).moveTo(points[0].x, points[0].y);
+    for (const p of points.slice(1)) doc.lineTo(p.x, p.y);
+    doc.stroke();
+  }
+  points.forEach((p, i) => {
+    doc.circle(p.x, p.y, 2.5).fill(COLORS.blue);
+    if (i === 0 || i === points.length - 1 || i % 3 === 0) {
+      const d = serie[i].dia.slice(5).split('-').reverse().join('/');
+      doc.fillColor(COLORS.muted).font('Helvetica').fontSize(6.5).text(d, p.x - 12, top + h + 5, { width: 24, align: 'center' });
     }
   });
-  return height;
 }
 
-function drawInsightBox(doc: PDFKit.PDFDocument, x: number, y: number, width: number, title: string, text: string, accent = COLORS.blue) {
-  const height = 76;
-  doc.roundedRect(x, y, width, height, 7).fillAndStroke(COLORS.paleBlue, COLORS.line);
-  doc.roundedRect(x, y, 4, height, 2).fill(accent);
-  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(9).text(title, x + 14, y + 11);
-  doc.fillColor(COLORS.ink).font('Helvetica').fontSize(8.5).text(text, x + 14, y + 29, {
-    width: width - 28,
-    lineGap: 2,
+function drawTags(doc: PDFKit.PDFDocument, x: number, y: number, width: number, tags: { tag: string; count: number }[]) {
+  const rows = Math.max(tags.length, 1);
+  const height = 34 + rows * 21;
+  doc.roundedRect(x, y, width, height, 7).fillAndStroke(COLORS.white, COLORS.line);
+  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(9).text('Temas já registrados pela IA', x + 12, y + 10);
+  if (!tags.length) {
+    doc.fillColor(COLORS.muted).font('Helvetica').fontSize(8).text('Nenhum tema registrado no período.', x + 12, y + 30);
+    return height;
+  }
+  const max = Math.max(...tags.map((t) => t.count), 1);
+  tags.forEach((t, i) => {
+    const ry = y + 29 + i * 21;
+    doc.fillColor(COLORS.ink).font('Helvetica').fontSize(8).text(t.tag.slice(0, 30), x + 12, ry, { width: 110 });
+    doc.roundedRect(x + 128, ry + 1, Math.max(3, (t.count / max) * (width - 170)), 9, 3).fill(COLORS.blue);
+    doc.fillColor(COLORS.muted).font('Helvetica').fontSize(7.5).text(String(t.count), x + width - 32, ry, { width: 20, align: 'right' });
   });
   return height;
 }
 
 function drawUnitTable(doc: PDFKit.PDFDocument, x: number, y: number, width: number, groups: UnitGroup[]) {
-  const headerH = 26;
-  const rowH = 24;
-  const maxRows = Math.max(groups.length, 1);
-  const height = headerH + maxRows * rowH;
+  const rowH = 23;
+  const headerH = 25;
+  const height = headerH + Math.max(groups.length, 1) * rowH;
   doc.roundedRect(x, y, width, height, 7).fillAndStroke(COLORS.white, COLORS.line);
   doc.rect(x, y, width, headerH).fill(COLORS.pale);
-
-  doc.fillColor(COLORS.muted).font('Helvetica-Bold').fontSize(7.5);
-  doc.text('UNIDADE', x + 12, y + 8, { width: 175 });
-  doc.text('VOLUME', x + 205, y + 8, { width: 50, align: 'right' });
-  doc.text('MÉDIA', x + 270, y + 8, { width: 50, align: 'right' });
-  doc.text('1–3★', x + 335, y + 8, { width: 50, align: 'right' });
-  doc.text('4–5★', x + 405, y + 8, { width: 50, align: 'right' });
-
-  groups.forEach((group, i) => {
+  doc.fillColor(COLORS.muted).font('Helvetica-Bold').fontSize(7.2);
+  doc.text('UNIDADE', x + 12, y + 8, { width: 190 });
+  doc.text('VOLUME', x + 210, y + 8, { width: 55 });
+  doc.text('MÉDIA', x + 275, y + 8, { width: 55 });
+  doc.text('CRÍTICAS', x + 340, y + 8, { width: 60 });
+  doc.text('POSITIVAS', x + 410, y + 8, { width: 60 });
+  groups.forEach((g, i) => {
     const ry = y + headerH + i * rowH;
-    const negative = group.reviews.filter((r) => r.rating <= 3).length;
-    const positive = group.reviews.filter((r) => r.rating >= 4).length;
-    if (i % 2 === 1) doc.rect(x + 1, ry, width - 2, rowH).fill('#fbfcfe');
-    doc.fillColor(COLORS.ink).font('Helvetica').fontSize(8).text(group.unidade.nome.slice(0, 31), x + 12, ry + 8, { width: 175 });
-    doc.text(String(group.reviews.length), x + 205, ry + 8, { width: 50, align: 'right' });
-    doc.text(media(group.reviews) ? media(group.reviews).toFixed(2) : '—', x + 270, ry + 8, { width: 50, align: 'right' });
-    doc.fillColor(negative ? COLORS.red : COLORS.muted).text(String(negative), x + 335, ry + 8, { width: 50, align: 'right' });
-    doc.fillColor(positive ? COLORS.green : COLORS.muted).text(String(positive), x + 405, ry + 8, { width: 50, align: 'right' });
+    const cr = g.reviews.filter((r) => Number(r.rating) <= 3).length;
+    const po = g.reviews.filter((r) => Number(r.rating) >= 4).length;
+    doc.fillColor(COLORS.ink).font('Helvetica').fontSize(8).text(g.unidade.nome.slice(0, 34), x + 12, ry + 7, { width: 190 });
+    doc.text(String(g.reviews.length), x + 210, ry + 7, { width: 55 });
+    doc.text(media(g.reviews) ? media(g.reviews).toFixed(2) : '—', x + 275, ry + 7, { width: 55 });
+    doc.text(String(cr), x + 340, ry + 7, { width: 60 });
+    doc.text(String(po), x + 410, ry + 7, { width: 60 });
   });
+  return height;
 }
 
-function paginaFilial(
-  doc: PDFKit.PDFDocument,
-  opts: { empresaNome: string; periodo: string; unidadeNome: string; reviews: ReviewRow[]; pageWidth: number; plan: string }
-) {
-  const { empresaNome, periodo, unidadeNome, reviews, pageWidth, plan } = opts;
+function drawUnitDetail(doc: PDFKit.PDFDocument, empresaNome: string, periodo: string, unidadeNome: string, reviews: ReviewRow[]) {
+  doc.addPage();
+  drawHeader(doc, empresaNome, periodo, 'UNIDADE', 'Detalhamento da unidade');
+  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(15).text(unidadeNome, PAGE.left, doc.y);
+  doc.moveDown(0.7);
   const dist = distNotas(reviews);
   const avg = media(reviews);
-  const positive = reviews.filter((r) => r.rating >= 4).length;
-  const negative = reviews.filter((r) => r.rating <= 3).length;
-
-  newPage(doc, empresaNome, periodo, plan, 'Demonstrativo detalhado por unidade');
-  sectionTitle(doc, unidadeNome, 'Desempenho da unidade no período selecionado');
-
+  const positive = reviews.filter((r) => Number(r.rating) >= 4).length;
+  const critical = reviews.filter((r) => Number(r.rating) <= 3).length;
   const gap = 10;
-  const width = (pageWidth - gap * 2) / 3;
+  const width = doc.page.width - PAGE.left - PAGE.right;
+  const kw = (width - gap * 2) / 3;
   const y = doc.y;
-  drawKpi(doc, 'Avaliações', String(reviews.length), 'Volume no período', 42, y, width);
-  drawKpi(doc, 'Nota média', avg ? avg.toFixed(2) : '—', 'Escala de 1 a 5', 42 + width + gap, y, width, avg >= 4 ? COLORS.green : COLORS.amber);
-  drawKpi(doc, 'Taxa positiva', percent(positive, reviews.length), 'Notas 4–5', 42 + (width + gap) * 2, y, width, COLORS.green);
-  doc.y = y + 96;
-
-  drawBarChart(doc, {
-    x: 42,
-    y: doc.y,
-    width: pageWidth,
-    height: 158,
-    labels: ['1★', '2★', '3★', '4★', '5★'],
-    values: dist,
-    title: 'Distribuição das avaliações',
-  });
-  doc.y += 176;
-
-  const insight =
-    reviews.length === 0
-      ? 'Não houve avaliações associadas a esta unidade no período. Use este indicador para verificar a coleta e a ativação do canal de feedback.'
-      : negative > positive
-        ? 'A unidade apresenta mais avaliações críticas do que positivas. Priorize os motivos recorrentes nas notas 1–3 e acompanhe a evolução no próximo período.'
-        : 'A unidade mantém predominância de avaliações positivas. Preserve os pontos fortes e monitore as avaliações 1–3 para evitar deterioração da média.';
-  drawInsightBox(doc, 42, doc.y, pageWidth, 'Leitura operacional', insight, negative > positive ? COLORS.red : COLORS.green);
-
-  if (plan === 'rei') {
-    doc.y += 94;
-    const rows = [
-      { label: 'Avaliações positivas', value: String(positive) },
-      { label: 'Avaliações críticas', value: String(negative) },
-      { label: 'Participação positiva', value: percent(positive, reviews.length) },
-      { label: 'Participação crítica', value: percent(negative, reviews.length) },
-    ];
-    drawMetricList(doc, 42, doc.y, pageWidth, rows);
-  }
+  drawKpi(doc, 'Avaliações', String(reviews.length), 'Volume no período', PAGE.left, y, kw);
+  drawKpi(doc, 'Nota média', avg ? avg.toFixed(2) : '—', 'Escala 1 a 5', PAGE.left + kw + gap, y, kw);
+  drawKpi(doc, 'Críticas', String(critical), 'Notas 1–3', PAGE.left + (kw + gap) * 2, y, kw, COLORS.red);
+  doc.y = y + 94;
+  sectionTitle(doc, 'Distribuição de notas', 'Dados reais da unidade no período');
+  drawBarChart(doc, PAGE.left, doc.y, width, 160, dist);
+  doc.y += 178;
+  drawKpi(doc, 'Positivas', String(positive), `${percent(positive, reviews.length)} do volume`, PAGE.left, doc.y, kw, COLORS.green);
+  drawKpi(doc, 'Críticas', String(critical), `${percent(critical, reviews.length)} do volume`, PAGE.left + kw + gap, doc.y, kw, COLORS.red);
+  drawKpi(doc, 'Sem previsão', '—', 'O relatório não estima resultados futuros', PAGE.left + (kw + gap) * 2, doc.y, kw, COLORS.blue);
 }
 
-// ─── Geração principal ───────────────────────────────────────────────
-
-export async function gerarRelatorioMensalPDF(
-  db: Database,
-  empresaId: string,
-  mesAno: string,
-  callGroq?: CallGroq
-): Promise<Buffer> {
+export async function gerarRelatorioMensalPDF(db: Database, empresaId: string, mesAno: string, _callGroq?: CallGroq): Promise<Buffer> {
   await ensureUnidadesSchema(db);
-
   const empresa = await db.get('SELECT * FROM empresas WHERE id = ?', [empresaId]);
   if (!empresa) throw new Error('Empresa não encontrada.');
-
   const plan = String(empresa.plan || '').toLowerCase();
-  const elegivel = ['pro', 'ultra', 'corporativo', 'rei'].includes(plan);
-  if (!elegivel) throw new Error('Plano não elegível para relatório mensal.');
+  if (!planTemPdf(plan)) throw new Error('Plano não elegível para relatório mensal.');
 
-  const isUltraPlus = ['ultra', 'corporativo', 'rei'].includes(plan);
-  const isMultiUnit = ['corporativo', 'rei'].includes(plan);
-  const isRei = plan === 'rei';
-  const reportSubtitle = isRei
-    ? 'Relatório executivo avançado'
-    : isMultiUnit
-      ? 'Relatório executivo multi-unidades'
-      : isUltraPlus
-        ? 'Relatório mensal com análise de desempenho'
-        : 'Relatório mensal';
-
-  const reviews: ReviewRow[] = await db.all(
-    `SELECT rating, comment, unidade_id, origin, createdAt FROM reviews
-     WHERE empresa_id = ? AND strftime('%Y-%m', createdAt) = ?`,
+  const rawReviews: ReviewRow[] = await db.all(
+    `SELECT rating, comment, unidade_id, origin, createdAt, is_test, ai_tags, sentiment
+     FROM reviews WHERE empresa_id = ? AND strftime('%Y-%m', createdAt) = ?
+     AND COALESCE(is_test, 0) <> 1`,
     [empresaId, mesAno]
   );
+  const reviews = rawReviews.filter((r) => !isTest(r));
+  const ultraPlus = plan === 'ultra' || plan === 'corporativo' || plan === 'rei';
+  const multi = plan === 'corporativo' || plan === 'rei';
+  const isRei = plan === 'rei';
 
-  const unidades: UnidadeRow[] = isMultiUnit
-    ? await db.all(
-        `SELECT id, nome, slug FROM unidades WHERE empresa_id = ? AND ativo = 1 ORDER BY nome`,
-        [empresaId]
-      )
+  const unidades: UnidadeRow[] = multi
+    ? await db.all(`SELECT id, nome, slug FROM unidades WHERE empresa_id = ? AND ativo = 1 ORDER BY nome`, [empresaId])
     : [];
 
-  const groups = isMultiUnit ? agrupadoPorUnidade(reviews, unidades) : [];
   const dist = distNotas(reviews);
   const total = reviews.length;
   const avg = media(reviews);
-  const positive = reviews.filter((r) => r.rating >= 4).length;
-  const negative = reviews.filter((r) => r.rating <= 3).length;
+  const positive = reviews.filter((r) => Number(r.rating) >= 4).length;
+  const critical = reviews.filter((r) => Number(r.rating) <= 3).length;
+  const crises24h = reviews.filter((r) => Number(r.rating) <= 2 && Date.now() - new Date(String(r.createdAt || '')).getTime() <= 24 * 60 * 60 * 1000).length;
+  const tags = ultraPlus ? parseTags(reviews) : [];
+  const serie = ultraPlus ? serieUltimosDias(reviews, 14) : [];
 
-  let sentimentoPrincipal = '';
-  let topGargalos: string[] = [];
-  if (callGroq && reviews.some((r) => r.comment?.trim())) {
-    const comentarios = reviews.map((r) => r.comment?.trim()).filter(Boolean).slice(0, 80).join('\n');
-    try {
-      const raw = await callGroq(
-        `Você é um analista de experiência do cliente. Retorne JSON válido com "sentimento" (positivo, negativo ou neutro) e "gargalos" (até 5 tópicos curtos).`,
-        comentarios
-      );
-      const parsed = JSON.parse(raw);
-      sentimentoPrincipal = String(parsed.sentimento || '');
-      topGargalos = Array.isArray(parsed.gargalos) ? parsed.gargalos.map(String).slice(0, 5) : [];
-    } catch {
-      sentimentoPrincipal = '';
-      topGargalos = [];
-    }
-  }
-
-  const [year, month] = mesAno.split('-');
-  const months = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
-  const periodo = year && Number(month) >= 1 && Number(month) <= 12 ? `${months[Number(month) - 1]} / ${year}` : mesAno;
+  const [ano, mes] = mesAno.split('-');
+  const nomesMeses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+  const periodo = ano && Number(mes) >= 1 && Number(mes) <= 12 ? `${nomesMeses[Number(mes) - 1]} / ${ano}` : mesAno;
   const emissao = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'long' }).format(new Date());
 
-  const doc = new PDFDocument({
-    size: 'A4',
-    margin: PAGE.left,
-    bufferPages: true,
-    info: {
-      Title: `${empresa.nome_empresa} — Relatório ${mesAno}`,
-      Author: 'Filtra.AI',
-      Subject: `Relatório mensal — ${plan}`,
-    },
-  });
-
+  const doc = new PDFDocument({ size: 'A4', margin: PAGE.left, bufferPages: true, info: { Title: `${empresa.nome_empresa} — Relatório ${mesAno}` } });
   const chunks: Buffer[] = [];
-  doc.on('data', (chunk) => chunks.push(chunk));
+  doc.on('data', (c) => chunks.push(c));
 
-  const pageWidth = doc.page.width - PAGE.left - PAGE.right;
+  drawWatermark(doc);
+  doc.on('pageAdded', () => drawWatermark(doc));
 
-  // Capa: mais limpa e mais profissional para todos os planos.
-  doc.rect(0, 0, doc.page.width, doc.page.height).fill(COLORS.white);
-  doc.rect(0, 0, doc.page.width, 130).fill(COLORS.navy);
-  doc.fillColor(COLORS.white).font('Helvetica-Bold').fontSize(25).text('FILTRA.AI', 42, 40);
-  doc.fillColor('#c7d2e5').font('Helvetica').fontSize(10).text(reportSubtitle, 42, 78);
-  doc.fillColor(COLORS.blue).font('Helvetica-Bold').fontSize(9).text(plan.toUpperCase(), 42, 105);
+  const subtitle = isRei ? 'Relatório executivo · dados do painel' : multi ? 'Relatório multi-unidades · dados do painel' : ultraPlus ? 'Relatório analítico · dados do painel' : 'Relatório mensal · dados do painel';
+  drawHeader(doc, empresa.nome_empresa, periodo, plan, subtitle);
 
-  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(25).text(empresa.nome_empresa, 42, 195, { width: pageWidth });
-  doc.fillColor(COLORS.muted).font('Helvetica').fontSize(12).text(`Relatório de reputação · ${periodo}`, 42, 232);
-  doc.moveTo(42, 265).lineTo(160, 265).strokeColor(COLORS.blue).lineWidth(3).stroke();
-
-  const coverY = 320;
-  drawKpi(doc, 'Avaliações', String(total), 'Volume analisado', 42, coverY, 150);
-  drawKpi(doc, 'Nota média', avg ? avg.toFixed(2) : '—', 'Escala de 1 a 5', 208, coverY, 150, avg >= 4 ? COLORS.green : COLORS.amber);
-  drawKpi(doc, 'Taxa positiva', percent(positive, total), 'Notas 4–5', 374, coverY, 150, COLORS.green);
-
-  doc.fillColor(COLORS.muted).font('Helvetica').fontSize(9).text(`Emitido em ${emissao}`, 42, 440);
-  doc.fillColor(COLORS.muted).font('Helvetica').fontSize(8.5).text('Documento gerado pelo Filtra.AI a partir das avaliações registradas no período.', 42, 466, {
-    width: pageWidth,
-  });
-  doc.fillColor(COLORS.muted).font('Helvetica').fontSize(7.5).text('Este relatório apresenta indicadores operacionais e não substitui análise gerencial.', 42, doc.page.height - 64, {
-    width: pageWidth,
-  });
-
-  // Página executiva / KPIs.
-  newPage(doc, empresa.nome_empresa, periodo, plan, reportSubtitle);
-  sectionTitle(doc, 'Resumo executivo', 'Visão consolidada do desempenho de reputação no período');
-
+  sectionTitle(doc, 'Resumo do período', 'Somente indicadores calculados a partir das avaliações válidas');
+  const width = doc.page.width - PAGE.left - PAGE.right;
   const gap = 10;
-  const kw = (pageWidth - gap * 2) / 3;
-  const kY = doc.y;
-  drawKpi(doc, 'Volume', String(total), 'Avaliações no mês', 42, kY, kw);
-  drawKpi(doc, 'Nota média', avg ? avg.toFixed(2) : '—', 'Escala de 1 a 5', 42 + kw + gap, kY, kw, avg >= 4 ? COLORS.green : COLORS.amber);
-  drawKpi(doc, 'Críticas', String(negative), 'Notas 1–3', 42 + (kw + gap) * 2, kY, kw, negative ? COLORS.red : COLORS.green);
-  doc.y = kY + 96;
+  const kw = (width - gap * 2) / 3;
+  let y = doc.y;
+  drawKpi(doc, 'Volume', String(total), 'Avaliações válidas', PAGE.left, y, kw);
+  drawKpi(doc, 'Nota média', avg ? avg.toFixed(1) : '—', 'Escala 1 a 5', PAGE.left + kw + gap, y, kw);
+  drawKpi(doc, 'Críticas', String(critical), 'Notas 1–3', PAGE.left + (kw + gap) * 2, y, kw, COLORS.red);
+  doc.y = y + 94;
 
-  const donutY = doc.y;
-  drawDonut(doc, 42, donutY, 135, positive, negative, 'Mix de avaliações');
-  drawMetricList(doc, 205, donutY, pageWidth - 163, [
-    { label: 'Avaliações positivas (4–5)', value: String(positive) },
-    { label: 'Avaliações críticas (1–3)', value: String(negative) },
-    { label: 'Participação positiva', value: percent(positive, total) },
-    { label: 'Participação crítica', value: percent(negative, total) },
-    { label: 'Nota média', value: avg ? `${avg.toFixed(2)} / 5` : '—' },
-  ]);
-  doc.y = donutY + 190;
+  sectionTitle(doc, 'Distribuição de notas', 'Volume de avaliações por estrela');
+  drawBarChart(doc, PAGE.left, doc.y, width, 160, dist);
+  doc.y += 178;
 
-  const executiveReading =
-    total === 0
-      ? 'Não houve avaliações no período. Antes de comparar desempenho, confirme que o canal de coleta está ativo e sendo utilizado.'
-      : avg >= 4.5
-        ? 'O desempenho consolidado está em patamar forte. Preserve os pontos positivos e mantenha atenção às avaliações 1–3.'
-        : avg >= 4
-          ? 'O desempenho consolidado é saudável, mas existe espaço para elevar a média trabalhando os motivos presentes nas avaliações críticas.'
-          : 'O período apresenta sinal de atenção. Priorize as avaliações 1–3, identifique causas recorrentes e acompanhe a evolução mês a mês.';
-  drawInsightBox(doc, 42, doc.y, pageWidth, 'Leitura do período', executiveReading, avg >= 4 ? COLORS.green : COLORS.red);
-
-  // Distribuição de estrelas.
-  newPage(doc, empresa.nome_empresa, periodo, plan, reportSubtitle);
-  sectionTitle(doc, 'Distribuição de notas', 'Detalhamento do volume por estrela');
-  drawBarChart(doc, {
-    x: 42,
-    y: doc.y,
-    width: pageWidth,
-    height: 205,
-    labels: ['1★', '2★', '3★', '4★', '5★'],
-    values: dist,
-    title: 'Quantidade de avaliações por nota',
-  });
-  doc.y += 225;
-
-  const starRows = dist.map((value, i) => ({
-    label: `${i + 1} estrela${i === 0 ? '' : 's'}`,
-    value: `${value} · ${percent(value, total)}`,
-  }));
-  drawMetricList(doc, 42, doc.y, pageWidth, starRows);
-
-  // Ultra+ recebe uma página de análise de desempenho. Não inventa IA quando ela não foi fornecida.
-  if (isUltraPlus) {
-    newPage(doc, empresa.nome_empresa, periodo, plan, reportSubtitle);
-    sectionTitle(doc, 'Análise de desempenho', 'Indicadores derivados das avaliações registradas');
-
-    const analysisY = doc.y;
-    drawKpi(doc, 'Positivas', String(positive), percent(positive, total), 42, analysisY, kw, COLORS.green);
-    drawKpi(doc, 'Críticas', String(negative), percent(negative, total), 42 + kw + gap, analysisY, kw, COLORS.red);
-    drawKpi(doc, 'Índice médio', avg ? `${avg.toFixed(2)}` : '—', 'Pontuação consolidada', 42 + (kw + gap) * 2, analysisY, kw, COLORS.blue);
-    doc.y = analysisY + 100;
-
-    const trendText = avg >= 4.5
-      ? 'A distribuição atual indica forte concentração de avaliações positivas. O principal cuidado é não perder qualidade nas notas 1–3.'
-      : avg >= 4
-        ? 'A distribuição indica uma operação saudável, com oportunidade de reduzir a participação das notas 1–3 e elevar a média.'
-        : 'A distribuição mostra necessidade de atuação. Use as avaliações críticas como ponto de partida para correções operacionais.';
-    drawInsightBox(doc, 42, doc.y, pageWidth, 'Interpretação', trendText, avg >= 4 ? COLORS.green : COLORS.red);
-    doc.y += 94;
-
-    if (sentimentoPrincipal || topGargalos.length) {
-      drawInsightBox(
-        doc,
-        42,
-        doc.y,
-        pageWidth,
-        'Leitura de comentários',
-        `${sentimentoPrincipal ? `Sentimento predominante: ${sentimentoPrincipal}. ` : ''}${topGargalos.length ? `Pontos recorrentes: ${topGargalos.join(', ')}.` : ''}`,
-        COLORS.blue
-      );
-    } else {
-      drawInsightBox(
-        doc,
-        42,
-        doc.y,
-        pageWidth,
-        'Comentários',
-        'A análise textual por IA fica disponível quando o gerador recebe um provedor de IA. Esta emissão utiliza somente os indicadores registrados, sem consumir tokens de IA.',
-        COLORS.blue
-      );
+  if (ultraPlus) {
+    if (doc.y > 500) {
+      doc.addPage();
+      drawHeader(doc, empresa.nome_empresa, periodo, plan, subtitle);
     }
+    sectionTitle(doc, 'Análises disponíveis no painel', 'Indicadores derivados dos dados já registrados');
+    const colW = (width - gap) / 2;
+    drawDonut(doc, PAGE.left, doc.y, 118, positive, critical);
+    drawKpi(doc, 'Positivas', String(positive), `${percent(positive, total)} do volume`, PAGE.left + colW + gap, doc.y, colW, COLORS.green);
+    doc.y += 166;
+    drawKpi(doc, 'Críticas nas últimas 24h', String(crises24h), 'Notas 1–2 registradas', PAGE.left, doc.y, colW, crises24h > 0 ? COLORS.red : COLORS.blue);
+    drawKpi(doc, 'Taxa positiva', percent(positive, total), 'Notas 4–5 / total', PAGE.left + colW + gap, doc.y, colW, COLORS.green);
+    doc.y += 98;
+    drawTrend(doc, PAGE.left, doc.y, width, 180, serie);
+    doc.y += 198;
+    const tagsH = drawTags(doc, PAGE.left, doc.y, width, tags);
+    doc.y += tagsH + 18;
   }
 
-  // Corporativo e Rei: página própria para visão multi-unidades.
-  if (isMultiUnit) {
-    newPage(doc, empresa.nome_empresa, periodo, plan, reportSubtitle);
-    sectionTitle(doc, 'Visão multi-unidades', 'Comparação consolidada entre matriz e unidades ativas');
-
-    const unitCount = unidades.length;
-    const groupsCount = groups.length;
-    const unitY = doc.y;
-    drawKpi(doc, 'Unidades ativas', String(unitCount), 'Cadastro do período', 42, unitY, kw);
-    drawKpi(doc, 'Unidades com avaliações', String(groups.filter((g) => g.reviews.length).length), 'Com volume registrado', 42 + kw + gap, unitY, kw, COLORS.green);
-    drawKpi(doc, 'Média consolidada', avg ? avg.toFixed(2) : '—', 'Todas as unidades', 42 + (kw + gap) * 2, unitY, kw, avg >= 4 ? COLORS.green : COLORS.amber);
-    doc.y = unitY + 100;
-
-    drawUnitTable(doc, 42, doc.y, pageWidth, groups);
-    doc.y += 35 + Math.max(groups.length, 1) * 24;
-
-    const rankingReading = groups.length
-      ? `A tabela permite identificar rapidamente unidades com maior e menor média. Em caso de empate, o volume de avaliações ajuda a priorizar a leitura.`
-      : 'Ainda não existem unidades ou avaliações suficientes para formar um ranking.';
-    drawInsightBox(doc, 42, doc.y, pageWidth, 'Como ler o ranking', rankingReading, COLORS.blue);
-
-    // Cada unidade recebe uma página própria para tornar o relatório realmente útil para gestão.
-    for (const group of groups) {
-      paginaFilial(doc, {
-        empresaNome: empresa.nome_empresa,
-        periodo,
-        unidadeNome: group.unidade.nome,
-        reviews: group.reviews,
-        pageWidth,
-        plan,
-      });
+  if (multi) {
+    if (doc.y > 590) {
+      doc.addPage();
+      drawHeader(doc, empresa.nome_empresa, periodo, plan, subtitle);
     }
+    sectionTitle(doc, 'Visão multi-unidades', isRei ? 'Comparativo executivo baseado nos dados atuais' : 'Comparativo das unidades ativas');
+    const groups = agrupadoPorUnidade(reviews, unidades);
+    drawUnitTable(doc, PAGE.left, doc.y, width, groups);
+    doc.y += 40 + Math.max(groups.length, 1) * 23;
+    for (const group of groups) drawUnitDetail(doc, empresa.nome_empresa, periodo, group.unidade.nome, group.reviews);
   }
 
-  // Rei: fechamento executivo adicional, sem criar um benefício comercial novo.
-  if (isRei) {
-    newPage(doc, empresa.nome_empresa, periodo, plan, reportSubtitle);
-    sectionTitle(doc, 'Fechamento executivo', 'Síntese para acompanhamento gerencial');
-
-    const closing = avg >= 4.5
-      ? 'O período termina com desempenho muito positivo. Mantenha a disciplina operacional e acompanhe as críticas individualmente.'
-      : avg >= 4
-        ? 'O período apresenta desempenho saudável. O próximo ganho relevante tende a vir da redução das notas 1–3.'
-        : 'O período exige atenção gerencial. Concentre esforços nas causas das avaliações críticas e monitore a recuperação da média.';
-    drawInsightBox(doc, 42, doc.y, pageWidth, 'Prioridade recomendada', closing, avg >= 4 ? COLORS.green : COLORS.red);
-    doc.y += 96;
-
-    const priorityRows = [
-      { label: 'Nota média', value: avg ? `${avg.toFixed(2)} / 5` : '—' },
-      { label: 'Taxa positiva', value: percent(positive, total) },
-      { label: 'Taxa crítica', value: percent(negative, total) },
-      { label: 'Avaliações no período', value: String(total) },
-      { label: 'Unidades ativas', value: String(unidades.length) },
-    ];
-    drawMetricList(doc, 42, doc.y, pageWidth, priorityRows);
-    doc.y += 190;
-
-    drawInsightBox(
-      doc,
-      42,
-      doc.y,
-      pageWidth,
-      'Nota metodológica',
-      'Os indicadores deste relatório são calculados diretamente sobre as avaliações registradas para o período selecionado. A classificação de crítica considera notas de 1 a 3 estrelas.',
-      COLORS.blue
-    );
+  if (doc.y > 680) {
+    doc.addPage();
+    drawHeader(doc, empresa.nome_empresa, periodo, plan, subtitle);
   }
+  sectionTitle(doc, 'Leitura do período', 'Resumo factual — sem projeções');
+  const factual = total === 0
+    ? 'Não houve avaliações válidas no período selecionado.'
+    : `Foram registradas ${total} avaliações válidas, com nota média ${avg.toFixed(1)}. ${positive} avaliações foram positivas (4–5) e ${critical} foram críticas (1–3).`;
+  doc.roundedRect(PAGE.left, doc.y, width, 72, 7).fillAndStroke(COLORS.paleBlue, COLORS.line);
+  doc.fillColor(COLORS.ink).font('Helvetica').fontSize(9).text(factual, PAGE.left + 14, doc.y + 16, { width: width - 28, lineGap: 2 });
+  doc.y += 92;
+  doc.fillColor(COLORS.muted).font('Helvetica').fontSize(7.5).text(`Emitido em ${emissao}. O relatório reproduz dados registrados no painel do cliente; não contém previsão de resultados futuros.`, PAGE.left, doc.y, { width });
 
-  // Recomendação final comum a todos os relatórios elegíveis.
-  newPage(doc, empresa.nome_empresa, periodo, plan, reportSubtitle);
-  sectionTitle(doc, 'Próximos passos', 'Orientação operacional baseada nos indicadores do período');
-
-  const recommendations = [
-    total === 0
-      ? 'Ative e divulgue o canal de coleta de feedback para começar a construir histórico.'
-      : negative > positive
-        ? 'Priorize as avaliações 1–3 e transforme os motivos recorrentes em ações operacionais mensuráveis.'
-        : 'Mantenha o processo de coleta ativo e acompanhe de perto as avaliações 1–3.',
-    isMultiUnit
-      ? 'Compare as unidades abaixo da média consolidada com as unidades de melhor desempenho e replique boas práticas.'
-      : 'Use a evolução mensal da nota média para medir o efeito das ações realizadas.',
-    'Revise o próximo relatório com o mesmo período de referência para evitar comparações distorcidas.',
-  ];
-
-  recommendations.forEach((text, index) => {
-    const y = doc.y;
-    doc.circle(53, y + 7, 8).fill(index === 0 ? COLORS.blue : COLORS.paleBlue);
-    doc.fillColor(index === 0 ? COLORS.white : COLORS.blue).font('Helvetica-Bold').fontSize(7.5).text(String(index + 1), 50, y + 4, {
-      width: 6,
-      align: 'center',
-    });
-    doc.fillColor(COLORS.ink).font('Helvetica').fontSize(9).text(text, 72, y, { width: pageWidth - 30, lineGap: 2 });
-    doc.y = y + 58;
-  });
-
-  drawInsightBox(
-    doc,
-    42,
-    doc.y + 10,
-    pageWidth,
-    'Escopo do relatório',
-    isRei
-      ? 'Este relatório consolida os indicadores do plano REI e sua visão multi-unidades, mantendo a mesma base de benefícios comerciais do plano Corporativo e uma apresentação executiva mais ampla.'
-      : isMultiUnit
-        ? 'Este relatório utiliza a capacidade multi-unidades do plano para apresentar visão consolidada e detalhamento por unidade.'
-        : plan === 'ultra'
-          ? 'Este relatório amplia a visão do plano Ultra com indicadores de análise de desempenho.'
-          : 'Este relatório apresenta os indicadores mensais disponíveis para o plano Pro.',
-    COLORS.blue
-  );
-
-  // Watermark e rodapé somente depois de todas as páginas existirem. Isso evita cortes
-  // e garante que o watermark fique discreto e centralizado em cada página.
-  const range = doc.bufferedPageRange();
-  for (let i = range.start; i < range.start + range.count; i++) {
-    doc.switchToPage(i);
-    drawWatermark(doc);
-    drawFooter(doc, empresa.nome_empresa, i - range.start + 1, range.count);
-  }
-
-  return await new Promise<Buffer>((resolve, reject) => {
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
+  await new Promise<void>((resolve, reject) => {
+    doc.on('end', resolve);
     doc.on('error', reject);
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
+      doc.switchToPage(i);
+      drawFooter(doc, empresa.nome_empresa, i - range.start + 1, range.count);
+    }
     doc.end();
   });
+  return Buffer.concat(chunks);
 }
