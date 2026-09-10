@@ -1,6 +1,6 @@
 /**
  * Notificações automáticas por e-mail (SMTP via mailer).
- * Sem SMTP configurado, o conteúdo vai para o console (dev).
+ * Links do painel passam por /login?next=... para o usuário autenticar.
  */
 import { enviarEmail, smtpConfigured } from './mailer.js';
 
@@ -29,6 +29,17 @@ function fmtDate(iso: string, locale: Locale): string {
   }
 }
 
+/** Painel exige JWT — link seguro = login com retorno ao painel. */
+function painelLoginUrl(ref: string): string {
+  const path = ref ? `/painel/${encodeURIComponent(ref)}` : '/login';
+  if (!ref) return `${APP_URL}/login`;
+  return `${APP_URL}/login?next=${encodeURIComponent(path)}`;
+}
+
+function painelDirectUrl(ref: string): string {
+  return ref ? `${APP_URL}/painel/${encodeURIComponent(ref)}` : `${APP_URL}/login`;
+}
+
 function wrapHtml(title: string, bodyHtml: string): string {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${title}</title></head>
 <body style="font-family:system-ui,-apple-system,sans-serif;background:#0a0a0a;color:#e4e4e7;margin:0;padding:24px">
@@ -53,8 +64,8 @@ export async function notificarTrialAtivado(opts: {
   if (!opts.email) return;
   const locale = normLocale(opts.locale);
   const ref = opts.slug || opts.empresaId || '';
-  const painel = `${APP_URL}/painel/${ref}`;
-  const avaliacao = `${APP_URL}/avaliacao/${ref}`;
+  const painel = painelLoginUrl(ref);
+  const avaliacao = `${APP_URL}/avaliacao/${encodeURIComponent(ref)}`;
   const exp = fmtDate(opts.expiraEm, locale);
 
   const copy =
@@ -67,7 +78,7 @@ export async function notificarTrialAtivado(opts: {
             `Your 7-day trial for ${opts.nomeEmpresa} is active.`,
             `Expires: ${exp}`,
             ``,
-            `Dashboard: ${painel}`,
+            `Dashboard (login first): ${painel}`,
             `Review link: ${avaliacao}`,
             ``,
             `Share the review link (QR or URL) with customers. Negative feedback stays private.`,
@@ -76,7 +87,7 @@ export async function notificarTrialAtivado(opts: {
             'Trial activated',
             `<p>Your 7-day trial for <strong style="color:#fafafa">${opts.nomeEmpresa}</strong> is active.</p>
              <p>Expires: <strong style="color:#fafafa">${exp}</strong></p>
-             <p><a href="${painel}" style="color:#818cf8">Open dashboard</a> · <a href="${avaliacao}" style="color:#818cf8">Review link</a></p>`
+             <p><a href="${painel}" style="color:#818cf8">Open dashboard (sign in)</a> · <a href="${avaliacao}" style="color:#818cf8">Review link</a></p>`
           ),
         }
       : locale === 'es'
@@ -88,14 +99,14 @@ export async function notificarTrialAtivado(opts: {
               `Tu prueba de 7 días para ${opts.nomeEmpresa} está activa.`,
               `Expira: ${exp}`,
               ``,
-              `Panel: ${painel}`,
+              `Panel (iniciar sesión): ${painel}`,
               `Enlace de evaluación: ${avaliacao}`,
             ].join('\n'),
             html: wrapHtml(
               'Prueba activada',
               `<p>Tu prueba de 7 días para <strong style="color:#fafafa">${opts.nomeEmpresa}</strong> está activa.</p>
                <p>Expira: <strong style="color:#fafafa">${exp}</strong></p>
-               <p><a href="${painel}" style="color:#818cf8">Abrir panel</a></p>`
+               <p><a href="${painel}" style="color:#818cf8">Abrir panel (iniciar sesión)</a></p>`
             ),
           }
         : {
@@ -106,7 +117,7 @@ export async function notificarTrialAtivado(opts: {
               `Seu período de 7 dias grátis de ${opts.nomeEmpresa} está ativo.`,
               `Expira em: ${exp}`,
               ``,
-              `Painel: ${painel}`,
+              `Painel (faça login): ${painel}`,
               `Link de avaliação: ${avaliacao}`,
               ``,
               `Compartilhe o link (ou QR) com clientes. Críticas ≤3★ ficam privadas e você recebe alerta.`,
@@ -115,7 +126,7 @@ export async function notificarTrialAtivado(opts: {
               'Trial ativado',
               `<p>Seu período de 7 dias grátis de <strong style="color:#fafafa">${opts.nomeEmpresa}</strong> está ativo.</p>
                <p>Expira em: <strong style="color:#fafafa">${exp}</strong></p>
-               <p><a href="${painel}" style="color:#818cf8">Abrir painel</a> · <a href="${avaliacao}" style="color:#818cf8">Link de avaliação</a></p>
+               <p><a href="${painel}" style="color:#818cf8">Abrir painel (entrar com CNPJ e senha)</a> · <a href="${avaliacao}" style="color:#818cf8">Link de avaliação</a></p>
                <p style="margin-top:12px">Compartilhe o link com clientes. Críticas ficam privadas e geram alerta por e-mail.</p>`
             ),
           };
@@ -144,7 +155,7 @@ export async function notificarCriticaPrivada(opts: {
   if (!opts.email || opts.rating > 3) return;
   const locale = normLocale(opts.locale);
   const ref = opts.slug || opts.empresaId || '';
-  const painel = `${APP_URL}/painel/${ref}`;
+  const painel = painelLoginUrl(ref);
   const cliente = opts.nomeCliente && opts.nomeCliente !== 'Anônimo' ? opts.nomeCliente : 'Cliente';
   const stars = '★'.repeat(Math.min(5, Math.max(1, opts.rating)));
   const comentario = (opts.comment || '').trim().slice(0, 500);
@@ -165,7 +176,7 @@ export async function notificarCriticaPrivada(opts: {
             opts.aiReply ? `AI draft reply: ${opts.aiReply}` : '',
             wa ? `Customer WhatsApp: ${wa}` : '',
             ``,
-            `Open dashboard: ${painel}`,
+            `Open dashboard (sign in): ${painel}`,
           ]
             .filter(Boolean)
             .join('\n'),
@@ -180,7 +191,7 @@ export async function notificarCriticaPrivada(opts: {
             opts.aiReply ? `Rascunho IA: ${opts.aiReply}` : '',
             wa ? `WhatsApp do cliente: ${wa}` : '',
             ``,
-            `Abrir painel: ${painel}`,
+            `Abrir painel (faça login): ${painel}`,
           ]
             .filter(Boolean)
             .join('\n'),
@@ -196,7 +207,8 @@ export async function notificarCriticaPrivada(opts: {
        ${comentario ? `<p style="color:#e4e4e7">“${comentario.replace(/</g, '')}”</p>` : ''}
        ${opts.aiReply ? `<p><em>IA:</em> ${String(opts.aiReply).replace(/</g, '')}</p>` : ''}
        ${wa ? `<p><a href="${wa}" style="color:#34d399">WhatsApp do cliente</a></p>` : ''}
-       <p style="margin-top:16px"><a href="${painel}" style="color:#818cf8">Abrir painel</a></p>`
+       <p style="margin-top:16px"><a href="${painel}" style="display:inline-block;background:#4f46e5;color:#fff;padding:10px 18px;border-radius:10px;text-decoration:none;font-weight:600">Abrir painel (entrar)</a></p>
+       <p style="font-size:12px;color:#71717a">É preciso entrar com CNPJ e senha. Depois você volta ao painel automaticamente.</p>`
     ),
   });
 }
@@ -213,7 +225,7 @@ export async function notificarAlertaCrise(opts: {
   if (!opts.email || opts.quantidade < 3) return;
   const locale = normLocale(opts.locale);
   const ref = opts.slug || opts.empresaId || '';
-  const painel = `${APP_URL}/painel/${ref}`;
+  const painel = painelLoginUrl(ref);
 
   const subject =
     locale === 'en'
@@ -222,8 +234,8 @@ export async function notificarAlertaCrise(opts: {
 
   const text =
     locale === 'en'
-      ? `${opts.nomeEmpresa} received ${opts.quantidade} ratings ≤2★ in the last 24 hours.\nOpen dashboard: ${painel}`
-      : `${opts.nomeEmpresa} recebeu ${opts.quantidade} notas ≤2★ nas últimas 24 horas.\nAbrir painel: ${painel}`;
+      ? `${opts.nomeEmpresa} received ${opts.quantidade} ratings ≤2★ in the last 24 hours.\nOpen dashboard (sign in): ${painel}`
+      : `${opts.nomeEmpresa} recebeu ${opts.quantidade} notas ≤2★ nas últimas 24 horas.\nAbrir painel (login): ${painel}`;
 
   await enviarEmail({
     to: opts.email,
@@ -232,7 +244,7 @@ export async function notificarAlertaCrise(opts: {
     html: wrapHtml(
       locale === 'en' ? 'Crisis alert' : 'Alerta de crise',
       `<p><strong style="color:#f87171">${opts.quantidade}</strong> avaliações ≤2★ nas últimas 24h em <strong style="color:#fafafa">${opts.nomeEmpresa}</strong>.</p>
-       <p><a href="${painel}" style="color:#818cf8">Abrir painel agora</a></p>`
+       <p><a href="${painel}" style="color:#818cf8">Abrir painel agora (entrar)</a></p>`
     ),
   });
 }
@@ -275,10 +287,6 @@ export async function notificarTrialExpirando(opts: {
   return { ok: true };
 }
 
-/**
- * Assinatura paga expirando em breve (renovação ou cancel_at_period_end).
- * motivo: 'renovacao' | 'cancelamento'
- */
 export async function notificarAssinaturaExpirando(opts: {
   email: string;
   nomeEmpresa: string;
@@ -293,7 +301,7 @@ export async function notificarAssinaturaExpirando(opts: {
   if (!opts.email) return { ok: false };
   const locale = normLocale(opts.locale);
   const ref = opts.slug || opts.empresaId || '';
-  const painel = `${APP_URL}/painel/${ref}`;
+  const painel = painelLoginUrl(ref);
   const planos = `${APP_URL}/#planos`;
   const exp = fmtDate(opts.expiraEm, locale);
   const cancelado = opts.motivo === 'cancelamento';
@@ -332,16 +340,12 @@ export async function notificarAssinaturaExpirando(opts: {
            <p>O uso permanece liberado até <strong style="color:#fafafa">${exp}</strong> (faltam ${opts.dias} dia(s)).</p>
            <p><a href="${planos}" style="color:#818cf8">Renovar assinatura</a></p>`
         : `<p>O plano <strong style="color:#fafafa">${planoLabel}</strong> de <strong style="color:#fafafa">${opts.nomeEmpresa}</strong> renova em <strong style="color:#fafafa">${exp}</strong> (faltam ${opts.dias} dia(s)).</p>
-           <p><a href="${painel}" style="color:#818cf8">Abrir painel</a></p>`
+           <p><a href="${painel}" style="color:#818cf8">Abrir painel (entrar)</a></p>`
     ),
   });
   return { ok: true };
 }
 
-/**
- * Acesso já encerrado (trial ou assinatura expirados / bloqueados).
- * tipo: 'trial' | 'assinatura' | 'cancelamento'
- */
 export async function notificarAcessoExpirado(opts: {
   email: string;
   nomeEmpresa: string;
@@ -401,7 +405,6 @@ export async function notificarAcessoExpirado(opts: {
   return { ok: true };
 }
 
-/** Pagamento / upgrade confirmado (Stripe) */
 export async function notificarPagamentoConfirmado(opts: {
   email: string;
   nomeEmpresa: string;
@@ -414,7 +417,7 @@ export async function notificarPagamentoConfirmado(opts: {
   if (!opts.email) return;
   const locale = normLocale(opts.locale);
   const ref = opts.slug || opts.empresaId || '';
-  const painel = `${APP_URL}/painel/${ref}`;
+  const painel = painelLoginUrl(ref);
 
   const subject =
     locale === 'en'
@@ -434,12 +437,11 @@ export async function notificarPagamentoConfirmado(opts: {
       locale === 'en' ? 'Plan active' : 'Plano ativo',
       `<p>Pagamento confirmado para <strong style="color:#fafafa">${opts.nomeEmpresa}</strong>.</p>
        <p>Plano: <strong style="color:#fafafa">${opts.plano}</strong></p>
-       <p><a href="${painel}" style="color:#818cf8">Abrir painel</a></p>`
+       <p><a href="${painel}" style="color:#818cf8">Abrir painel (entrar)</a></p>`
     ),
   });
 }
 
-/** Confirmação de cancelamento (acesso até o fim do ciclo pago) */
 export async function notificarCancelamentoAgendado(opts: {
   email: string;
   nomeEmpresa: string;
@@ -480,4 +482,4 @@ export async function notificarCancelamentoAgendado(opts: {
   return { ok: true };
 }
 
-export { smtpConfigured };
+export { smtpConfigured, painelLoginUrl, painelDirectUrl };
