@@ -1,20 +1,13 @@
 /**
- * Recuperação de senha do DONO do SaaS (painel /admin).
- *
- * Segurança:
- * 1) Não usa o fluxo público /api/auth/forgot-password
- * 2) Exige e-mail do admin + ADMIN_RECOVERY_SECRET (só no servidor)
- * 3) Rate limit rigoroso
- * 4) Token de 30 min, uso único
- * 5) Ao gerar novo token, invalida todos os anteriores do admin
- * 6) Nova senha: mín. 10 caracteres + número
+ * Recuperação de senha do ADMIN (painel /admin).
+ * Exige ADMIN_RECOVERY_SECRET + e-mail do admin.
  */
 import type { Express, Request, Response } from 'express';
 import type { Database } from 'sqlite';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
-import { enviarEmail, smtpConfigured } from './mailer.js';
+import { enviarEmail, smtpConfigured } from './lib/mailer.js';
 import {
   ensureAuthColumns,
   invalidatePasswordResetTokens,
@@ -26,7 +19,7 @@ const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://loca
 );
 
 function adminEmail(): string {
-  return (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
+  return (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 }
 
 function recoverySecret(): string {
@@ -58,7 +51,8 @@ const adminResetLimiter = rateLimit({
 export function isAdminUsuario(usuario: any): boolean {
   if (!usuario) return false;
   const email = String(usuario.email || '').toLowerCase();
-  return usuario.empresa_id === 'admin' || email === adminEmail();
+  const adm = adminEmail();
+  return usuario.empresa_id === 'admin' || (adm !== '' && email === adm);
 }
 
 export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Database) {
@@ -69,7 +63,13 @@ export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Databas
         console.error('ADMIN_RECOVERY_SECRET não configurada ou muito curta (mín. 12).');
         return res.status(503).json({
           error:
-            'Recuperação do admin desativada no servidor. Configure ADMIN_RECOVERY_SECRET no .env (mín. 12 caracteres).',
+            'Recuperação do admin desativada. Configure ADMIN_RECOVERY_SECRET no Render (mín. 12 caracteres).',
+        });
+      }
+
+      if (!adminEmail()) {
+        return res.status(503).json({
+          error: 'ADMIN_EMAIL não configurado no servidor.',
         });
       }
 
@@ -82,7 +82,9 @@ export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Databas
         'Se os dados estiverem corretos, um link de redefinição será enviado ao e-mail do administrador.';
 
       if (!email || !recoverySecretBody) {
-        return res.status(400).json({ error: 'Informe o e-mail do admin e a chave de recuperação.' });
+        return res.status(400).json({
+          error: 'Informe o e-mail do admin e a chave de recuperação (ADMIN_RECOVERY_SECRET).',
+        });
       }
 
       if (!timingSafeEqualStr(recoverySecretBody, secretCfg)) {
@@ -100,10 +102,10 @@ export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Databas
       const usuario = await db.get('SELECT * FROM usuarios WHERE email = ?', [email]);
 
       if (!usuario || !isAdminUsuario(usuario) || !usuario.email) {
+        console.warn('[admin-recovery] usuário admin não encontrado no banco para', email);
         return res.json({ success: true, message: okMsg });
       }
 
-      // Invalida tokens anteriores do admin
       await invalidatePasswordResetTokens(db, usuario.id);
 
       const token = crypto.randomBytes(32).toString('hex');
@@ -117,7 +119,7 @@ export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Databas
       );
 
       const link = `${APP_URL}/admin/login?token=${token}`;
-      await enviarEmail({
+      const sent = await enviarEmail({
         to: usuario.email,
         subject: 'Filtra.IA — redefinição de senha do ADMIN',
         text: [
@@ -129,27 +131,34 @@ export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Databas
           link,
           '',
           'Links anteriores de recuperação foram invalidados.',
-          'Se não foi você, altere imediatamente a ADMIN_RECOVERY_SECRET no servidor',
-          'e ignore este e-mail.',
+          'Se não foi você, altere a ADMIN_RECOVERY_SECRET no servidor e ignore este e-mail.',
           '',
           '— Filtra.IA (segurança)',
         ].join('\n'),
       });
 
-      console.log(`[admin-recovery] link gerado para ${usuario.email} (smtp=${smtpConfigured()})`);
-      if (!smtpConfigured()) {
-        console.log(`[admin-recovery] SMTP off — link (dev): ${link}`);
+      console.log(
+        `[admin-recovery] smtp=${smtpConfigured()} sent=${sent.ok} mode=${sent.mode} err=${sent.error || '-'}`
+      );
+
+      if (!sent.ok) {
+        return res.status(503).json({
+          error:
+            'Não foi possível enviar o e-mail. Verifique SMTP_HOST/USER/PASS/FROM no Render e os logs (Falha SMTP).',
+          smtp: smtpConfigured(),
+          detail: process.env.NODE_ENV === 'production' ? undefined : sent.error,
+        });
       }
 
       return res.json({
         success: true,
         message: okMsg,
-        smtp: smtpConfigured(),
-        ...(process.env.NODE_ENV !== 'production' && !smtpConfigured() ? { dev_link: link } : {}),
+        smtp: true,
+        delivered: true,
       });
     } catch (e: any) {
       console.error('admin forgot-password:', e.message || e);
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
+      return res.status(500).json({ error: 'Erro ao processar a solicitação.' });
     }
   });
 
@@ -207,7 +216,7 @@ export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Databas
       });
     } catch (e: any) {
       console.error('admin reset-password:', e.message || e);
-      return res.status(500).json({ error: 'Erro interno do servidor.' });
+      return res.status(500).json({ error: 'Erro ao processar a solicitação.' });
     }
   });
 }

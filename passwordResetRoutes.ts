@@ -1,19 +1,13 @@
 /**
  * Recuperação de senha por e-mail (clientes / empresas).
- * A conta ADMIN do SaaS NÃO usa este fluxo — ver adminPasswordReset.ts.
- *
- * Segurança do token:
- * - randomBytes(32), só SHA-256 no banco
- * - uso único (usado=1)
- * - expira em 1h
- * - ao gerar novo token, todos os anteriores do usuário são invalidados
+ * Admin: ver adminPasswordReset.ts
  */
 import type { Express, Request, Response } from 'express';
 import type { Database } from 'sqlite';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
-import { enviarEmail, smtpConfigured } from './mailer.js';
+import { enviarEmail, smtpConfigured } from './lib/mailer.js';
 import { validarSenhaEmpresa } from './passwordPolicy.js';
 
 const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(
@@ -31,20 +25,19 @@ function emailValido(email: string): boolean {
 
 function isAdminAccount(usuario: any): boolean {
   if (!usuario) return false;
-  const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
+  const adminMail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
   const email = String(usuario.email || '').toLowerCase();
-  return usuario.empresa_id === 'admin' || email === adminMail;
+  if (usuario.empresa_id === 'admin') return true;
+  if (adminMail && email === adminMail) return true;
+  return false;
 }
 
-/** Invalida todos os tokens ainda válidos do usuário (uso único efetivo por “geração”). */
 export async function invalidatePasswordResetTokens(
   db: Database,
   usuarioId: string
 ): Promise<number> {
   const result = await db.run(
-    `UPDATE password_resets
-     SET usado = 1
-     WHERE usuario_id = ? AND usado = 0`,
+    `UPDATE password_resets SET usado = 1 WHERE usuario_id = ? AND usado = 0`,
     [usuarioId]
   );
   return Number(result.changes || 0);
@@ -61,7 +54,6 @@ export async function ensureAuthColumns(db: Database) {
     /* ok */
   }
 
-  // TIMESTAMPTZ = Postgres; SQLite aceita como afinidade numérica/texto e ainda funciona com ISO strings
   await db.exec(`
     CREATE TABLE IF NOT EXISTS password_resets (
       id TEXT PRIMARY KEY,
@@ -155,8 +147,9 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
         });
       }
 
+      // Resposta genérica se usuário não existe (anti-enumeration)
       if (!usuario || !usuario.email) {
-        return res.json({ success: true, message: okMsg });
+        return res.json({ success: true, message: okMsg, smtp: smtpConfigured() });
       }
 
       await invalidatePasswordResetTokens(db, usuario.id);
@@ -172,7 +165,7 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
       );
 
       const link = `${APP_URL}/recuperar-senha?token=${token}`;
-      await enviarEmail({
+      const sent = await enviarEmail({
         to: usuario.email,
         subject: 'Filtra.IA — redefinição de senha',
         text: [
@@ -190,14 +183,26 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
         ].join('\n'),
       });
 
+      if (!sent.ok) {
+        console.error('[forgot-password] e-mail não enviado:', sent.error || sent.mode);
+        // Ainda responde genérico ao cliente (segurança), mas loga falha real no Render
+        return res.json({
+          success: true,
+          message: okMsg,
+          smtp: smtpConfigured(),
+          delivered: false,
+        });
+      }
+
       res.json({
         success: true,
         message: okMsg,
-        smtp: smtpConfigured(),
+        smtp: true,
+        delivered: true,
       });
     } catch (e: any) {
       console.error('forgot-password:', e.message || e);
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+      res.status(500).json({ error: 'Erro ao processar a solicitação.' });
     }
   });
 
@@ -250,7 +255,7 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
       res.json({ success: true, message: 'Senha atualizada com sucesso. Você já pode entrar.' });
     } catch (e: any) {
       console.error('reset-password:', e.message || e);
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+      res.status(500).json({ error: 'Erro ao processar a solicitação.' });
     }
   });
 }
