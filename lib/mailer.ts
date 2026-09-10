@@ -71,6 +71,7 @@ function buildTransport() {
     host,
     port,
     secure,
+    family: 4,
     auth: { user, pass },
     requireTLS: !secure && port === 587,
     tls: {
