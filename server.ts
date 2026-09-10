@@ -36,6 +36,7 @@ import { mountUnidadeRoutes } from './routes/unidadeRoutes.js';
 import { mountExportRoutes } from './routes/exportRoutes.js';
 import { mountPublicPlanosRoutes } from './routes/publicPlanosRoutes.js';
 import { mountAuditRoutes } from './routes/auditRoutes.js';
+import { mountSmtpTestRoutes } from './routes/smtpTestRoutes.js';
 import { mountPasswordResetRoutes } from './passwordResetRoutes.js';
 import { mountAdminLoginRoute } from './adminLoginRoute.js';
 import { mountAdminPasswordResetRoutes } from './adminPasswordReset.js';
@@ -70,8 +71,8 @@ assertEnvOrExit();
 const JWT_SECRET = requireJwtSecret();
 
 const BUILD = {
-  version: '1.1.1',
-  marker: 'main-live-ready-admin-pg',
+  version: '1.1.2',
+  marker: 'smtp-test-and-mailer-fix',
   started_at: new Date().toISOString(),
 };
 
@@ -87,12 +88,10 @@ app.use((req, res, next) => {
 });
 app.use(cors(buildCorsOptions()));
 
-/** Keep-alive / UptimeRobot — não depende do banco. */
 app.get('/api/live', (_req, res) => {
   res.status(200).json({ ok: true, live: true, build: BUILD, time: new Date().toISOString() });
 });
 
-/** Pronto para tráfego se o Postgres responder. */
 app.get('/api/ready', async (_req, res) => {
   try {
     const dbPing = await pingDb();
@@ -110,7 +109,6 @@ app.get('/api/ready', async (_req, res) => {
   }
 });
 
-/** Health com ping real no banco — Render / monitoramento. */
 app.get('/api/health', async (_req, res) => {
   const ai = getAiLoadStats();
   let dbPing: { ok: boolean; engine: string; error?: string } = {
@@ -189,7 +187,6 @@ async function runSentimentBackfillOnBoot() {
 }
 
 async function runLgpdSweepOnBoot() {
-  // Só roda se explicitamente ligado — evita erro Postgres no boot
   if (process.env.LGPD_SWEEP !== '1') return;
   try {
     const db = getDb();
@@ -296,6 +293,7 @@ async function main() {
   mountExportRoutes(app);
   mountPublicPlanosRoutes(app);
   mountAuditRoutes(app);
+  mountSmtpTestRoutes(app);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
@@ -310,6 +308,7 @@ async function main() {
   console.log(
     `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | WeChat: ${wechatConfigured() ? 'ok' : 'OFF'}`
   );
+  console.log(`📧 SMTP: ${smtpConfigured() ? 'configurado' : 'OFF — defina SMTP_* no Render'}`);
   if (!wechatConfigured()) {
     console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
   }
