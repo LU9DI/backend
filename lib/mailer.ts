@@ -50,7 +50,11 @@ export type SendEmailResult = {
 };
 
 function defaultFrom(): string {
-  return cleanEnv(process.env.SMTP_FROM) || cleanEnv(process.env.MAIL_FROM) || 'Filtra.IA <onboarding@resend.dev>';
+  return (
+    cleanEnv(process.env.SMTP_FROM) ||
+    cleanEnv(process.env.MAIL_FROM) ||
+    'Filtra.IA <onboarding@resend.dev>'
+  );
 }
 
 function buildTransport() {
@@ -60,7 +64,10 @@ function buildTransport() {
   const user = cleanEnv(process.env.SMTP_USER);
   const pass = smtpPass();
 
-  const opts: Record<string, unknown> = {
+  return {
+    // Quando HOST/PORT são informados explicitamente, não use `service: gmail`.
+    // O preset do Nodemailer pode sobrescrever o transporte e tirar o Render
+    // do caminho SMTP 587 que foi configurado.
     host,
     port,
     secure,
@@ -68,22 +75,14 @@ function buildTransport() {
     requireTLS: !secure && port === 587,
     tls: {
       minVersion: 'TLSv1.2' as const,
-      // Render + Gmail: default permissivo
-      rejectUnauthorized: cleanEnv(process.env.SMTP_TLS_REJECT) === '1',
+      rejectUnauthorized: cleanEnv(process.env.SMTP_TLS_REJECT) !== '0',
     },
-    connectionTimeout: 20_000,
-    greetingTimeout: 20_000,
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
     socketTimeout: 25_000,
     logger: cleanEnv(process.env.SMTP_DEBUG) === '1',
     debug: cleanEnv(process.env.SMTP_DEBUG) === '1',
   };
-
-  // Atalho oficial do nodemailer para Gmail
-  if (/gmail\.com$/i.test(host) || cleanEnv(process.env.SMTP_SERVICE) === 'gmail') {
-    opts.service = 'gmail';
-  }
-
-  return opts;
 }
 
 async function sendViaResend(opts: {
@@ -181,7 +180,12 @@ export async function enviarEmail(opts: {
 
   try {
     const nodemailer = await import('nodemailer');
-    const transporter = nodemailer.createTransport(buildTransport() as any);
+    const transport = buildTransport();
+    const transporter = nodemailer.createTransport(transport as any);
+
+    console.log(
+      `[mail] SMTP tentativa host=${transport.host} port=${transport.port} secure=${transport.secure}`
+    );
 
     const info = await transporter.sendMail({
       from,
