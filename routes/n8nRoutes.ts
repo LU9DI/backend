@@ -16,7 +16,6 @@ import {
   notifyN8n,
   verifyInboundSecret,
 } from '../lib/n8n.js';
-import { ensureRuntimeSchema } from '../lib/schemaEnsure.js';
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -88,7 +87,6 @@ export function mountN8nRoutes(app: Express) {
       }
 
       const db = getDb();
-      await ensureRuntimeSchema(db);
 
       // Tabela simples de leads (idempotente)
       await db.exec(`
@@ -184,3 +182,4 @@ export function mountN8nRoutes(app: Express) {
     })
   );
 }
+
