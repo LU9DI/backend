@@ -40,6 +40,7 @@ import { mountAdminLoginRoute } from './adminLoginRoute.js';
 import { mountAdminPasswordResetRoutes } from './adminPasswordReset.js';
 import { mountMfaRoutes } from './mfa.js';
 import { mountStripeRoutes } from './stripeRoutes.js';
+import { mountN8nRoutes } from './routes/n8nRoutes.js';
 import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
 import { paypalConfigured } from './lib/paypal.js';
 import { mpConfigured } from './lib/mercadopago.js';
@@ -264,6 +265,7 @@ async function main() {
   mountMfaRoutes(app, getDb, { JWT_SECRET, setAuthCookie, autenticarToken });
   mountPasswordResetRoutes(app, getDb);
   mountStripeRoutes(app, getDb);
+  mountN8nRoutes(app);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
