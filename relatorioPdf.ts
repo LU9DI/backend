@@ -1,39 +1,25 @@
 /**
  * Relatório mensal PDF — Filtra.AI.
- *
- * Regras do produto:
- * - Inicial: sem PDF.
- * - Pro: PDF base, sem IA e sem unidades.
- * - Ultra: PDF + dados de IA.
- * - Corporativo: Ultra + visão consolidada por unidades.
- * - Rei: Corporativo + visão executiva.
- * - Trial: experiência completa do Rei.
- *
- * O relatório usa somente dados já persistidos. Não dispara IA durante o download.
+ * Regras: Inicial sem PDF; Pro PDF base sem IA/unidades; Ultra com IA;
+ * Corporativo/Rei com unidades; Trial com experiência completa do Rei.
+ * O download nunca dispara IA: usa apenas dados persistidos.
  */
 import type { Database } from 'sqlite';
 import PDFDocument from 'pdfkit';
 import { isTrialPlan, planTemPdf } from './lib/plans.js';
 
 type ReviewRow = {
-  rating: number;
-  comment?: string | null;
-  unidade_id?: string | null;
-  origin?: string | null;
-  createdAt?: string | Date;
-  createdat?: string | Date;
-  created_at?: string | Date;
-  is_test?: number | boolean | null;
-  ai_tags?: string | null;
-  sentiment?: string | null;
+  rating: number; comment?: string | null; unidade_id?: string | null; origin?: string | null;
+  createdAt?: string | Date; createdat?: string | Date; created_at?: string | Date;
+  is_test?: number | boolean | null; ai_tags?: string | null; sentiment?: string | null;
 };
 type UnidadeRow = { id: string; nome: string; slug?: string | null };
 type PdfLevel = 'pro' | 'ultra' | 'corporativo' | 'rei';
 
 const COLORS = {
   navy: '#17233c', blue: '#4f46e5', ink: '#26364d', muted: '#65748a', line: '#d9e1eb',
-  pale: '#f5f7fa', paleBlue: '#eef2ff', green: '#18794e', red: '#b42318',
-  white: '#ffffff', star: ['#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e'],
+  pale: '#f5f7fa', paleBlue: '#eef2ff', green: '#18794e', red: '#b42318', white: '#ffffff',
+  star: ['#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e'],
 };
 const PAGE = { left: 42, right: 42, top: 94, bottom: 50 };
 
@@ -50,11 +36,20 @@ function isTest(row: ReviewRow): boolean { return Number(row.is_test) === 1 || r
 function rowDate(row: ReviewRow): string | Date | null { return row.createdAt ?? row.createdat ?? row.created_at ?? null; }
 function isInMonth(row: ReviewRow, mesAno: string): boolean {
   const value = rowDate(row);
-  if (value == null || value === '') return true;
+  if (value == null || value === '') return false;
   if (typeof value === 'string' && /^\d{4}-\d{2}/.test(value)) return value.slice(0, 7) === mesAno;
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return false;
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}` === mesAno;
+}
+function monthBounds(mesAno: string): [string, string] | null {
+  const match = /^(\d{4})-(\d{2})$/.exec(mesAno);
+  if (!match) return null;
+  const year = Number(match[1]); const month = Number(match[2]);
+  if (month < 1 || month > 12) return null;
+  const start = new Date(Date.UTC(year, month - 1, 1));
+  const end = new Date(Date.UTC(year, month, 1));
+  return [start.toISOString(), end.toISOString()];
 }
 function distNotas(reviews: ReviewRow[]): number[] {
   const result = [0, 0, 0, 0, 0];
@@ -74,7 +69,7 @@ function parseTags(reviews: ReviewRow[]): { tag: string; count: number }[] {
       const parsed = JSON.parse(String(review.ai_tags));
       if (!Array.isArray(parsed)) continue;
       for (const raw of parsed) { const tag = String(raw || '').trim(); if (tag) counts.set(tag, (counts.get(tag) || 0) + 1); }
-    } catch { /* campo inválido de IA não quebra o relatório */ }
+    } catch { /* dado inválido de IA não quebra o relatório */ }
   }
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([tag, count]) => ({ tag, count }));
 }
@@ -86,20 +81,33 @@ function sentimentSummary(reviews: ReviewRow[]): { positive: number; neutral: nu
   }
   return { positive, neutral, negative };
 }
+
 async function loadReviews(db: Database, empresaId: string, mesAno: string): Promise<ReviewRow[]> {
-  let rows: any[] = [];
-  try {
-    rows = (await db.all('SELECT * FROM reviews WHERE empresa_id = ? ORDER BY id DESC LIMIT 2000', [empresaId])) as any[];
-  } catch (error: any) {
-    console.warn('[pdf] SELECT * reviews falhou:', error?.message || error);
+  const bounds = monthBounds(mesAno);
+  if (!bounds) throw new Error('Período inválido. Use o formato YYYY-MM.');
+  const [start, end] = bounds;
+  const queries = [
+    ['createdAt', 'SELECT * FROM reviews WHERE empresa_id = ? AND "createdAt" >= ? AND "createdAt" < ? ORDER BY id DESC'],
+    ['created_at', 'SELECT * FROM reviews WHERE empresa_id = ? AND created_at >= ? AND created_at < ? ORDER BY id DESC'],
+    ['createdat', 'SELECT * FROM reviews WHERE empresa_id = ? AND createdat >= ? AND createdat < ? ORDER BY id DESC'],
+  ] as const;
+  let rows: any[] | null = null;
+  for (const [, sql] of queries) {
+    try { rows = await db.all(sql, [empresaId, start, end]) as any[]; break; }
+    catch (error: any) { console.warn('[pdf] consulta mensal indisponível:', error?.message || error); }
+  }
+  if (rows == null) {
     try {
-      rows = (await db.all('SELECT rating, comment, createdAt, createdat, created_at, is_test, ai_tags, sentiment, unidade_id, origin FROM reviews WHERE empresa_id = ? LIMIT 2000', [empresaId])) as any[];
-    } catch (fallbackError: any) { console.warn('[pdf] SELECT fallback reviews falhou:', fallbackError?.message || fallbackError); return []; }
+      rows = await db.all('SELECT * FROM reviews WHERE empresa_id = ? ORDER BY id DESC', [empresaId]) as any[];
+    } catch (error: any) {
+      console.warn('[pdf] consulta de avaliações falhou:', error?.message || error);
+      return [];
+    }
   }
   return (rows || []).filter((row) => !isTest(row as ReviewRow)).filter((row) => isInMonth(row as ReviewRow, mesAno)) as ReviewRow[];
 }
 async function loadUnits(db: Database, empresaId: string): Promise<UnidadeRow[]> {
-  try { return (await db.all('SELECT id, nome, slug FROM unidades WHERE empresa_id = ? AND ativo = 1 ORDER BY nome', [empresaId])) as UnidadeRow[]; }
+  try { return await db.all('SELECT id, nome, slug FROM unidades WHERE empresa_id = ? AND ativo = 1 ORDER BY nome', [empresaId]) as UnidadeRow[]; }
   catch (error: any) { console.warn('[pdf] unidades indisponíveis:', error?.message || error); return []; }
 }
 function unitGroups(reviews: ReviewRow[], units: UnidadeRow[]): { unit: UnidadeRow; reviews: ReviewRow[] }[] {
@@ -108,7 +116,7 @@ function unitGroups(reviews: ReviewRow[], units: UnidadeRow[]): { unit: UnidadeR
   const result: { unit: UnidadeRow; reviews: ReviewRow[] }[] = [];
   for (const [key, list] of grouped) result.push({ unit: byId.get(key) || { id: key, nome: key === '_geral' ? 'Matriz / Geral' : key }, reviews: list });
   for (const unit of units) if (!grouped.has(String(unit.id))) result.push({ unit, reviews: [] });
-  return result.sort((a, b) => media(b.reviews) - media(a.reviews));
+  return result.sort((a, b) => media(b.reviews) - media(a.reviews) || b.reviews.length - a.reviews.length);
 }
 function addPageHeader(doc: PDFKit.PDFDocument, planLabel: string, periodo: string): void {
   doc.rect(0, 0, doc.page.width, 76).fill(COLORS.navy);
@@ -143,20 +151,29 @@ function drawBars(doc: PDFKit.PDFDocument, reviews: ReviewRow[]): void {
   for (let i = 0; i < 5; i += 1) { const value = dist[i]; const barHeight = (value / max) * chartHeight; const x = PAGE.left + gap + i * (barWidth + gap); const barY = top + chartHeight - barHeight; doc.roundedRect(x, barY, barWidth, Math.max(barHeight, 1), 4).fill(COLORS.star[i]); doc.fillColor(COLORS.ink).font('Helvetica-Bold').fontSize(8).text(String(value), x, barY - 12, { width: barWidth, align: 'center' }); doc.fillColor(COLORS.muted).font('Helvetica').fontSize(7.5).text(`${i + 1}★`, x, top + chartHeight + 7, { width: barWidth, align: 'center' }); }
   doc.y = y + height + 14;
 }
-function drawUnitTable(doc: PDFKit.PDFDocument, groups: { unit: UnidadeRow; reviews: ReviewRow[] }[]): void {
-  const width = doc.page.width - PAGE.left - PAGE.right; const rowHeight = 20; const headerHeight = 24; const height = headerHeight + Math.max(groups.length, 1) * rowHeight; const y = doc.y;
-  doc.roundedRect(PAGE.left, y, width, height, 7).fillAndStroke(COLORS.white, COLORS.line); doc.fillColor(COLORS.muted).font('Helvetica-Bold').fontSize(7.5);
+function drawUnitTablePage(doc: PDFKit.PDFDocument, groups: { unit: UnidadeRow; reviews: ReviewRow[] }[], planLabel: string, periodo: string): void {
+  const width = doc.page.width - PAGE.left - PAGE.right; const rowHeight = 20; const headerHeight = 24; const height = headerHeight + Math.max(groups.length, 1) * rowHeight;
+  ensureSpace(doc, height + 20, planLabel, periodo); const y = doc.y;
+  doc.roundedRect(PAGE.left, y, width, height, 7).fillAndStroke(COLORS.white, COLORS.line); doc.rect(PAGE.left, y, width, headerHeight).fill(COLORS.pale); doc.fillColor(COLORS.muted).font('Helvetica-Bold').fontSize(7.5);
   doc.text('UNIDADE', PAGE.left + 12, y + 7, { width: 180 }); doc.text('VOLUME', PAGE.left + 205, y + 7, { width: 55 }); doc.text('MÉDIA', PAGE.left + 270, y + 7, { width: 50 }); doc.text('CRÍTICAS', PAGE.left + 335, y + 7, { width: 55 }); doc.text('POSITIVAS', PAGE.left + 405, y + 7, { width: 60 });
   if (!groups.length) doc.fillColor(COLORS.muted).font('Helvetica').fontSize(8).text('Nenhuma unidade ativa cadastrada.', PAGE.left + 12, y + 34, { width: width - 24 });
-  else groups.forEach((group, index) => { const rowY = y + headerHeight + index * rowHeight; const avg = media(group.reviews); const critical = group.reviews.filter((r) => Number(r.rating) <= 3).length; const positive = group.reviews.filter((r) => Number(r.rating) >= 4).length; doc.fillColor(COLORS.ink).font('Helvetica').fontSize(8); doc.text(String(group.unit.nome || 'Unidade').slice(0, 30), PAGE.left + 12, rowY + 5, { width: 180 }); doc.text(String(group.reviews.length), PAGE.left + 205, rowY + 5, { width: 55 }); doc.text(avg ? avg.toFixed(2) : '—', PAGE.left + 270, rowY + 5, { width: 50 }); doc.text(String(critical), PAGE.left + 335, rowY + 5, { width: 55 }); doc.text(String(positive), PAGE.left + 405, rowY + 5, { width: 60 }); });
+  for (const [index, group] of groups.entries()) { const rowY = y + headerHeight + index * rowHeight; const avg = media(group.reviews); const critical = group.reviews.filter((r) => Number(r.rating) <= 3).length; const positive = group.reviews.filter((r) => Number(r.rating) >= 4).length; doc.fillColor(COLORS.ink).font('Helvetica').fontSize(8); doc.text(String(group.unit.nome || 'Unidade').slice(0, 30), PAGE.left + 12, rowY + 5, { width: 180 }); doc.text(String(group.reviews.length), PAGE.left + 205, rowY + 5, { width: 55 }); doc.text(avg ? avg.toFixed(2) : '—', PAGE.left + 270, rowY + 5, { width: 50 }); doc.text(String(critical), PAGE.left + 335, rowY + 5, { width: 55 }); doc.text(String(positive), PAGE.left + 405, rowY + 5, { width: 60 }); }
   doc.y = y + height + 14;
+}
+function drawUnitTable(doc: PDFKit.PDFDocument, groups: { unit: UnidadeRow; reviews: ReviewRow[] }[], planLabel: string, periodo: string): void {
+  const chunkSize = 18;
+  if (!groups.length) { drawUnitTablePage(doc, [], planLabel, periodo); return; }
+  for (let start = 0; start < groups.length; start += chunkSize) {
+    const chunk = groups.slice(start, start + chunkSize);
+    if (start > 0) { doc.addPage(); addPageHeader(doc, planLabel, periodo); sectionTitle(doc, 'Visão consolidada por unidades', 'Continuação da comparação das unidades ativas'); }
+    drawUnitTablePage(doc, chunk, planLabel, periodo);
+  }
 }
 function drawUnitPage(doc: PDFKit.PDFDocument, empresaNome: string, periodo: string, unit: UnidadeRow, reviews: ReviewRow[], planLabel: string): void {
   doc.addPage(); addPageHeader(doc, planLabel, periodo); doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(16).text(String(unit.nome || 'Unidade')); doc.moveDown(0.2); doc.fillColor(COLORS.muted).font('Helvetica').fontSize(8).text(`${empresaNome} · visão operacional da unidade`); doc.moveDown(0.8);
-  const width = doc.page.width - PAGE.left - PAGE.right; const gap = 10; const kw = (width - gap * 2) / 3; const y = doc.y; const critical = reviews.filter((r) => Number(r.rating) <= 3).length;
+  const width = doc.page.width - PAGE.left - PAGE.right; const gap = 10; const kw = (width - gap * 2) / 3; const y = doc.y; const critical = reviews.filter((r) => Number(r.rating) <= 3).length; const positive = reviews.filter((r) => Number(r.rating) >= 4).length;
   kpi(doc, PAGE.left, y, kw, 'Avaliações', String(reviews.length), 'No período', COLORS.blue); kpi(doc, PAGE.left + kw + gap, y, kw, 'Nota média', media(reviews) ? media(reviews).toFixed(2) : '—', 'Escala 1 a 5', COLORS.blue); kpi(doc, PAGE.left + (kw + gap) * 2, y, kw, 'Críticas', String(critical), 'Notas 1–3', COLORS.red); doc.y = y + 94;
-  sectionTitle(doc, 'Distribuição de notas', 'Volume de avaliações por estrela'); drawBars(doc, reviews); sectionTitle(doc, 'Resumo da unidade'); const positive = reviews.filter((r) => Number(r.rating) >= 4).length;
-  doc.fillColor(COLORS.ink).font('Helvetica').fontSize(9).text(`Positivas: ${positive} (${percent(positive, reviews.length)}) · Críticas: ${critical} (${percent(critical, reviews.length)}) · Média: ${media(reviews) ? media(reviews).toFixed(2) : '—'}`, { width });
+  sectionTitle(doc, 'Distribuição de notas', 'Volume de avaliações por estrela'); drawBars(doc, reviews); sectionTitle(doc, 'Resumo da unidade'); doc.fillColor(COLORS.ink).font('Helvetica').fontSize(9).text(`Positivas: ${positive} (${percent(positive, reviews.length)}) · Críticas: ${critical} (${percent(critical, reviews.length)}) · Média: ${media(reviews) ? media(reviews).toFixed(2) : '—'}`, { width });
 }
 export async function ensureUnidadesSchema(db: Database): Promise<void> {
   try { await db.exec('CREATE TABLE IF NOT EXISTS unidades (id TEXT PRIMARY KEY, empresa_id TEXT NOT NULL, nome TEXT NOT NULL, slug TEXT, ativo INTEGER DEFAULT 1, criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP)'); }
@@ -185,10 +202,7 @@ export async function gerarRelatorioMensalPDF(db: Database, empresaId: string, m
     if (tags.length) { sectionTitle(doc, 'Principais temas', 'Temas encontrados nas análises já processadas'); for (const item of tags) { ensureSpace(doc, 20, planLabel, periodo); doc.fillColor(COLORS.ink).font('Helvetica').fontSize(9).text(`• ${item.tag} — ${item.count} ocorrência${item.count === 1 ? '' : 's'}`, { width: contentWidth }); doc.moveDown(0.2); } }
     else { doc.fillColor(COLORS.muted).font('Helvetica').fontSize(8.5).text('Ainda não há temas de IA persistidos para este período. Nenhuma chamada de IA foi feita durante a geração do PDF.', { width: contentWidth }); doc.moveDown(0.8); }
   }
-  if (unitsEnabled) {
-    ensureSpace(doc, 120, planLabel, periodo); sectionTitle(doc, 'Visão consolidada por unidades', 'Comparativo das unidades ativas no período'); drawUnitTable(doc, groups);
-    for (const group of groups) drawUnitPage(doc, empresaNome, periodo, group.unit, group.reviews, planLabel);
-  }
+  if (unitsEnabled) { ensureSpace(doc, 120, planLabel, periodo); sectionTitle(doc, 'Visão consolidada por unidades', 'Comparativo das unidades ativas no período'); drawUnitTable(doc, groups, planLabel, periodo); for (const group of groups) drawUnitPage(doc, empresaNome, periodo, group.unit, group.reviews, planLabel); }
   ensureSpace(doc, 100, planLabel, periodo); sectionTitle(doc, 'Recomendação', 'Próximo passo baseado nos números do período'); const recommendation = total === 0 ? 'Comece a coleta de avaliações para formar uma linha de base de reputação.' : critical > positive ? 'As críticas superam as avaliações positivas. Priorize os principais pontos de atrito antes de ampliar a divulgação.' : 'A reputação está saudável no período. Continue estimulando avaliações e acompanhe mudanças na média e no volume.';
   doc.roundedRect(PAGE.left, doc.y, contentWidth, 70, 7).fillAndStroke(COLORS.paleBlue, COLORS.line); doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(9).text('Orientação', PAGE.left + 12, doc.y + 12); doc.fillColor(COLORS.ink).font('Helvetica').fontSize(9).text(recommendation, PAGE.left + 12, doc.y + 29, { width: contentWidth - 24, lineGap: 2 });
   await new Promise<void>((resolve, reject) => { doc.on('error', reject); doc.on('end', resolve); const range = doc.bufferedPageRange(); for (let index = range.start; index < range.start + range.count; index += 1) { doc.switchToPage(index); footer(doc, empresaNome, index - range.start + 1, range.count); } doc.end(); });
