@@ -1,49 +1,33 @@
 # Relatórios PDF por plano
 
-## O que mudou
+Geração em `relatorioPdf.ts`. Cache no endpoint evita gastar tokens de IA em re-download.
 
-Os PDFs deixam de ser só caixas de KPI e passam a ter **gráficos nativos (PDFKit)** e, nos planos multi-unidade, **quebra de página por filial**.
+## Níveis
 
-| Plano | Gráficos | Filiais |
+| Plano | Conteúdo |
+|-------|----------|
+| **Inicial** | Sem PDF mensal |
+| **Pro** | Capa Filtra.AI · KPIs (volume, média, críticas, positivas) · barras 1★–5★ · positivas vs críticas |
+| **Ultra** (+ Trial) | Tudo do Pro · sentimento (pos/neu/neg) · temas detectados pela IA |
+| **Corporativo** | Tudo do Ultra · ranking de unidades · **1 página por filial** (KPIs + barras) |
+| **Rei** | Tudo do Corp · **donut** positivas/críticas · barras de gargalos · donut + temas **por filial** |
 
-| **Pro / Ultra** | Barras de distribuição 1★–5★ + bloco IA simples | Não |
-| **Corporativo** | Distribuição + **ranking de unidades** + **1 página por filial** (KPIs + barras) | Sim |
-| **Rei** | Tudo do Corporativo + **donut** positivas/críticas + **barras horizontais de gargalos** + donut também em cada filial | Sim |
+## Visual
 
-## Arquivos
+- Cabeçalho navy + faixa índigo
+- Cards de KPI com acento lateral
+- Gráficos nativos (PDFKit)
+- Rodapé com data de emissão e numeração de páginas
 
-- `backend/relatorioPdf.ts` — geração completa
-- `ensureUnidadesSchema(db)` — cria tabela `unidades` e colunas `reviews.unidade_id` / `reviews.origin`
-
-## Como ligar no server.ts
-
-```ts
-import { gerarRelatorioMensalPDF, ensureUnidadesSchema } from './relatorioPdf.js';
-
-// dentro de initDB(), após criar tabelas:
-await ensureUnidadesSchema(db);
-
-// substituir a função antiga gerarRelatorioMensalPDF por:
-// (ou no endpoint /api/relatorio/mensal)
-const pdf = await gerarRelatorioMensalPDF(db, empresaId, mesAno, callGroq);
-res.type('application/pdf').send(pdf);
-```
-
-Remova a implementação antiga inline em `server.ts` para evitar conflito de nomes.
-
-## Cadastro de filiais (Corporativo / Rei)
+## Filiais (Corp / Rei)
 
 ```sql
 INSERT INTO unidades (id, empresa_id, nome, slug, ativo)
-VALUES ('uuid-aqui', 'empresa_id', 'Filial Centro', 'filial-centro', 1);
+VALUES ('uuid', 'empresa_id', 'Filial Centro', 'filial-centro', 1);
 ```
 
-Nas avaliações, grave `unidade_id` (ou `origin` como fallback de canal/unidade).
-
-Se não houver filiais cadastradas, o relatório Corporativo/Rei ainda gera a página **Matriz / Geral** com os dados agregados e o ranking com uma linha.
+Nas reviews: `unidade_id` ou `origin` = slug. Sem filiais cadastradas, usa página **Matriz / Geral**.
 
 ## Elegibilidade
 
-`pro`, `ultra`, `corporativo`, `rei`.
-
-(Inicial e teste continuam sem PDF mensal.)
+`planTemPdf` / `empresaTemPdf` em `lib/plans.ts`: pro, ultra, corporativo, rei e trial.
