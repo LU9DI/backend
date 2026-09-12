@@ -4,13 +4,9 @@
  * Env:
  *   VAPID_PUBLIC_KEY=
  *   VAPID_PRIVATE_KEY=
- *   VAPID_SUBJECT=mailto:admin@seusaas.com
+ *   VAPID_SUBJECT=mailto:admin@filtraai.com
  *
- * Gerar chaves: npx web-push generate-vapid-keys
- *
- * Celular:
- * - Android Chrome: permitir notificações no painel (logado).
- * - iPhone: precisa **Adicionar à Tela de Início** (PWA); Safari sozinho não recebe push.
+ * Gerar: npx web-push generate-vapid-keys
  */
 import webpush from 'web-push';
 import type { Database } from 'sqlite';
@@ -24,26 +20,33 @@ const APP_URL = (
   'https://filtraai.com'
 ).replace(/\/$/, '');
 
+function cleanKey(v?: string | null): string {
+  return String(v || '')
+    .trim()
+    .replace(/^['"]|['"]$/g, '')
+    .replace(/\s+/g, '');
+}
+
 export function pushConfigured(): boolean {
-  return Boolean(
-    process.env.VAPID_PUBLIC_KEY?.trim() && process.env.VAPID_PRIVATE_KEY?.trim()
-  );
+  return Boolean(cleanKey(process.env.VAPID_PUBLIC_KEY) && cleanKey(process.env.VAPID_PRIVATE_KEY));
 }
 
 export function initWebPush() {
   if (!pushConfigured()) return false;
   if (configured) return true;
-  webpush.setVapidDetails(
-    process.env.VAPID_SUBJECT || 'mailto:admin@filtraai.com',
-    process.env.VAPID_PUBLIC_KEY!.trim(),
-    process.env.VAPID_PRIVATE_KEY!.trim()
-  );
+  const pub = cleanKey(process.env.VAPID_PUBLIC_KEY);
+  const priv = cleanKey(process.env.VAPID_PRIVATE_KEY);
+  const subject =
+    (process.env.VAPID_SUBJECT || 'mailto:admin@filtraai.com').trim() ||
+    'mailto:admin@filtraai.com';
+  webpush.setVapidDetails(subject, pub, priv);
   configured = true;
   return true;
 }
 
 export function getVapidPublicKey(): string | null {
-  return process.env.VAPID_PUBLIC_KEY?.trim() || null;
+  const k = cleanKey(process.env.VAPID_PUBLIC_KEY);
+  return k || null;
 }
 
 export async function ensurePushSchema(db: Database) {
@@ -185,7 +188,7 @@ export async function sendPushToEmpresa(
   const list = rows || [];
   if (list.length === 0) {
     console.warn(
-      `[push] nenhuma subscription para empresa=${empresaId} — usuário precisa permitir notificações logado no painel (celular: PWA no iOS)`
+      `[push] nenhuma subscription para empresa=${empresaId} — usuário precisa permitir notificações logado no painel`
     );
   }
   let sent = 0,
@@ -211,7 +214,7 @@ export async function notifyCrisisReview(
   }
   const ref = opts.slugOrId || opts.empresaId;
   const result = await sendPushToEmpresa(db, opts.empresaId, {
-    title: 'Filtra.AI — crítica privada',
+    title: 'Filtra.IA — crítica privada',
     body: `Nova avaliação ${opts.rating}★${opts.name ? ` de ${opts.name}` : ''}. Abra o painel.`,
     url: `/painel/${ref}`,
     tag: `crise-${opts.empresaId}`,
