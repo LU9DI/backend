@@ -1,11 +1,13 @@
 /**
- * Relatório mensal PDF — profundidade e visual conforme o plano.
+ * Relatório mensal PDF — visual profissional e profundidade por plano.
  *
- * Pro:      capa + KPIs + barras 1★–5★ + positivas/críticas
- * Ultra:    + temas IA + sentimento + insights
- * Corp:     + ranking de filiais + 1 página por filial
- * Rei:      + donut + gargalos + página rica por filial
- * Trial:    trata como Ultra (tudo incluso no teste)
+ * Pro:   capa + 4 KPIs + barras 1–5★ + positivas/críticas
+ * Ultra: + sentimento + temas IA
+ * Corp:  + ranking unidades + página por filial
+ * Rei:   + donut + gargalos + página rica por filial
+ * Trial: = Ultra
+ *
+ * Cache version: v2 (invalida PDFs antigos via plan key no route).
  */
 import type { Database } from 'sqlite';
 import PDFDocument from 'pdfkit';
@@ -25,26 +27,27 @@ type ReviewRow = {
 };
 
 type Unidade = { id: string; nome: string; slug?: string | null };
+export type PdfDepth = 'pro' | 'ultra' | 'corp' | 'rei';
 
-type Depth = 'pro' | 'ultra' | 'corp' | 'rei';
+/** Versão do layout — subir para forçar regeneração no cache. */
+export const PDF_LAYOUT_VERSION = 'v2';
 
 const C = {
   navy: '#0f172a',
   indigo: '#4f46e5',
-  indigoSoft: '#818cf8',
+  indigoLt: '#818cf8',
   ink: '#1e293b',
   muted: '#64748b',
   line: '#e2e8f0',
-  pale: '#f8fafc',
-  card: '#ffffff',
+  pale: '#f1f5f9',
+  white: '#ffffff',
   red: '#dc2626',
   green: '#16a34a',
   amber: '#d97706',
-  white: '#ffffff',
-  star: ['#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e'],
+  star: ['#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e'] as string[],
 };
 
-const PAGE = { left: 44, right: 44, bottom: 52 };
+const M = { left: 48, right: 48, bottom: 48 };
 
 export async function ensureUnidadesSchema(db: Database): Promise<void> {
   try {
@@ -59,24 +62,24 @@ export async function ensureUnidadesSchema(db: Database): Promise<void> {
       )
     `);
   } catch (e: any) {
-    console.warn('[pdf] ensure unidades:', e?.message || e);
+    console.warn('[pdf] unidades:', e?.message || e);
   }
-  for (const ddl of ['unidade_id TEXT', 'origin TEXT']) {
+  for (const col of ['unidade_id TEXT', 'origin TEXT']) {
     try {
-      await db.exec(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS ${ddl}`);
+      await db.exec(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS ${col}`);
     } catch {
       try {
-        await db.exec(`ALTER TABLE reviews ADD COLUMN ${ddl}`);
+        await db.exec(`ALTER TABLE reviews ADD COLUMN ${col}`);
       } catch {
-        /* ok */
+        /* ignore */
       }
     }
   }
 }
 
-function depthForPlan(plan: string, trial: boolean): Depth {
+export function depthForPlan(plan: string, trial: boolean): PdfDepth {
   if (trial) return 'ultra';
-  const p = plan.toLowerCase();
+  const p = String(plan || '').toLowerCase();
   if (p === 'rei') return 'rei';
   if (p === 'corporativo') return 'corp';
   if (p === 'ultra') return 'ultra';
@@ -102,11 +105,11 @@ function distNotas(reviews: ReviewRow[]): number[] {
 
 function media(reviews: ReviewRow[]): number {
   if (!reviews.length) return 0;
-  return reviews.reduce((sum, r) => sum + Number(r.rating || 0), 0) / reviews.length;
+  return reviews.reduce((s, r) => s + Number(r.rating || 0), 0) / reviews.length;
 }
 
-function percent(value: number, total: number): string {
-  return total ? `${Math.round((value / total) * 100)}%` : '0%';
+function pct(v: number, t: number): string {
+  return t ? `${Math.round((v / t) * 100)}%` : '0%';
 }
 
 function parseTags(reviews: ReviewRow[]): { tag: string; count: number }[] {
@@ -115,11 +118,10 @@ function parseTags(reviews: ReviewRow[]): { tag: string; count: number }[] {
     if (!r.ai_tags) continue;
     try {
       const parsed = JSON.parse(String(r.ai_tags));
-      if (Array.isArray(parsed)) {
-        for (const tag of parsed) {
-          const key = String(tag).trim().slice(0, 48);
-          if (key) counts[key] = (counts[key] || 0) + 1;
-        }
+      if (!Array.isArray(parsed)) continue;
+      for (const tag of parsed) {
+        const key = String(tag).trim().slice(0, 40);
+        if (key) counts[key] = (counts[key] || 0) + 1;
       }
     } catch {
       /* ignore */
@@ -127,24 +129,24 @@ function parseTags(reviews: ReviewRow[]): { tag: string; count: number }[] {
   }
   return Object.entries(counts)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
+    .slice(0, 8)
     .map(([tag, count]) => ({ tag, count }));
 }
 
-function sentimentBreak(reviews: ReviewRow[]): { pos: number; neu: number; neg: number } {
-  let pos = 0;
-  let neu = 0;
-  let neg = 0;
+function sentimentOf(reviews: ReviewRow[]) {
+  let pos = 0,
+    neu = 0,
+    neg = 0;
   for (const r of reviews) {
     const s = String(r.sentiment || '').toLowerCase();
-    if (s.includes('pos') || s === 'positive') pos += 1;
-    else if (s.includes('neg') || s === 'negative') neg += 1;
-    else if (s) neu += 1;
+    if (s.includes('pos')) pos++;
+    else if (s.includes('neg')) neg++;
+    else if (s) neu++;
     else {
       const n = Number(r.rating);
-      if (n >= 4) pos += 1;
-      else if (n <= 2) neg += 1;
-      else neu += 1;
+      if (n >= 4) pos++;
+      else if (n <= 2) neg++;
+      else neu++;
     }
   }
   return { pos, neu, neg };
@@ -157,11 +159,10 @@ async function loadReviews(db: Database, empresaId: string, mesAno: string): Pro
       `SELECT * FROM reviews WHERE empresa_id = ? ORDER BY id DESC LIMIT 3000`,
       [empresaId]
     )) as any[];
-  } catch (e: any) {
-    console.warn('[pdf] SELECT reviews:', e?.message || e);
+  } catch {
     try {
       rows = (await db.all(
-        `SELECT rating, comment, is_test, ai_tags, sentiment, unidade_id, origin FROM reviews WHERE empresa_id = ? LIMIT 3000`,
+        `SELECT rating, comment, is_test, ai_tags, sentiment, unidade_id, origin, created_at FROM reviews WHERE empresa_id = ? LIMIT 3000`,
         [empresaId]
       )) as any[];
     } catch {
@@ -169,224 +170,256 @@ async function loadReviews(db: Database, empresaId: string, mesAno: string): Pro
     }
   }
   return (rows || [])
-    .filter((r) => !isTest(r as ReviewRow))
+    .filter((r) => !isTest(r))
     .filter((r) => {
-      const d = rowDate(r as ReviewRow);
-      if (!d) return true;
-      return d.startsWith(mesAno);
+      const d = rowDate(r);
+      return !d || d.startsWith(mesAno);
     }) as ReviewRow[];
 }
 
 async function loadUnidades(db: Database, empresaId: string): Promise<Unidade[]> {
   try {
     const rows = (await db.all(
-      `SELECT id, nome, slug FROM unidades WHERE empresa_id = ? AND (ativo IS NULL OR ativo = 1 OR ativo = true) ORDER BY nome ASC`,
+      `SELECT id, nome, slug FROM unidades WHERE empresa_id = ? ORDER BY nome ASC`,
       [empresaId]
     )) as any[];
     return (rows || []).map((u) => ({
       id: String(u.id),
       nome: String(u.nome || 'Filial'),
-      slug: u.slug,
+      slug: u.slug ? String(u.slug) : null,
     }));
   } catch {
     return [];
   }
 }
 
-function drawHeader(
+function contentWidth(doc: PDFKit.PDFDocument) {
+  return doc.page.width - M.left - M.right;
+}
+
+function header(
   doc: PDFKit.PDFDocument,
-  opts: { planLabel: string; periodo: string; depth: Depth }
+  plan: string,
+  periodo: string,
+  depth: PdfDepth
 ) {
   const w = doc.page.width;
-  doc.rect(0, 0, w, 72).fill(C.navy);
-  doc.rect(0, 72, w, 3).fill(C.indigo);
-
-  doc.fillColor(C.white).font('Helvetica-Bold').fontSize(16).text('Filtra.AI', PAGE.left, 18);
+  doc.rect(0, 0, w, 68).fill(C.navy);
+  doc.rect(0, 68, w, 3).fill(C.indigo);
+  doc.fillColor(C.white).font('Helvetica-Bold').fontSize(15).text('Filtra.AI', M.left, 18, {
+    lineBreak: false,
+  });
   doc
-    .fillColor(C.indigoSoft)
+    .fillColor(C.indigoLt)
     .font('Helvetica')
     .fontSize(8)
-    .text('Relatório mensal de reputação', PAGE.left, 40);
-
+    .text('Relatório mensal de reputação', M.left, 40, { lineBreak: false });
   doc
     .fillColor(C.white)
     .font('Helvetica-Bold')
     .fontSize(9)
-    .text(opts.planLabel.toUpperCase(), w - 140, 18, { width: 96, align: 'right' });
+    .text(plan.toUpperCase(), w - 150, 16, { width: 102, align: 'right', lineBreak: false });
   doc
     .fillColor('#94a3b8')
     .font('Helvetica')
     .fontSize(8)
-    .text(opts.periodo, w - 140, 34, { width: 96, align: 'right' });
+    .text(periodo, w - 150, 32, { width: 102, align: 'right', lineBreak: false });
+  const badge =
+    depth === 'rei'
+      ? 'Completo · Rei'
+      : depth === 'corp'
+        ? 'Multi-unidade'
+        : depth === 'ultra'
+          ? 'Com IA'
+          : 'Essencial';
   doc
     .fillColor('#64748b')
     .font('Helvetica')
     .fontSize(7)
-    .text(depthBadge(opts.depth), w - 140, 48, { width: 96, align: 'right' });
+    .text(badge, w - 150, 46, { width: 102, align: 'right', lineBreak: false });
+  doc.x = M.left;
+  doc.y = 88;
 }
 
-function depthBadge(d: Depth): string {
-  if (d === 'rei') return 'Nível Rei · completo';
-  if (d === 'corp') return 'Nível Corporativo';
-  if (d === 'ultra') return 'Nível Ultra';
-  return 'Nível Pro';
-}
-
-function drawFooter(doc: PDFKit.PDFDocument, emissao: string, pageNo?: number, totalPages?: number) {
-  const y = doc.page.height - 36;
+function footer(doc: PDFKit.PDFDocument, emissao: string, page: number, total: number) {
+  const y = doc.page.height - 32;
   doc
     .strokeColor(C.line)
-    .lineWidth(0.5)
-    .moveTo(PAGE.left, y - 8)
-    .lineTo(doc.page.width - PAGE.right, y - 8)
+    .lineWidth(0.6)
+    .moveTo(M.left, y - 6)
+    .lineTo(doc.page.width - M.right, y - 6)
     .stroke();
-  const left = `Filtra.AI · Emitido em ${emissao}`;
-  const right =
-    pageNo && totalPages ? `Página ${pageNo} de ${totalPages}` : 'Dados do painel · sem projeção futura';
-  doc.fillColor(C.muted).font('Helvetica').fontSize(7).text(left, PAGE.left, y, {
-    width: 280,
-  });
   doc
     .fillColor(C.muted)
     .font('Helvetica')
     .fontSize(7)
-    .text(right, doc.page.width - PAGE.right - 180, y, { width: 180, align: 'right' });
+    .text(`Filtra.AI · ${emissao}`, M.left, y, { lineBreak: false });
+  doc
+    .fillColor(C.muted)
+    .font('Helvetica')
+    .fontSize(7)
+    .text(`Página ${page} de ${total}`, doc.page.width - M.right - 100, y, {
+      width: 100,
+      align: 'right',
+      lineBreak: false,
+    });
 }
 
-function sectionTitle(doc: PDFKit.PDFDocument, title: string) {
-  doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(12).text(title, PAGE.left);
+function title(doc: PDFKit.PDFDocument, text: string) {
+  doc.x = M.left;
+  doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(11).text(text, M.left, doc.y, {
+    width: contentWidth(doc),
+  });
   doc.moveDown(0.35);
 }
 
-function drawKpis(
+function kpis(
   doc: PDFKit.PDFDocument,
-  items: { title: string; value: string; desc: string; accent?: string }[]
+  items: { label: string; value: string; sub: string; color?: string }[]
 ) {
-  const width = doc.page.width - PAGE.left - PAGE.right;
-  const gap = 10;
+  const w = contentWidth(doc);
+  const gap = 8;
   const n = items.length;
-  const kw = (width - gap * (n - 1)) / n;
+  const boxW = (w - gap * (n - 1)) / n;
   const y = doc.y;
   items.forEach((it, i) => {
-    const x = PAGE.left + i * (kw + gap);
-    doc.roundedRect(x, y, kw, 78, 8).fillAndStroke(C.pale, C.line);
-    doc.roundedRect(x, y, 4, 78, 2).fill(it.accent || C.indigo);
+    const x = M.left + i * (boxW + gap);
+    doc.roundedRect(x, y, boxW, 70, 6).fillAndStroke(C.pale, C.line);
+    doc.rect(x, y, 3.5, 70).fill(it.color || C.indigo);
     doc
       .fillColor(C.indigo)
       .font('Helvetica-Bold')
-      .fontSize(7)
-      .text(it.title.toUpperCase(), x + 12, y + 12, { width: kw - 20 });
+      .fontSize(6.5)
+      .text(it.label.toUpperCase(), x + 10, y + 10, { width: boxW - 16, lineBreak: false });
     doc
       .fillColor(C.navy)
       .font('Helvetica-Bold')
-      .fontSize(20)
-      .text(it.value, x + 12, y + 28, { width: kw - 20 });
+      .fontSize(18)
+      .text(it.value, x + 10, y + 26, { width: boxW - 16, lineBreak: false });
     doc
       .fillColor(C.muted)
       .font('Helvetica')
-      .fontSize(7.5)
-      .text(it.desc, x + 12, y + 54, { width: kw - 20 });
+      .fontSize(7)
+      .text(it.sub, x + 10, y + 50, { width: boxW - 16, lineBreak: false });
   });
-  doc.y = y + 94;
+  doc.x = M.left;
+  doc.y = y + 84;
 }
 
-function drawStarBars(doc: PDFKit.PDFDocument, dist: number[]) {
-  const width = doc.page.width - PAGE.left - PAGE.right;
-  const chartY = doc.y;
-  const chartH = 158;
-  doc.roundedRect(PAGE.left, chartY, width, chartH, 8).fillAndStroke(C.card, C.line);
+function starChart(doc: PDFKit.PDFDocument, dist: number[]) {
+  const w = contentWidth(doc);
+  const y0 = doc.y;
+  const hBox = 148;
+  doc.roundedRect(M.left, y0, w, hBox, 6).fillAndStroke(C.white, C.line);
   const maxV = Math.max(...dist, 1);
-  const barGap = 14;
-  const barW = (width - barGap * 6) / 5;
-  const top = chartY + 30;
-  const h = chartH - 54;
+  const gap = 12;
+  const barW = (w - gap * 6) / 5;
+  const top = y0 + 26;
+  const usable = hBox - 52;
   dist.forEach((v, i) => {
-    const barH = (v / maxV) * h;
-    const bx = PAGE.left + barGap + i * (barW + barGap);
-    const by = top + h - barH;
-    doc.roundedRect(bx, by, barW, Math.max(barH, 2), 4).fill(C.star[i]);
+    const bh = (v / maxV) * usable;
+    const x = M.left + gap + i * (barW + gap);
+    const y = top + usable - bh;
+    doc.roundedRect(x, y, barW, Math.max(bh, 2), 3).fill(C.star[i]);
     doc
       .fillColor(C.ink)
       .font('Helvetica-Bold')
       .fontSize(9)
-      .text(String(v), bx, by - 14, { width: barW, align: 'center' });
+      .text(String(v), x, y - 13, { width: barW, align: 'center', lineBreak: false });
     doc
       .fillColor(C.muted)
       .font('Helvetica')
       .fontSize(8)
-      .text(`${i + 1} ★`, bx, top + h + 8, { width: barW, align: 'center' });
+      .text(`${i + 1}★`, x, top + usable + 6, { width: barW, align: 'center', lineBreak: false });
   });
-  doc.y = chartY + chartH + 14;
+  doc.x = M.left;
+  doc.y = y0 + hBox + 12;
 }
 
-/** Donut simplificado (Rei) — anel com arcos por fatia. */
-function drawDonut(
+function hBars(doc: PDFKit.PDFDocument, rows: { label: string; value: number }[]) {
+  if (!rows.length) return;
+  const maxV = Math.max(...rows.map((r) => r.value), 1);
+  const barMax = contentWidth(doc) - 170;
+  const y0 = doc.y;
+  rows.forEach((row, i) => {
+    const y = y0 + i * 20;
+    doc
+      .fillColor(C.ink)
+      .font('Helvetica')
+      .fontSize(8)
+      .text(row.label.slice(0, 28), M.left, y, { width: 130, lineBreak: false });
+    const bw = Math.max(2, (row.value / maxV) * barMax);
+    doc.roundedRect(M.left + 140, y + 1, bw, 11, 2).fill(C.indigo);
+    doc
+      .fillColor(C.muted)
+      .font('Helvetica')
+      .fontSize(8)
+      .text(String(row.value), M.left + 140 + bw + 6, y + 1, { lineBreak: false });
+  });
+  doc.x = M.left;
+  doc.y = y0 + rows.length * 20 + 10;
+}
+
+/** Donut simples e estável (fatias via path). */
+function donut(
   doc: PDFKit.PDFDocument,
   cx: number,
   cy: number,
   r: number,
-  slices: { value: number; color: string; label: string }[]
+  a: number,
+  b: number
 ) {
-  const total = slices.reduce((s, x) => s + x.value, 0) || 1;
-  let angle = -Math.PI / 2;
-  for (const sl of slices) {
-    const sweep = (sl.value / total) * Math.PI * 2;
-    const steps = Math.max(8, Math.ceil(Math.abs(sweep) * 24));
+  const total = Math.max(1, a + b);
+  const sweepA = (a / total) * Math.PI * 2;
+  const drawSlice = (start: number, sweep: number, color: string) => {
+    if (sweep <= 0.001) return;
+    const steps = Math.max(12, Math.ceil(sweep * 20));
     doc.save();
     doc.moveTo(cx, cy);
     for (let i = 0; i <= steps; i++) {
-      const a = angle + (sweep * i) / steps;
-      doc.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+      const ang = start + (sweep * i) / steps;
+      doc.lineTo(cx + Math.cos(ang) * r, cy + Math.sin(ang) * r);
     }
     doc.closePath();
-    doc.fill(sl.color);
+    doc.fill(color);
     doc.restore();
-    angle += sweep;
-  }
-  // furo central
-  doc.circle(cx, cy, r * 0.55).fill(C.white);
+  };
+  const start = -Math.PI / 2;
+  drawSlice(start, sweepA, C.green);
+  drawSlice(start + sweepA, Math.PI * 2 - sweepA, C.red);
+  doc.circle(cx, cy, r * 0.58).fill(C.white);
   doc
     .fillColor(C.navy)
     .font('Helvetica-Bold')
-    .fontSize(11)
-    .text(String(total), cx - 20, cy - 8, { width: 40, align: 'center' });
+    .fontSize(12)
+    .text(String(a + b), cx - 18, cy - 8, { width: 36, align: 'center', lineBreak: false });
   doc
     .fillColor(C.muted)
     .font('Helvetica')
     .fontSize(7)
-    .text('total', cx - 20, cy + 6, { width: 40, align: 'center' });
+    .text('total', cx - 18, cy + 6, { width: 36, align: 'center', lineBreak: false });
 }
 
-function drawHBars(
-  doc: PDFKit.PDFDocument,
-  rows: { label: string; value: number }[],
-  maxW: number
-) {
-  const maxV = Math.max(...rows.map((r) => r.value), 1);
-  const y0 = doc.y;
-  rows.forEach((row, i) => {
-    const y = y0 + i * 22;
-    doc.fillColor(C.ink).font('Helvetica').fontSize(8).text(row.label, PAGE.left, y, { width: 140 });
-    const bw = (row.value / maxV) * maxW;
-    doc.roundedRect(PAGE.left + 150, y, Math.max(bw, 2), 12, 3).fill(C.indigo);
-    doc
-      .fillColor(C.muted)
-      .font('Helvetica')
-      .fontSize(8)
-      .text(String(row.value), PAGE.left + 150 + bw + 6, y + 1);
-  });
-  doc.y = y0 + rows.length * 22 + 8;
+function benefits(depth: PdfDepth): string {
+  if (depth === 'rei') {
+    return 'Plano Rei: KPIs, distribuição, sentimento, temas IA, donut, gargalos, ranking e página por filial.';
+  }
+  if (depth === 'corp') {
+    return 'Plano Corporativo: KPIs, distribuição, temas IA, ranking de unidades e demonstrativo por filial.';
+  }
+  if (depth === 'ultra') {
+    return 'Plano Ultra: KPIs, distribuição de notas, sentimento e temas detectados pela IA.';
+  }
+  return 'Plano Pro: KPIs do período, distribuição 1★–5★ e comparativo positivas vs críticas.';
 }
 
-function benefitsLine(depth: Depth): string {
-  if (depth === 'rei')
-    return 'Inclui: KPIs · distribuição · sentimento · temas IA · donut · gargalos · ranking e páginas por filial.';
-  if (depth === 'corp')
-    return 'Inclui: KPIs · distribuição · temas IA · ranking de unidades · página demonstrativa por filial.';
-  if (depth === 'ultra')
-    return 'Inclui: KPIs · distribuição de notas · sentimento · temas detectados pela IA.';
-  return 'Inclui: KPIs do período · distribuição 1★–5★ · positivas vs críticas.';
+function ensureSpace(doc: PDFKit.PDFDocument, need: number, ctx: HeaderCtx) {
+  if (doc.y + need < doc.page.height - M.bottom) return;
+  doc.addPage();
+  header(doc, ctx.plan, ctx.periodo, ctx.depth);
 }
+
+type HeaderCtx = { plan: string; periodo: string; depth: PdfDepth };
 
 export async function gerarRelatorioMensalPDF(
   db: Database,
@@ -396,34 +429,30 @@ export async function gerarRelatorioMensalPDF(
 ): Promise<Buffer> {
   try {
     await ensureUnidadesSchema(db);
-  } catch (e: any) {
-    console.warn('[pdf] ensureUnidadesSchema:', e?.message || e);
+  } catch {
+    /* ok */
   }
 
   const empresa = await db.get('SELECT * FROM empresas WHERE id = ?', [empresaId]);
   if (!empresa) throw new Error('Empresa não encontrada.');
+  if (!empresaTemPdf(empresa)) throw new Error('Plano não elegível para relatório mensal.');
 
-  const plan = String(empresa.plan || empresa.status || 'trial').toLowerCase();
-  if (!empresaTemPdf(empresa)) {
-    throw new Error('Plano não elegível para relatório mensal.');
-  }
-
+  const planRaw = String(empresa.plan || empresa.status || 'trial').toLowerCase();
+  const trial = isTrialPlan(planRaw) || isTrialPlan(String(empresa.status || ''));
+  const depth = depthForPlan(planRaw, trial);
   const reviews = await loadReviews(db, empresaId, mesAno).catch(() => [] as ReviewRow[]);
-  const trial = isTrialPlan(plan) || isTrialPlan(String(empresa.status || ''));
-  const depth = depthForPlan(plan, trial);
-  const unidades =
-    depth === 'corp' || depth === 'rei' ? await loadUnidades(db, empresaId) : [];
+  const unidades = depth === 'corp' || depth === 'rei' ? await loadUnidades(db, empresaId) : [];
 
   const dist = distNotas(reviews);
   const total = reviews.length;
   const avg = media(reviews);
   const positive = reviews.filter((r) => Number(r.rating) >= 4).length;
   const critical = reviews.filter((r) => Number(r.rating) <= 3).length;
-  const tags = depth !== 'pro' ? parseTags(reviews) : [];
-  const sent = depth === 'ultra' || depth === 'corp' || depth === 'rei' ? sentimentBreak(reviews) : null;
+  const tags = depth === 'pro' ? [] : parseTags(reviews);
+  const sent = depth === 'pro' ? null : sentimentOf(reviews);
 
   const [ano, mes] = mesAno.split('-');
-  const nomesMeses = [
+  const nomes = [
     'Janeiro',
     'Fevereiro',
     'Março',
@@ -439,134 +468,133 @@ export async function gerarRelatorioMensalPDF(
   ];
   const periodo =
     ano && Number(mes) >= 1 && Number(mes) <= 12
-      ? `${nomesMeses[Number(mes) - 1]} / ${ano}`
+      ? `${nomes[Number(mes) - 1]} / ${ano}`
       : mesAno;
   const emissao = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'long' }).format(new Date());
-  const pLabel = trial ? 'Trial' : planLabel(plan);
+  const pLabel = trial ? 'Trial' : planLabel(planRaw);
   const nomeEmpresa = String(empresa.nome_empresa || 'Empresa');
+  const ctx: HeaderCtx = { plan: pLabel, periodo, depth };
 
   const doc = new PDFDocument({
     size: 'A4',
-    margin: PAGE.left,
+    margin: M.left,
     bufferPages: true,
+    autoFirstPage: true,
     info: {
       Title: `${nomeEmpresa} — Relatório ${mesAno}`,
       Author: 'Filtra.AI',
-      Subject: `Reputação · ${pLabel}`,
+      Subject: `Reputação · ${pLabel} · ${PDF_LAYOUT_VERSION}`,
     },
   });
+
   const chunks: Buffer[] = [];
   doc.on('data', (c: Buffer) => chunks.push(c));
 
-  // ——— Página 1: resumo ———
-  drawHeader(doc, { planLabel: pLabel, periodo, depth });
-  doc.y = 92;
+  // —— Página principal ——
+  header(doc, pLabel, periodo, depth);
 
-  doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(20).text(nomeEmpresa, PAGE.left);
+  doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(18).text(nomeEmpresa, M.left, doc.y, {
+    width: contentWidth(doc),
+  });
+  doc.moveDown(0.15);
   doc
-    .moveDown(0.2)
     .fillColor(C.muted)
     .font('Helvetica')
     .fontSize(9)
-    .text(`Período: ${periodo}  ·  Plano ${pLabel}`);
-  doc.moveDown(0.25);
-  doc.fillColor(C.indigoSoft).font('Helvetica').fontSize(8).text(benefitsLine(depth), {
-    width: doc.page.width - PAGE.left - PAGE.right,
-  });
-  doc.moveDown(0.7);
+    .text(`Período: ${periodo}   ·   Plano ${pLabel}`, { width: contentWidth(doc) });
+  doc.moveDown(0.2);
+  doc
+    .fillColor(C.indigoLt)
+    .font('Helvetica')
+    .fontSize(8)
+    .text(benefits(depth), { width: contentWidth(doc) });
+  doc.moveDown(0.65);
 
-  sectionTitle(doc, 'Resumo do período');
-  drawKpis(doc, [
-    { title: 'Volume', value: String(total), desc: 'Avaliações válidas' },
-    { title: 'Nota média', value: avg ? avg.toFixed(1) : '—', desc: 'Escala 1 a 5' },
+  title(doc, 'Resumo do período');
+  kpis(doc, [
+    { label: 'Volume', value: String(total), sub: 'Avaliações válidas' },
+    { label: 'Nota média', value: avg ? avg.toFixed(1) : '—', sub: 'Escala 1 a 5' },
+    { label: 'Críticas', value: String(critical), sub: 'Notas 1–3', color: C.red },
     {
-      title: 'Críticas',
-      value: String(critical),
-      desc: 'Notas 1–3',
-      accent: C.red,
-    },
-    {
-      title: 'Positivas',
+      label: 'Positivas',
       value: String(positive),
-      desc: percent(positive, total),
-      accent: C.green,
+      sub: pct(positive, total),
+      color: C.green,
     },
   ]);
 
-  sectionTitle(doc, 'Distribuição de notas');
-  drawStarBars(doc, dist);
+  title(doc, 'Distribuição de notas');
+  starChart(doc, dist);
 
   doc
     .fillColor(C.ink)
     .font('Helvetica')
     .fontSize(9)
     .text(
-      `Positivas (4–5★): ${positive} (${percent(positive, total)})    ·    Críticas (1–3★): ${critical} (${percent(critical, total)})`,
-      { width: doc.page.width - PAGE.left - PAGE.right }
+      `Positivas (4–5★): ${positive} (${pct(positive, total)})     ·     Críticas (1–3★): ${critical} (${pct(critical, total)})`,
+      { width: contentWidth(doc) }
     );
-  doc.moveDown(0.6);
+  doc.moveDown(0.55);
 
-  // Ultra+: sentimento
   if (sent) {
-    sectionTitle(doc, 'Sentimento (IA + nota)');
-    const w = doc.page.width - PAGE.left - PAGE.right;
-    const boxW = (w - 20) / 3;
+    ensureSpace(doc, 90, ctx);
+    title(doc, 'Sentimento');
+    const w = contentWidth(doc);
+    const bw = (w - 16) / 3;
     const y = doc.y;
     const boxes = [
-      { t: 'Positivo', v: sent.pos, c: C.green },
-      { t: 'Neutro', v: sent.neu, c: C.amber },
-      { t: 'Negativo', v: sent.neg, c: C.red },
+      { t: 'POSITIVO', v: sent.pos, c: C.green },
+      { t: 'NEUTRO', v: sent.neu, c: C.amber },
+      { t: 'NEGATIVO', v: sent.neg, c: C.red },
     ];
     boxes.forEach((b, i) => {
-      const x = PAGE.left + i * (boxW + 10);
-      doc.roundedRect(x, y, boxW, 48, 6).fillAndStroke(C.pale, C.line);
-      doc.fillColor(b.c).font('Helvetica-Bold').fontSize(8).text(b.t.toUpperCase(), x + 10, y + 10);
-      doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(16).text(String(b.v), x + 10, y + 24);
+      const x = M.left + i * (bw + 8);
+      doc.roundedRect(x, y, bw, 44, 5).fillAndStroke(C.pale, C.line);
+      doc.fillColor(b.c).font('Helvetica-Bold').fontSize(7).text(b.t, x + 10, y + 8, {
+        lineBreak: false,
+      });
+      doc
+        .fillColor(C.navy)
+        .font('Helvetica-Bold')
+        .fontSize(15)
+        .text(String(b.v), x + 10, y + 22, { lineBreak: false });
     });
-    doc.y = y + 60;
+    doc.x = M.left;
+    doc.y = y + 56;
   }
 
-  // Ultra+: temas IA
   if (tags.length) {
-    sectionTitle(doc, 'Temas registrados pela IA');
-    for (const t of tags.slice(0, depth === 'pro' ? 0 : 8)) {
-      doc.fillColor(C.ink).font('Helvetica').fontSize(9).text(`  •  ${t.tag}  (${t.count})`);
+    ensureSpace(doc, 40 + tags.length * 14, ctx);
+    title(doc, 'Temas registrados pela IA');
+    for (const t of tags) {
+      doc
+        .fillColor(C.ink)
+        .font('Helvetica')
+        .fontSize(9)
+        .text(`•  ${t.tag}   (${t.count})`, { width: contentWidth(doc) });
     }
-    doc.moveDown(0.5);
+    doc.moveDown(0.4);
   }
 
-  // Rei: donut + gargalos na página 1 se couber
   if (depth === 'rei') {
-    if (doc.y > 620) {
-      drawFooter(doc, emissao);
-      doc.addPage();
-      drawHeader(doc, { planLabel: pLabel, periodo, depth });
-      doc.y = 92;
-    }
-    sectionTitle(doc, 'Visão Rei · positivas vs críticas');
-    const cx = PAGE.left + 90;
-    const cy = doc.y + 70;
-    drawDonut(doc, cx, cy, 58, [
-      { value: positive, color: C.green, label: 'Positivas' },
-      { value: critical, color: C.red, label: 'Críticas' },
-      {
-        value: Math.max(0, total - positive - critical),
-        color: C.line,
-        label: 'Outros',
-      },
-    ]);
-    doc.fillColor(C.ink).font('Helvetica').fontSize(9);
-    doc.text(`Positivas: ${positive}`, PAGE.left + 180, cy - 30);
-    doc.text(`Críticas: ${critical}`, PAGE.left + 180, cy - 12);
-    doc.text(`Total: ${total}`, PAGE.left + 180, cy + 6);
-    doc.y = cy + 80;
-
+    ensureSpace(doc, 160, ctx);
+    title(doc, 'Visão consolidada (Rei)');
+    const cy = doc.y + 55;
+    donut(doc, M.left + 70, cy, 48, positive, critical);
+    doc
+      .fillColor(C.ink)
+      .font('Helvetica')
+      .fontSize(9)
+      .text(`Positivas: ${positive}`, M.left + 150, cy - 24, { lineBreak: false });
+    doc.text(`Críticas: ${critical}`, M.left + 150, cy - 8, { lineBreak: false });
+    doc.text(`Total: ${total}`, M.left + 150, cy + 8, { lineBreak: false });
+    doc.x = M.left;
+    doc.y = cy + 70;
     if (tags.length) {
-      sectionTitle(doc, 'Gargalos / temas mais citados');
-      drawHBars(
+      title(doc, 'Gargalos / temas mais citados');
+      hBars(
         doc,
-        tags.slice(0, 6).map((t) => ({ label: t.tag, value: t.count })),
-        220
+        tags.slice(0, 6).map((t) => ({ label: t.tag, value: t.count }))
       );
     }
   }
@@ -575,126 +603,128 @@ export async function gerarRelatorioMensalPDF(
     doc
       .fillColor(C.muted)
       .font('Helvetica')
-      .fontSize(10)
+      .fontSize(9)
       .text(
-        'Nenhuma avaliação válida neste período. O relatório permanece disponível; os indicadores sobem com novos feedbacks.',
-        { width: doc.page.width - PAGE.left - PAGE.right }
+        'Nenhuma avaliação válida neste período. O relatório continua disponível; os números sobem com novos feedbacks.',
+        { width: contentWidth(doc) }
       );
   }
 
-  // Corp / Rei: ranking de filiais
+  // —— Corp / Rei: ranking + filiais ——
   if (depth === 'corp' || depth === 'rei') {
-    drawFooter(doc, emissao);
     doc.addPage();
-    drawHeader(doc, { planLabel: pLabel, periodo, depth });
-    doc.y = 92;
-    sectionTitle(doc, 'Ranking de unidades');
+    header(doc, pLabel, periodo, depth);
+    title(doc, 'Ranking de unidades');
 
-    const groups: { nome: string; id: string; list: ReviewRow[] }[] = [];
+    type Group = { nome: string; list: ReviewRow[] };
+    const groups: Group[] = [];
     if (unidades.length) {
       for (const u of unidades) {
         const list = reviews.filter(
-          (r) => String(r.unidade_id || '') === u.id || String(r.origin || '') === u.slug
+          (r) =>
+            String(r.unidade_id || '') === u.id ||
+            (u.slug && String(r.origin || '') === u.slug)
         );
-        groups.push({ nome: u.nome, id: u.id, list });
+        groups.push({ nome: u.nome, list });
       }
+      const used = new Set(
+        groups.flatMap((g) => g.list.map((_, i) => i)) // placeholder
+      );
+      void used;
       const orphan = reviews.filter(
         (r) =>
           !unidades.some(
-            (u) => String(r.unidade_id || '') === u.id || String(r.origin || '') === u.slug
+            (u) =>
+              String(r.unidade_id || '') === u.id ||
+              (u.slug && String(r.origin || '') === u.slug)
           )
       );
-      if (orphan.length) groups.push({ nome: 'Matriz / Sem filial', id: '_', list: orphan });
+      if (orphan.length) groups.push({ nome: 'Matriz / Sem filial', list: orphan });
     } else {
-      groups.push({ nome: 'Matriz / Geral', id: '_', list: reviews });
+      groups.push({ nome: 'Matriz / Geral', list: reviews });
     }
-
     groups.sort((a, b) => media(b.list) - media(a.list) || b.list.length - a.list.length);
 
-    const width = doc.page.width - PAGE.left - PAGE.right;
-    doc.roundedRect(PAGE.left, doc.y, width, 22, 4).fill(C.navy);
+    const w = contentWidth(doc);
+    const headY = doc.y;
+    doc.roundedRect(M.left, headY, w, 20, 4).fill(C.navy);
     doc.fillColor(C.white).font('Helvetica-Bold').fontSize(8);
-    doc.text('Unidade', PAGE.left + 10, doc.y + 6, { continued: false });
-    // cabeçalho manual
-    let hy = doc.y;
-    doc.text('Unidade', PAGE.left + 10, hy + 6);
-    doc.text('Vol.', PAGE.left + width * 0.48, hy + 6);
-    doc.text('Média', PAGE.left + width * 0.62, hy + 6);
-    doc.text('Críticas', PAGE.left + width * 0.78, hy + 6);
-    doc.y = hy + 28;
+    doc.text('Unidade', M.left + 10, headY + 5, { lineBreak: false });
+    doc.text('Volume', M.left + w * 0.5, headY + 5, { lineBreak: false });
+    doc.text('Média', M.left + w * 0.65, headY + 5, { lineBreak: false });
+    doc.text('Críticas', M.left + w * 0.8, headY + 5, { lineBreak: false });
+    doc.y = headY + 26;
 
     groups.forEach((g, idx) => {
+      const rowY = doc.y;
+      if (idx % 2 === 0) doc.rect(M.left, rowY - 1, w, 17).fill(C.pale);
       const m = media(g.list);
       const crit = g.list.filter((r) => Number(r.rating) <= 3).length;
-      if (idx % 2 === 0) {
-        doc.rect(PAGE.left, doc.y - 2, width, 18).fill(C.pale);
-      }
       doc.fillColor(C.ink).font('Helvetica').fontSize(9);
-      doc.text(g.nome.slice(0, 36), PAGE.left + 10, doc.y);
-      doc.text(String(g.list.length), PAGE.left + width * 0.48, doc.y - 11);
-      doc.text(m ? m.toFixed(1) : '—', PAGE.left + width * 0.62, doc.y - 11);
-      doc.text(String(crit), PAGE.left + width * 0.78, doc.y - 11);
-      doc.moveDown(0.55);
+      doc.text(g.nome.slice(0, 34), M.left + 10, rowY, { lineBreak: false });
+      doc.text(String(g.list.length), M.left + w * 0.5, rowY, { lineBreak: false });
+      doc.text(m ? m.toFixed(1) : '—', M.left + w * 0.65, rowY, { lineBreak: false });
+      doc.text(String(crit), M.left + w * 0.8, rowY, { lineBreak: false });
+      doc.y = rowY + 18;
     });
 
-    // Página por filial
     for (const g of groups) {
-      drawFooter(doc, emissao);
       doc.addPage();
-      drawHeader(doc, { planLabel: pLabel, periodo, depth });
-      doc.y = 92;
-      sectionTitle(doc, `Filial · ${g.nome}`);
+      header(doc, pLabel, periodo, depth);
+      title(doc, `Demonstrativo · ${g.nome}`);
+
       const m = media(g.list);
       const d = distNotas(g.list);
       const pos = g.list.filter((r) => Number(r.rating) >= 4).length;
       const crit = g.list.filter((r) => Number(r.rating) <= 3).length;
 
-      drawKpis(doc, [
-        { title: 'Volume', value: String(g.list.length), desc: 'Neste período' },
-        { title: 'Média', value: m ? m.toFixed(1) : '—', desc: '1 a 5' },
-        { title: 'Críticas', value: String(crit), desc: '1–3★', accent: C.red },
-        { title: 'Positivas', value: String(pos), desc: percent(pos, g.list.length), accent: C.green },
+      kpis(doc, [
+        { label: 'Volume', value: String(g.list.length), sub: 'Neste período' },
+        { label: 'Média', value: m ? m.toFixed(1) : '—', sub: '1 a 5' },
+        { label: 'Críticas', value: String(crit), sub: '1–3★', color: C.red },
+        {
+          label: 'Positivas',
+          value: String(pos),
+          sub: pct(pos, g.list.length),
+          color: C.green,
+        },
       ]);
 
-      sectionTitle(doc, 'Distribuição na filial');
-      drawStarBars(doc, d);
+      title(doc, 'Distribuição na unidade');
+      starChart(doc, d);
 
       if (depth === 'rei') {
-        const cx = PAGE.left + 90;
-        const cy = doc.y + 65;
-        sectionTitle(doc, 'Donut da filial');
-        drawDonut(doc, cx, cy, 52, [
-          { value: pos, color: C.green, label: 'Pos' },
-          { value: crit, color: C.red, label: 'Crit' },
-        ]);
-        doc.y = cy + 70;
+        const cy = doc.y + 50;
+        donut(doc, M.left + 70, cy, 42, pos, crit);
+        doc.x = M.left;
+        doc.y = cy + 60;
         const localTags = parseTags(g.list);
         if (localTags.length) {
-          sectionTitle(doc, 'Temas na filial');
-          drawHBars(
+          title(doc, 'Temas nesta unidade');
+          hBars(
             doc,
-            localTags.slice(0, 5).map((t) => ({ label: t.tag, value: t.count })),
-            200
+            localTags.slice(0, 5).map((t) => ({ label: t.tag, value: t.count }))
           );
         }
       }
     }
   }
 
-  // Numeração de páginas
   const range = doc.bufferedPageRange();
   for (let i = 0; i < range.count; i++) {
     doc.switchToPage(range.start + i);
-    drawFooter(doc, emissao, i + 1, range.count);
+    footer(doc, emissao, i + 1, range.count);
   }
 
   await new Promise<void>((resolve, reject) => {
     doc.on('end', () => resolve());
-    doc.on('error', (err) => reject(err));
+    doc.on('error', reject);
     doc.end();
   });
 
   const buf = Buffer.concat(chunks);
-  if (!buf.length) throw new Error('PDF gerado vazio');
+  if (!buf.length || buf.slice(0, 4).toString() !== '%PDF') {
+    throw new Error('PDF gerado inválido');
+  }
   return buf;
 }
