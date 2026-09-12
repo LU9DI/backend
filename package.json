@@ -10,6 +10,7 @@
     "start": "tsx server.ts",
     "start:prod": "tsx server.ts",
     "smtp:test": "tsx scripts/smtp-connectivity-test.ts",
+    "checklist": "tsx scripts/checklist-saas.ts",
     "test": "tsx --test tests/**/*.test.ts",
     "audit": "npm audit --omit=dev"
   },
