@@ -3,11 +3,11 @@
  *
  * Pro:   capa + 4 KPIs + barras 1–5★ + positivas/críticas
  * Ultra: + sentimento + temas IA
- * Corp:  + ranking unidades + página por filial
- * Rei:   + donut + gargalos + página rica por filial
+ * Corp:  + ranking unidades + página por filial (só com dados)
+ * Rei:   + donut + gargalos + página rica por filial (só com dados)
  * Trial: = Ultra
  *
- * Cache version: v2 (invalida PDFs antigos via plan key no route).
+ * Cache version: v3 — sem páginas em branco.
  */
 import type { Database } from 'sqlite';
 import PDFDocument from 'pdfkit';
@@ -30,7 +30,7 @@ type Unidade = { id: string; nome: string; slug?: string | null };
 export type PdfDepth = 'pro' | 'ultra' | 'corp' | 'rei';
 
 /** Versão do layout — subir para forçar regeneração no cache. */
-export const PDF_LAYOUT_VERSION = 'v2';
+export const PDF_LAYOUT_VERSION = 'v3';
 
 const C = {
   navy: '#0f172a',
@@ -360,7 +360,6 @@ function hBars(doc: PDFKit.PDFDocument, rows: { label: string; value: number }[]
   doc.y = y0 + rows.length * 20 + 10;
 }
 
-/** Donut simples e estável (fatias via path). */
 function donut(
   doc: PDFKit.PDFDocument,
   cx: number,
@@ -490,7 +489,6 @@ export async function gerarRelatorioMensalPDF(
   const chunks: Buffer[] = [];
   doc.on('data', (c: Buffer) => chunks.push(c));
 
-  // —— Página principal ——
   header(doc, pLabel, periodo, depth);
 
   doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(18).text(nomeEmpresa, M.left, doc.y, {
@@ -610,14 +608,11 @@ export async function gerarRelatorioMensalPDF(
       );
   }
 
-  // —— Corp / Rei: ranking + filiais ——
+  // Corp / Rei: páginas extras só com filiais cadastradas e dados
   if (depth === 'corp' || depth === 'rei') {
-    doc.addPage();
-    header(doc, pLabel, periodo, depth);
-    title(doc, 'Ranking de unidades');
-
     type Group = { nome: string; list: ReviewRow[] };
     const groups: Group[] = [];
+
     if (unidades.length) {
       for (const u of unidades) {
         const list = reviews.filter(
@@ -627,10 +622,6 @@ export async function gerarRelatorioMensalPDF(
         );
         groups.push({ nome: u.nome, list });
       }
-      const used = new Set(
-        groups.flatMap((g) => g.list.map((_, i) => i)) // placeholder
-      );
-      void used;
       const orphan = reviews.filter(
         (r) =>
           !unidades.some(
@@ -640,71 +631,80 @@ export async function gerarRelatorioMensalPDF(
           )
       );
       if (orphan.length) groups.push({ nome: 'Matriz / Sem filial', list: orphan });
-    } else {
-      groups.push({ nome: 'Matriz / Geral', list: reviews });
     }
-    groups.sort((a, b) => media(b.list) - media(a.list) || b.list.length - a.list.length);
 
-    const w = contentWidth(doc);
-    const headY = doc.y;
-    doc.roundedRect(M.left, headY, w, 20, 4).fill(C.navy);
-    doc.fillColor(C.white).font('Helvetica-Bold').fontSize(8);
-    doc.text('Unidade', M.left + 10, headY + 5, { lineBreak: false });
-    doc.text('Volume', M.left + w * 0.5, headY + 5, { lineBreak: false });
-    doc.text('Média', M.left + w * 0.65, headY + 5, { lineBreak: false });
-    doc.text('Críticas', M.left + w * 0.8, headY + 5, { lineBreak: false });
-    doc.y = headY + 26;
+    // Sem filiais cadastradas → não cria páginas extras (consolidado já está na pág. 1)
+    if (unidades.length > 0) {
+      groups.sort((a, b) => media(b.list) - media(a.list) || b.list.length - a.list.length);
 
-    groups.forEach((g, idx) => {
-      const rowY = doc.y;
-      if (idx % 2 === 0) doc.rect(M.left, rowY - 1, w, 17).fill(C.pale);
-      const m = media(g.list);
-      const crit = g.list.filter((r) => Number(r.rating) <= 3).length;
-      doc.fillColor(C.ink).font('Helvetica').fontSize(9);
-      doc.text(g.nome.slice(0, 34), M.left + 10, rowY, { lineBreak: false });
-      doc.text(String(g.list.length), M.left + w * 0.5, rowY, { lineBreak: false });
-      doc.text(m ? m.toFixed(1) : '—', M.left + w * 0.65, rowY, { lineBreak: false });
-      doc.text(String(crit), M.left + w * 0.8, rowY, { lineBreak: false });
-      doc.y = rowY + 18;
-    });
-
-    for (const g of groups) {
       doc.addPage();
       header(doc, pLabel, periodo, depth);
-      title(doc, `Demonstrativo · ${g.nome}`);
+      title(doc, 'Ranking de unidades');
 
-      const m = media(g.list);
-      const d = distNotas(g.list);
-      const pos = g.list.filter((r) => Number(r.rating) >= 4).length;
-      const crit = g.list.filter((r) => Number(r.rating) <= 3).length;
+      const w = contentWidth(doc);
+      const headY = doc.y;
+      doc.roundedRect(M.left, headY, w, 20, 4).fill(C.navy);
+      doc.fillColor(C.white).font('Helvetica-Bold').fontSize(8);
+      doc.text('Unidade', M.left + 10, headY + 5, { lineBreak: false });
+      doc.text('Volume', M.left + w * 0.5, headY + 5, { lineBreak: false });
+      doc.text('Média', M.left + w * 0.65, headY + 5, { lineBreak: false });
+      doc.text('Críticas', M.left + w * 0.8, headY + 5, { lineBreak: false });
+      doc.y = headY + 26;
 
-      kpis(doc, [
-        { label: 'Volume', value: String(g.list.length), sub: 'Neste período' },
-        { label: 'Média', value: m ? m.toFixed(1) : '—', sub: '1 a 5' },
-        { label: 'Críticas', value: String(crit), sub: '1–3★', color: C.red },
-        {
-          label: 'Positivas',
-          value: String(pos),
-          sub: pct(pos, g.list.length),
-          color: C.green,
-        },
-      ]);
+      groups.forEach((g, idx) => {
+        const rowY = doc.y;
+        if (idx % 2 === 0) doc.rect(M.left, rowY - 1, w, 17).fill(C.pale);
+        const m = media(g.list);
+        const crit = g.list.filter((r) => Number(r.rating) <= 3).length;
+        doc.fillColor(C.ink).font('Helvetica').fontSize(9);
+        doc.text(g.nome.slice(0, 34), M.left + 10, rowY, { lineBreak: false });
+        doc.text(String(g.list.length), M.left + w * 0.5, rowY, { lineBreak: false });
+        doc.text(m ? m.toFixed(1) : '—', M.left + w * 0.65, rowY, { lineBreak: false });
+        doc.text(String(crit), M.left + w * 0.8, rowY, { lineBreak: false });
+        doc.y = rowY + 18;
+      });
 
-      title(doc, 'Distribuição na unidade');
-      starChart(doc, d);
+      // Demonstrativo só para unidades com avaliações
+      for (const g of groups) {
+        if (!g.list.length) continue;
 
-      if (depth === 'rei') {
-        const cy = doc.y + 50;
-        donut(doc, M.left + 70, cy, 42, pos, crit);
-        doc.x = M.left;
-        doc.y = cy + 60;
-        const localTags = parseTags(g.list);
-        if (localTags.length) {
-          title(doc, 'Temas nesta unidade');
-          hBars(
-            doc,
-            localTags.slice(0, 5).map((t) => ({ label: t.tag, value: t.count }))
-          );
+        doc.addPage();
+        header(doc, pLabel, periodo, depth);
+        title(doc, `Demonstrativo · ${g.nome}`);
+
+        const m = media(g.list);
+        const d = distNotas(g.list);
+        const pos = g.list.filter((r) => Number(r.rating) >= 4).length;
+        const crit = g.list.filter((r) => Number(r.rating) <= 3).length;
+
+        kpis(doc, [
+          { label: 'Volume', value: String(g.list.length), sub: 'Neste período' },
+          { label: 'Média', value: m ? m.toFixed(1) : '—', sub: '1 a 5' },
+          { label: 'Críticas', value: String(crit), sub: '1–3★', color: C.red },
+          {
+            label: 'Positivas',
+            value: String(pos),
+            sub: pct(pos, g.list.length),
+            color: C.green,
+          },
+        ]);
+
+        title(doc, 'Distribuição na unidade');
+        starChart(doc, d);
+
+        if (depth === 'rei') {
+          const cy = doc.y + 50;
+          donut(doc, M.left + 70, cy, 42, pos, crit);
+          doc.x = M.left;
+          doc.y = cy + 60;
+          const localTags = parseTags(g.list);
+          if (localTags.length) {
+            title(doc, 'Temas nesta unidade');
+            hBars(
+              doc,
+              localTags.slice(0, 5).map((t) => ({ label: t.tag, value: t.count }))
+            );
+          }
         }
       }
     }
