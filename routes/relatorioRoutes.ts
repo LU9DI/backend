@@ -1,14 +1,14 @@
 /**
  * Relatório PDF mensal — autenticado, cache em disco, SEM tokens de IA.
- * Pode baixar quantas vezes quiser: cache evita regenerar e nunca chama Groq/Gemini.
+ * Trial incluso (tudo nos 7 dias).
  */
-import type { Express, Request, Response } from 'express';
+import type { Express, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { getDb, findEmpresa } from '../lib/db.js';
 import { gerarRelatorioMensalPDF, ensureUnidadesSchema } from '../relatorioPdf.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validateReportMonth } from '../lib/dateValidation.js';
-import { planTemPdf } from '../lib/plans.js';
+import { empresaTemPdf } from '../lib/plans.js';
 import { logPdfGeneration } from '../lib/opsLog.js';
 import {
   autenticarToken,
@@ -17,7 +17,6 @@ import {
 } from '../lib/auth.js';
 import { readPdfCache, writePdfCache } from '../lib/pdfCache.js';
 
-/** Limite anti-abuso (não impede uso normal — 120/h por IP). */
 const pdfLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 120,
@@ -70,8 +69,8 @@ export function mountRelatorioRoutes(app: Express) {
         return res.status(403).json({ error: 'Sem permissão para baixar este relatório.' });
       }
 
-      const plan = String(empresa.plan || '').toLowerCase();
-      if (!planTemPdf(plan)) {
+      const plan = String(empresa.plan || empresa.status || 'trial').toLowerCase();
+      if (!empresaTemPdf(empresa)) {
         await logPdfGeneration(db, {
           empresa_id: empresa.id,
           empresa_nome: empresa.nome_empresa,
@@ -82,8 +81,9 @@ export function mountRelatorioRoutes(app: Express) {
         });
         return res.status(403).json({
           error:
-            'Relatório PDF não disponível neste plano. Use o seletor de plano no painel (modo teste) ou faça upgrade.',
+            'Relatório PDF não disponível neste plano. Trial e planos Pro+ incluem PDF. Faça upgrade se estiver no Inicial.',
           plan,
+          status: empresa.status,
         });
       }
 
@@ -108,8 +108,8 @@ export function mountRelatorioRoutes(app: Express) {
       }
       const mesAno = mesCheck.value;
 
-      // Cache: redownload ilimitado sem CPU e SEM tokens
-      const cached = readPdfCache(empresa.id, mesAno, plan);
+      const cacheKey = plan || 'trial';
+      const cached = readPdfCache(empresa.id, mesAno, cacheKey);
       if (cached) {
         await logPdfGeneration(db, {
           empresa_id: empresa.id,
@@ -132,10 +132,9 @@ export function mountRelatorioRoutes(app: Express) {
 
       await ensureUnidadesSchema(db);
 
-      // Nunca passa callGroq → zero tokens de IA no PDF
       let pdf: Buffer;
       try {
-        pdf = await gerarRelatorioMensalPDF(db, empresa.id, mesAno /* sem callGroq */);
+        pdf = await gerarRelatorioMensalPDF(db, empresa.id, mesAno);
       } catch (e: any) {
         await logPdfGeneration(db, {
           empresa_id: empresa.id,
@@ -146,10 +145,14 @@ export function mountRelatorioRoutes(app: Express) {
           auth_mode,
           duration_ms: Date.now() - t0,
         });
-        throw e;
+        console.error('[pdf] geração falhou:', e?.message || e);
+        return res.status(500).json({
+          error: 'Falha ao gerar o PDF. Tente novamente em instantes.',
+          detail: String(e?.message || e).slice(0, 200),
+        });
       }
 
-      writePdfCache(empresa.id, mesAno, plan, pdf);
+      writePdfCache(empresa.id, mesAno, cacheKey, pdf);
 
       await logPdfGeneration(db, {
         empresa_id: empresa.id,

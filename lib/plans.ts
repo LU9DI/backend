@@ -16,15 +16,34 @@ export function allowPlanSwitch(): boolean {
 
 /** Trial / teste de 7 dias — tudo incluso (IA, PDF, dashboard completo). */
 export function isTrialPlan(plan: string | null | undefined): boolean {
-  const p = String(plan || '').toLowerCase();
-  return p === 'trial' || p === 'teste';
+  const p = String(plan || '').toLowerCase().trim();
+  return p === 'trial' || p === 'teste' || p === 'test';
 }
 
-/** PDF mensal: Pro e acima + trial (tudo incluso nos 7 dias). Inicial pago não tem PDF. */
+/**
+ * PDF mensal liberado para:
+ * - trial/teste (7 dias — tudo incluso)
+ * - pro, ultra, corporativo, rei
+ * Inicial pago NÃO tem PDF.
+ */
 export function planTemPdf(plan: string | null | undefined): boolean {
-  const p = String(plan || '').toLowerCase();
+  const p = String(plan || '').toLowerCase().trim();
+  if (!p) return false;
   if (isTrialPlan(p)) return true;
   if (['pro', 'ultra', 'corporativo', 'rei'].includes(p)) return true;
+  return false;
+}
+
+/**
+ * Libera PDF olhando plan E status (empresa em trial às vezes tem plan vazio/antigo).
+ */
+export function empresaTemPdf(empresa: {
+  plan?: string | null;
+  status?: string | null;
+}): boolean {
+  if (planTemPdf(empresa?.plan)) return true;
+  const st = String(empresa?.status || '').toLowerCase().trim();
+  if (st === 'trial' || st === 'teste' || st === 'test') return true;
   return false;
 }
 
@@ -32,6 +51,7 @@ export function planLabel(plan: string): string {
   const map: Record<string, string> = {
     trial: 'Trial',
     teste: 'Teste',
+    test: 'Teste',
     inicial: 'Inicial',
     pro: 'Pro',
     ultra: 'Ultra',
