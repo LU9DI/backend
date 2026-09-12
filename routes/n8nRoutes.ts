@@ -10,6 +10,7 @@ import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
 import { getDb, findEmpresa } from '../lib/db.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
+import { invalidatePdfCacheForEmpresa } from '../lib/pdfCache.js';
 import {
   n8nConfigured,
   n8nStatus,
@@ -62,7 +63,7 @@ export function mountN8nRoutes(app: Express) {
           configured: false,
         });
       }
-      const ok = await notifyN8nAsync('ping', { message: 'Filtra.IA connectivity check' });
+      const ok = await notifyN8nAsync('ping', { message: 'Filtra.AI connectivity check' });
       res.json({ success: ok, configured: true });
     })
   );
@@ -162,6 +163,7 @@ export function mountN8nRoutes(app: Express) {
          VALUES (?, ?, ?, ?, ?)`,
         [empresa.id, name, rating, comment || null, now]
       );
+      try{invalidatePdfCacheForEmpresa(empresa.id);}catch(e:any){console.warn('pdf cache invalidation:',e?.message||e);}
 
       if (rating <= 3) {
         notifyN8n('review.critica', {
