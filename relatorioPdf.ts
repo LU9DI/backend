@@ -8,6 +8,7 @@
  * Trial: = Ultra
  *
  * Cache version: v3 — sem páginas em branco.
+ * Perf: colunas mínimas, agregação 1 passagem, Promise.all, compress PDFKit.
  */
 import type { Database } from 'sqlite';
 import PDFDocument from 'pdfkit';
@@ -94,15 +95,6 @@ function rowDate(r: ReviewRow): string {
   return String(r.createdAt || r.createdat || r.created_at || '');
 }
 
-function distNotas(reviews: ReviewRow[]): number[] {
-  const d = [0, 0, 0, 0, 0];
-  for (const r of reviews) {
-    const n = Number(r.rating);
-    if (n >= 1 && n <= 5) d[n - 1] += 1;
-  }
-  return d;
-}
-
 function media(reviews: ReviewRow[]): number {
   if (!reviews.length) return 0;
   return reviews.reduce((s, r) => s + Number(r.rating || 0), 0) / reviews.length;
@@ -153,28 +145,30 @@ function sentimentOf(reviews: ReviewRow[]) {
 }
 
 async function loadReviews(db: Database, empresaId: string, mesAno: string): Promise<ReviewRow[]> {
+  // Colunas mínimas — evita SELECT * e payload grande
+  const sqls = [
+    `SELECT rating, is_test, ai_tags, sentiment, unidade_id, origin, created_at FROM reviews WHERE empresa_id = ? LIMIT 3000`,
+    `SELECT rating, is_test, ai_tags, sentiment, unidade_id, origin, "createdAt" AS created_at FROM reviews WHERE empresa_id = ? LIMIT 3000`,
+    `SELECT rating, is_test, ai_tags, sentiment, unidade_id, origin FROM reviews WHERE empresa_id = ? LIMIT 3000`,
+  ];
   let rows: any[] = [];
-  try {
-    rows = (await db.all(
-      `SELECT * FROM reviews WHERE empresa_id = ? ORDER BY id DESC LIMIT 3000`,
-      [empresaId]
-    )) as any[];
-  } catch {
+  for (const sql of sqls) {
     try {
-      rows = (await db.all(
-        `SELECT rating, comment, is_test, ai_tags, sentiment, unidade_id, origin, created_at FROM reviews WHERE empresa_id = ? LIMIT 3000`,
-        [empresaId]
-      )) as any[];
+      rows = (await db.all(sql, [empresaId])) as any[];
+      break;
     } catch {
-      return [];
+      rows = [];
     }
   }
-  return (rows || [])
-    .filter((r) => !isTest(r))
-    .filter((r) => {
-      const d = rowDate(r);
-      return !d || d.startsWith(mesAno);
-    }) as ReviewRow[];
+  if (!rows.length) return [];
+  const out: ReviewRow[] = [];
+  for (const r of rows) {
+    if (isTest(r as ReviewRow)) continue;
+    const d = rowDate(r as ReviewRow);
+    if (d && !d.startsWith(mesAno)) continue;
+    out.push(r as ReviewRow);
+  }
+  return out;
 }
 
 async function loadUnidades(db: Database, empresaId: string): Promise<Unidade[]> {
@@ -426,27 +420,44 @@ export async function gerarRelatorioMensalPDF(
   mesAno: string,
   _callGroq?: (system: string, user: string) => Promise<string>
 ): Promise<Buffer> {
-  try {
-    await ensureUnidadesSchema(db);
-  } catch {
-    /* ok */
-  }
-
-  const empresa = await db.get('SELECT * FROM empresas WHERE id = ?', [empresaId]);
+  const empresa = await db.get(
+    'SELECT id, nome_empresa, plan, status FROM empresas WHERE id = ?',
+    [empresaId]
+  );
   if (!empresa) throw new Error('Empresa não encontrada.');
   if (!empresaTemPdf(empresa)) throw new Error('Plano não elegível para relatório mensal.');
 
   const planRaw = String(empresa.plan || empresa.status || 'trial').toLowerCase();
   const trial = isTrialPlan(planRaw) || isTrialPlan(String(empresa.status || ''));
   const depth = depthForPlan(planRaw, trial);
-  const reviews = await loadReviews(db, empresaId, mesAno).catch(() => [] as ReviewRow[]);
-  const unidades = depth === 'corp' || depth === 'rei' ? await loadUnidades(db, empresaId) : [];
 
-  const dist = distNotas(reviews);
+  const needUnits = depth === 'corp' || depth === 'rei';
+  if (needUnits) {
+    try {
+      await ensureUnidadesSchema(db);
+    } catch {
+      /* ok */
+    }
+  }
+  const [reviews, unidades] = await Promise.all([
+    loadReviews(db, empresaId, mesAno).catch(() => [] as ReviewRow[]),
+    needUnits ? loadUnidades(db, empresaId) : Promise.resolve([] as Unidade[]),
+  ]);
+
+  // Agregação em uma passagem
+  const dist = [0, 0, 0, 0, 0];
+  let sum = 0;
+  let positive = 0;
+  let critical = 0;
+  for (const r of reviews) {
+    const n = Number(r.rating) || 0;
+    sum += n;
+    if (n >= 1 && n <= 5) dist[n - 1] += 1;
+    if (n >= 4) positive += 1;
+    if (n <= 3) critical += 1;
+  }
   const total = reviews.length;
-  const avg = media(reviews);
-  const positive = reviews.filter((r) => Number(r.rating) >= 4).length;
-  const critical = reviews.filter((r) => Number(r.rating) <= 3).length;
+  const avg = total ? sum / total : 0;
   const tags = depth === 'pro' ? [] : parseTags(reviews);
   const sent = depth === 'pro' ? null : sentimentOf(reviews);
 
@@ -479,6 +490,7 @@ export async function gerarRelatorioMensalPDF(
     margin: M.left,
     bufferPages: true,
     autoFirstPage: true,
+    compress: true,
     info: {
       Title: `${nomeEmpresa} — Relatório ${mesAno}`,
       Author: 'Filtra.AI',
@@ -608,7 +620,6 @@ export async function gerarRelatorioMensalPDF(
       );
   }
 
-  // Corp / Rei: páginas extras só com filiais cadastradas e dados
   if (depth === 'corp' || depth === 'rei') {
     type Group = { nome: string; list: ReviewRow[] };
     const groups: Group[] = [];
@@ -633,7 +644,6 @@ export async function gerarRelatorioMensalPDF(
       if (orphan.length) groups.push({ nome: 'Matriz / Sem filial', list: orphan });
     }
 
-    // Sem filiais cadastradas → não cria páginas extras (consolidado já está na pág. 1)
     if (unidades.length > 0) {
       groups.sort((a, b) => media(b.list) - media(a.list) || b.list.length - a.list.length);
 
@@ -664,7 +674,6 @@ export async function gerarRelatorioMensalPDF(
         doc.y = rowY + 18;
       });
 
-      // Demonstrativo só para unidades com avaliações
       for (const g of groups) {
         if (!g.list.length) continue;
 
@@ -673,9 +682,15 @@ export async function gerarRelatorioMensalPDF(
         title(doc, `Demonstrativo · ${g.nome}`);
 
         const m = media(g.list);
-        const d = distNotas(g.list);
-        const pos = g.list.filter((r) => Number(r.rating) >= 4).length;
-        const crit = g.list.filter((r) => Number(r.rating) <= 3).length;
+        const dLocal = [0, 0, 0, 0, 0];
+        let pos = 0;
+        let crit = 0;
+        for (const r of g.list) {
+          const n = Number(r.rating) || 0;
+          if (n >= 1 && n <= 5) dLocal[n - 1] += 1;
+          if (n >= 4) pos += 1;
+          if (n <= 3) crit += 1;
+        }
 
         kpis(doc, [
           { label: 'Volume', value: String(g.list.length), sub: 'Neste período' },
@@ -690,7 +705,7 @@ export async function gerarRelatorioMensalPDF(
         ]);
 
         title(doc, 'Distribuição na unidade');
-        starChart(doc, d);
+        starChart(doc, dLocal);
 
         if (depth === 'rei') {
           const cy = doc.y + 50;
