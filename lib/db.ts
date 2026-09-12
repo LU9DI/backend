@@ -1,6 +1,6 @@
 /**
  * Banco: Postgres em produção (obrigatório).
- * SQLite só em dev (import dinâmico — não quebra Docker sem sqlite3).
+ * SQLite só em desenvolvimento local.
  */
 import path from 'path';
 import fs from 'fs';
@@ -74,14 +74,11 @@ export async function initDB(): Promise<Database> {
 
   if (isPostgresUrl(url)) {
     _db = await initPostgres();
-  } else if (isProd && process.env.SQLITE_ALLOW_PROD !== '1') {
+  } else if (isProd) {
     throw new Error(
-      'Produção exige DATABASE_URL Postgres. Defina no Render ou SQLITE_ALLOW_PROD=1.'
+      'DATABASE_URL com uma URL PostgreSQL válida é obrigatória em produção. SQLite não é permitido.'
     );
   } else {
-    if (isProd) {
-      console.warn('⚠️  SQLITE_ALLOW_PROD=1 — disco efêmero pode apagar dados.');
-    }
     _db = await initSqlite();
   }
 
@@ -168,6 +165,8 @@ export async function initDB(): Promise<Database> {
         console.warn('Admin seed:', e?.message || e);
       }
     }
+  } else if (isProd && adminMail && adminPass.length > 0 && adminPass.length < 12) {
+    console.warn('⚠️  ADMIN_PASSWORD curta (<12) — admin não será seedado automaticamente.');
   }
 
   return _db;
