@@ -16,7 +16,7 @@ function convertPlaceholders(sql: string): string {
 
 /**
  * Traduções SQLite → Postgres.
- * Ordem importa: funções date/datetime ANTES de tipos DATETIME.
+ * Ordem importa: funções date/datetime antes de tipos DATETIME.
  */
 function adaptSql(sql: string): string {
   let s = sql;
@@ -44,16 +44,22 @@ function adaptSql(sql: string): string {
     "(NOW() - INTERVAL '$1 days')"
   );
   s = s.replace(
-    /(?:date|datetime)\s*\(\s*'now'\s*,\s*"-(\d+)\s*days?"\s*\)/gi,
+    /(?:date|datetime)\s*\(\s*'now'\s*,\s*\"-(\d+)\s*days?\"\s*\)/gi,
     "(NOW() - INTERVAL '$1 days')"
   );
 
-  // datetime('now', '-' || ? || ' days') — não dá para traduzir com param; deixa e preferimos SQL nativo nas rotas
+  // datetime('now', '-' || ? || ' days') — rotas podem preferir SQL nativo
   // datetime('now') / date('now')
   s = s.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'NOW()');
-  s = s.replace(/datetime\s*\(\s*"now"\s*\)/gi, 'NOW()');
+  s = s.replace(/datetime\s*\(\s*\"now\"\s*\)/gi, 'NOW()');
   s = s.replace(/date\s*\(\s*'now'\s*\)/gi, 'CURRENT_DATE');
-  s = s.replace(/date\s*\(\s*"now"\s*\)/gi, 'CURRENT_DATE');
+  s = s.replace(/date\s*\(\s*\"now\"\s*\)/gi, 'CURRENT_DATE');
+
+  // strftime('%Y-%m', coluna) → to_char(coluna, 'YYYY-MM')
+  s = s.replace(
+    /strftime\s*\(\s*['\"]%Y-%m['\"]\s*,\s*([a-zA-Z_][\w.]*)\s*\)/gi,
+    "to_char($1::timestamptz, 'YYYY-MM')"
+  );
 
   // datetime(coluna) → cast seguro (1 arg)
   s = s.replace(/datetime\s*\(\s*([a-zA-Z_][\w.]*)\s*\)/gi, '($1::timestamptz)');
@@ -71,7 +77,7 @@ function adaptSql(sql: string): string {
 }
 
 async function handlePragma(client: pg.PoolClient, sql: string): Promise<any[]> {
-  const m = sql.match(/PRAGMA\s+table_info\s*\(\s*['"]?(\w+)['"]?\s*\)/i);
+  const m = sql.match(/PRAGMA\s+table_info\s*\(\s*['\"]?(\w+)['\"]?\s*\)/i);
   if (!m) return [];
   const table = m[1];
   const r = await client.query(
@@ -136,11 +142,7 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
             await c.query(st);
           } catch (e: any) {
             const msg = String(e?.message || e);
-            if (
-              /already exists/i.test(msg) ||
-              e?.code === '42P07' ||
-              e?.code === '42701'
-            ) {
+            if (/already exists/i.test(msg) || e?.code === '42P07' || e?.code === '42701') {
               continue;
             }
             console.error('pg.exec falhou:', msg);
@@ -156,9 +158,7 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
     async run(sql: string, params: any[] = []) {
       const c = await pool!.connect();
       try {
-        if (/^PRAGMA/i.test(sql.trim())) {
-          return { changes: 0 };
-        }
+        if (/^PRAGMA/i.test(sql.trim())) return { changes: 0 };
         const adapted = adaptSql(sql);
         const q = convertPlaceholders(adapted);
         const r = await c.query(q, params);
