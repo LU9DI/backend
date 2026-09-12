@@ -5,7 +5,11 @@
 import type { Express, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { getDb, findEmpresa } from '../lib/db.js';
-import { gerarRelatorioMensalPDF, ensureUnidadesSchema } from '../relatorioPdf.js';
+import {
+  gerarRelatorioMensalPDF,
+  ensureUnidadesSchema,
+  PDF_LAYOUT_VERSION,
+} from '../relatorioPdf.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validateReportMonth } from '../lib/dateValidation.js';
 import { empresaTemPdf } from '../lib/plans.js';
@@ -108,7 +112,8 @@ export function mountRelatorioRoutes(app: Express) {
       }
       const mesAno = mesCheck.value;
 
-      const cacheKey = plan || 'trial';
+      // plan + versão de layout → invalida PDFs antigos automaticamente
+      const cacheKey = `${plan || 'trial'}|${PDF_LAYOUT_VERSION}`;
       const cached = readPdfCache(empresa.id, mesAno, cacheKey);
       if (cached) {
         await logPdfGeneration(db, {
@@ -127,6 +132,7 @@ export function mountRelatorioRoutes(app: Express) {
           `attachment; filename="relatorio-${slug}-${mesAno}.pdf"`
         );
         res.setHeader('X-PDF-Cache', 'HIT');
+        res.setHeader('X-PDF-Layout', PDF_LAYOUT_VERSION);
         return res.send(cached);
       }
 
@@ -170,6 +176,7 @@ export function mountRelatorioRoutes(app: Express) {
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       res.setHeader('X-PDF-Cache', 'MISS');
+      res.setHeader('X-PDF-Layout', PDF_LAYOUT_VERSION);
       res.send(pdf);
     })
   );
