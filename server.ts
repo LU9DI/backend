@@ -37,6 +37,7 @@ import { mountExportRoutes } from './routes/exportRoutes.js';
 import { mountPublicPlanosRoutes } from './routes/publicPlanosRoutes.js';
 import { mountAuditRoutes } from './routes/auditRoutes.js';
 import { mountSmtpTestRoutes } from './routes/smtpTestRoutes.js';
+import { mountN8nRoutes } from './routes/n8nRoutes.js';
 import { mountPasswordResetRoutes } from './passwordResetRoutes.js';
 import { mountAdminLoginRoute } from './adminLoginRoute.js';
 import { mountAdminPasswordResetRoutes } from './adminPasswordReset.js';
@@ -58,6 +59,7 @@ import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
 import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
+import { n8nConfigured } from './lib/n8n.js';
 import {
   anonymizeOldClientWhatsapp,
   ensureReviewTreatmentColumns,
@@ -71,8 +73,8 @@ assertEnvOrExit();
 const JWT_SECRET = requireJwtSecret();
 
 const BUILD = {
-  version: '1.1.2',
-  marker: 'smtp-test-and-mailer-fix',
+  version: '1.1.3',
+  marker: 'codex-hardening-n8n-pg-metrics-intact',
   started_at: new Date().toISOString(),
 };
 
@@ -137,6 +139,7 @@ app.get('/api/health', async (_req, res) => {
     webauthn: webauthnConfig(),
     push: pushConfigured(),
     smtp: smtpConfigured(),
+    n8n: n8nConfigured(),
     ai_latency: {
       groq: ai.stats.groq.latency,
       gemini: ai.stats.gemini.latency,
@@ -149,6 +152,7 @@ app.get('/api/health', async (_req, res) => {
   res.status(dbPing.ok ? 200 : 503).json(body);
 });
 
+/** Metrics: mantém mecanismo da main (JOBS_SECRET). */
 app.get('/api/metrics', (req, res) => {
   const secret = process.env.JOBS_SECRET?.trim();
   if (process.env.NODE_ENV === 'production' && secret) {
@@ -294,6 +298,7 @@ async function main() {
   mountPublicPlanosRoutes(app);
   mountAuditRoutes(app);
   mountSmtpTestRoutes(app);
+  mountN8nRoutes(app);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
@@ -308,7 +313,8 @@ async function main() {
   console.log(
     `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | WeChat: ${wechatConfigured() ? 'ok' : 'OFF'}`
   );
-  console.log(`📧 SMTP: ${smtpConfigured() ? 'configurado' : 'OFF — defina SMTP_* no Render'}`);
+  console.log(`📧 SMTP: ${smtpConfigured() ? 'configurado' : 'OFF'}`);
+  console.log(`🔗 n8n: ${n8nConfigured() ? 'webhook ON' : 'OFF'}`);
   if (!wechatConfigured()) {
     console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
   }
