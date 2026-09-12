@@ -73,8 +73,8 @@ assertEnvOrExit();
 const JWT_SECRET = requireJwtSecret();
 
 const BUILD = {
-  version: '1.1.3',
-  marker: 'codex-hardening-n8n-pg-metrics-intact',
+  version: '1.1.4',
+  marker: 'pdf-postgres-resilient-v2',
   started_at: new Date().toISOString(),
 };
 

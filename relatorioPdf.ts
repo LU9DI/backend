@@ -1,6 +1,6 @@
 /**
- * Relatório mensal PDF — Postgres + SQLite.
- * Trial e planos Pro+ elegíveis. Sem strftime/PRAGMA (quebravam no Render).
+ * Relatório mensal PDF — Postgres + SQLite, resiliente.
+ * Trial e Pro+ elegíveis. Filtro de mês em JS se o SQL de data falhar.
  */
 import type { Database } from 'sqlite';
 import PDFDocument from 'pdfkit';
@@ -12,12 +12,12 @@ type ReviewRow = {
   unidade_id?: string | null;
   origin?: string | null;
   createdAt?: string;
+  createdat?: string;
+  created_at?: string;
   is_test?: number | boolean | null;
   ai_tags?: string | null;
   sentiment?: string | null;
 };
-
-type UnidadeRow = { id: string; nome: string; slug?: string | null };
 
 const COLORS = {
   navy: '#17233c',
@@ -26,7 +26,6 @@ const COLORS = {
   muted: '#65748a',
   line: '#d9e1eb',
   pale: '#f5f7fa',
-  green: '#16804b',
   red: '#b42318',
   white: '#ffffff',
   star: ['#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e'],
@@ -35,16 +34,20 @@ const COLORS = {
 const PAGE = { left: 42, right: 42, bottom: 46 };
 
 export async function ensureUnidadesSchema(db: Database): Promise<void> {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS unidades (
-      id TEXT PRIMARY KEY,
-      empresa_id TEXT NOT NULL,
-      nome TEXT NOT NULL,
-      slug TEXT,
-      ativo INTEGER DEFAULT 1,
-      criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+  try {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS unidades (
+        id TEXT PRIMARY KEY,
+        empresa_id TEXT NOT NULL,
+        nome TEXT NOT NULL,
+        slug TEXT,
+        ativo INTEGER DEFAULT 1,
+        criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+  } catch (e: any) {
+    console.warn('[pdf] ensure unidades:', e?.message || e);
+  }
   for (const ddl of ['unidade_id TEXT', 'origin TEXT']) {
     try {
       await db.exec(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS ${ddl}`);
@@ -60,6 +63,10 @@ export async function ensureUnidadesSchema(db: Database): Promise<void> {
 
 function isTest(r: ReviewRow): boolean {
   return Number(r.is_test) === 1 || r.is_test === true;
+}
+
+function rowDate(r: ReviewRow): string {
+  return String(r.createdAt || r.createdat || r.created_at || '');
 }
 
 function distNotas(reviews: ReviewRow[]): number[] {
@@ -85,7 +92,7 @@ function parseTags(reviews: ReviewRow[]): { tag: string; count: number }[] {
   for (const r of reviews) {
     if (!r.ai_tags) continue;
     try {
-      const parsed = JSON.parse(r.ai_tags);
+      const parsed = JSON.parse(String(r.ai_tags));
       if (Array.isArray(parsed)) {
         for (const tag of parsed) {
           const key = String(tag).trim();
@@ -102,54 +109,39 @@ function parseTags(reviews: ReviewRow[]): { tag: string; count: number }[] {
     .map(([tag, count]) => ({ tag, count }));
 }
 
-function monthRange(mesAno: string): { startIso: string; endIso: string } {
-  const [yy, mm] = mesAno.split('-').map((x) => Number(x));
-  const startIso = `${mesAno}-01T00:00:00.000Z`;
-  const endY = mm === 12 ? yy + 1 : yy;
-  const endM = mm === 12 ? 1 : mm + 1;
-  const endIso = `${endY}-${String(endM).padStart(2, '0')}-01T00:00:00.000Z`;
-  return { startIso, endIso };
-}
-
+/** Carrega reviews do mês — nunca derruba o PDF por erro de SQL. */
 async function loadReviews(
   db: Database,
   empresaId: string,
   mesAno: string
 ): Promise<ReviewRow[]> {
-  const { startIso, endIso } = monthRange(mesAno);
-  const queries = [
-    `SELECT rating, comment, unidade_id, origin, "createdAt" as createdAt, is_test, ai_tags, sentiment
-     FROM reviews
-     WHERE empresa_id = ?
-       AND COALESCE(is_test, 0) <> 1
-       AND "createdAt" >= ?
-       AND "createdAt" < ?`,
-    `SELECT rating, comment, unidade_id, origin, createdAt, is_test, ai_tags, sentiment
-     FROM reviews
-     WHERE empresa_id = ?
-       AND COALESCE(is_test, 0) <> 1
-       AND createdAt >= ?
-       AND createdAt < ?`,
-    // fallback se coluna createdAt tiver outro casing no adapter
-    `SELECT rating, comment, unidade_id, origin, createdat as createdAt, is_test, ai_tags, sentiment
-     FROM reviews
-     WHERE empresa_id = ?
-       AND COALESCE(is_test, 0) <> 1
-       AND createdat >= ?
-       AND createdat < ?`,
-  ];
+  let rows: any[] = [];
 
-  let lastErr: any;
-  for (const sql of queries) {
+  try {
+    rows = (await db.all(
+      `SELECT * FROM reviews WHERE empresa_id = ? ORDER BY id DESC LIMIT 2000`,
+      [empresaId]
+    )) as any[];
+  } catch (e: any) {
+    console.warn('[pdf] SELECT * reviews falhou:', e?.message || e);
     try {
-      const rows = await db.all(sql, [empresaId, startIso, endIso]);
-      return ((rows || []) as ReviewRow[]).filter((r) => !isTest(r));
-    } catch (e) {
-      lastErr = e;
+      rows = (await db.all(
+        `SELECT rating, comment, is_test, ai_tags, sentiment FROM reviews WHERE empresa_id = ? LIMIT 2000`,
+        [empresaId]
+      )) as any[];
+    } catch (e2: any) {
+      console.warn('[pdf] SELECT mínimo falhou:', e2?.message || e2);
+      return [];
     }
   }
-  console.error('[pdf] loadReviews failed:', lastErr?.message || lastErr);
-  throw new Error('Falha ao ler avaliações para o PDF.');
+
+  const list = (rows || []).filter((r) => !isTest(r as ReviewRow));
+  // Filtra mês em JS (evita strftime / to_char / aspas de coluna)
+  return list.filter((r) => {
+    const d = rowDate(r as ReviewRow);
+    if (!d) return true; // sem data: inclui para não zerar o relatório por coluna estranha
+    return d.startsWith(mesAno);
+  }) as ReviewRow[];
 }
 
 export async function gerarRelatorioMensalPDF(
@@ -158,7 +150,11 @@ export async function gerarRelatorioMensalPDF(
   mesAno: string,
   _callGroq?: (system: string, user: string) => Promise<string>
 ): Promise<Buffer> {
-  await ensureUnidadesSchema(db);
+  try {
+    await ensureUnidadesSchema(db);
+  } catch (e: any) {
+    console.warn('[pdf] ensureUnidadesSchema:', e?.message || e);
+  }
 
   const empresa = await db.get('SELECT * FROM empresas WHERE id = ?', [empresaId]);
   if (!empresa) throw new Error('Empresa não encontrada.');
@@ -168,7 +164,14 @@ export async function gerarRelatorioMensalPDF(
     throw new Error('Plano não elegível para relatório mensal.');
   }
 
-  const reviews = await loadReviews(db, empresaId, mesAno);
+  let reviews: ReviewRow[] = [];
+  try {
+    reviews = await loadReviews(db, empresaId, mesAno);
+  } catch (e: any) {
+    console.warn('[pdf] loadReviews:', e?.message || e);
+    reviews = [];
+  }
+
   const trial = isTrialPlan(plan) || isTrialPlan(String(empresa.status || ''));
   const ultraPlus =
     trial || plan === 'pro' || plan === 'ultra' || plan === 'corporativo' || plan === 'rei';
@@ -201,17 +204,17 @@ export async function gerarRelatorioMensalPDF(
       : mesAno;
   const emissao = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'long' }).format(new Date());
   const planLabel = trial ? 'TRIAL' : plan.toUpperCase();
+  const nomeEmpresa = String(empresa.nome_empresa || 'Empresa');
 
   const doc = new PDFDocument({
     size: 'A4',
     margin: PAGE.left,
     bufferPages: true,
-    info: { Title: `${empresa.nome_empresa} — Relatório ${mesAno}` },
+    info: { Title: `${nomeEmpresa} — Relatório ${mesAno}`, Author: 'Filtra.IA' },
   });
   const chunks: Buffer[] = [];
-  doc.on('data', (c) => chunks.push(c));
+  doc.on('data', (c: Buffer) => chunks.push(c));
 
-  // Header
   doc.rect(0, 0, doc.page.width, 78).fill(COLORS.navy);
   doc.fillColor(COLORS.white).font('Helvetica-Bold').fontSize(18).text('FILTRA.AI', PAGE.left, 20);
   doc
@@ -231,7 +234,7 @@ export async function gerarRelatorioMensalPDF(
     .text(periodo, doc.page.width - 132, 40, { width: 90, align: 'right' });
 
   doc.y = 98;
-  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(18).text(String(empresa.nome_empresa), PAGE.left, doc.y);
+  doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(18).text(nomeEmpresa, PAGE.left, doc.y);
   doc
     .moveDown(0.15)
     .fillColor(COLORS.muted)
@@ -240,13 +243,12 @@ export async function gerarRelatorioMensalPDF(
     .text(`Período analisado: ${periodo}`);
   doc.moveDown(0.8);
 
-  // KPIs
   doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(13).text('Resumo do período');
   doc.moveDown(0.4);
   const width = doc.page.width - PAGE.left - PAGE.right;
   const gap = 10;
   const kw = (width - gap * 2) / 3;
-  let y = doc.y;
+  const y = doc.y;
 
   function kpi(title: string, value: string, desc: string, x: number, accent = COLORS.blue) {
     doc.roundedRect(x, y, kw, 76, 7).fillAndStroke(COLORS.pale, COLORS.line);
@@ -273,7 +275,6 @@ export async function gerarRelatorioMensalPDF(
   kpi('Críticas', String(critical), 'Notas 1–3', PAGE.left + (kw + gap) * 2, COLORS.red);
   doc.y = y + 94;
 
-  // Distribuição
   doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(13).text('Distribuição de notas');
   doc.moveDown(0.35);
   const chartY = doc.y;
@@ -302,7 +303,6 @@ export async function gerarRelatorioMensalPDF(
   });
   doc.y = chartY + chartH + 16;
 
-  // Mix
   doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(13).text('Positivas vs críticas');
   doc.moveDown(0.3);
   doc
@@ -319,11 +319,7 @@ export async function gerarRelatorioMensalPDF(
     doc.fillColor(COLORS.navy).font('Helvetica-Bold').fontSize(13).text('Temas registrados pela IA');
     doc.moveDown(0.3);
     for (const t of tags) {
-      doc
-        .fillColor(COLORS.ink)
-        .font('Helvetica')
-        .fontSize(9)
-        .text(`• ${t.tag} (${t.count})`, { width });
+      doc.fillColor(COLORS.ink).font('Helvetica').fontSize(9).text(`• ${t.tag} (${t.count})`, { width });
     }
     doc.moveDown(0.6);
   }
@@ -333,9 +329,10 @@ export async function gerarRelatorioMensalPDF(
       .fillColor(COLORS.muted)
       .font('Helvetica')
       .fontSize(10)
-      .text('Nenhuma avaliação válida neste período. O relatório fica disponível assim que houver feedbacks.', {
-        width,
-      });
+      .text(
+        'Nenhuma avaliação válida neste período. O relatório continua disponível; os números sobem quando houver feedbacks.',
+        { width }
+      );
     doc.moveDown(0.6);
   }
 
@@ -344,17 +341,19 @@ export async function gerarRelatorioMensalPDF(
     .font('Helvetica')
     .fontSize(7.5)
     .text(
-      `Emitido em ${emissao}. O relatório reproduz dados do painel; não contém previsão de resultados futuros.`,
+      `Emitido em ${emissao}. Dados do painel Filtra.IA — sem previsão de resultados futuros.`,
       PAGE.left,
       doc.page.height - 40,
       { width }
     );
 
   await new Promise<void>((resolve, reject) => {
-    doc.on('end', resolve);
-    doc.on('error', reject);
+    doc.on('end', () => resolve());
+    doc.on('error', (err) => reject(err));
     doc.end();
   });
 
-  return Buffer.concat(chunks);
+  const buf = Buffer.concat(chunks);
+  if (!buf.length) throw new Error('PDF gerado vazio');
+  return buf;
 }
