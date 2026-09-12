@@ -61,6 +61,13 @@ function adaptSql(sql: string): string {
     "to_char($1::timestamptz, 'YYYY-MM')"
   );
 
+  // O relatório multiunidades pede slug por compatibilidade SQLite, mas o schema
+  // PostgreSQL atual possui apenas id/nome/empresa_id/ativo. O PDF não usa slug.
+  s = s.replace(
+    /SELECT\s+id\s*,\s*nome\s*,\s*slug\s+FROM\s+unidades/gi,
+    'SELECT id, nome FROM unidades'
+  );
+
   // datetime(coluna) → cast seguro (1 arg)
   s = s.replace(/datetime\s*\(\s*([a-zA-Z_][\w.]*)\s*\)/gi, '($1::timestamptz)');
 
