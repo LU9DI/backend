@@ -1,13 +1,83 @@
 import type { Express, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { clearAuthCookie, extrairToken, verifyAccessToken } from '../lib/auth.js';
-import { validateBody, schemaLoginEmpresa } from '../middleware/validate.js';
+import {
+  validateBody,
+  schemaLoginEmpresa,
+  ensureLoginIdentifier,
+} from '../middleware/validate.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { loginEmpresa, AuthUnauthorizedError, AuthAccessDeniedError } from '../services/authService.js';
+import {
+  loginEmpresa,
+  AuthUnauthorizedError,
+  AuthAccessDeniedError,
+} from '../services/authService.js';
 import { getDb } from '../lib/db.js';
 import { writeAuditFromReq } from '../lib/auditLog.js';
-const loginLimiter = rateLimit({ windowMs:15*60*1000, max:10, standardHeaders:true, legacyHeaders:false, message:{error:'Muitas tentativas de login. Aguarde 15 minutos.'} });
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas tentativas de login. Aguarde 15 minutos.' },
+});
+
 export function mountAuthRoutes(app: Express) {
-  app.post('/api/auth/login', loginLimiter, validateBody(schemaLoginEmpresa), asyncHandler(async (req:Request,res:Response)=>{ try { const result=await loginEmpresa({cnpj:String(req.body.cnpj),senha:String(req.body.senha)},res,getDb(),req); res.json(result); } catch(e:any) { if(e instanceof AuthUnauthorizedError) return res.status(401).json({error:e.message}); if(e instanceof AuthAccessDeniedError) return res.status(403).json({error:e.message}); if(e?.status) return res.status(e.status).json({error:e.message}); throw e; } }));
-  app.post('/api/auth/logout', asyncHandler(async (req:Request,res:Response)=>{ let actor:{id?:string;empresa_id?:string}={}; try { const token=extrairToken(req); if(token){ const p=verifyAccessToken(token); actor={id:p.id,empresa_id:p.empresa_id}; } } catch {} try { await writeAuditFromReq(getDb(),req,{action:'auth.logout',actor_user_id:actor.id,empresa_id:actor.empresa_id,actor_role:actor.empresa_id==='admin'?'admin':'empresa',result:'ok'}); } catch {} clearAuthCookie(res); res.json({success:true}); }));
+  app.post(
+    '/api/auth/login',
+    loginLimiter,
+    validateBody(schemaLoginEmpresa),
+    ensureLoginIdentifier,
+    asyncHandler(async (req: Request, res: Response) => {
+      try {
+        const result = await loginEmpresa(
+          {
+            cnpj: req.body.cnpj != null ? String(req.body.cnpj) : undefined,
+            email: req.body.email != null ? String(req.body.email) : undefined,
+            login: req.body.login != null ? String(req.body.login) : undefined,
+            senha: String(req.body.senha),
+          },
+          res,
+          getDb(),
+          req
+        );
+        res.json(result);
+      } catch (e: any) {
+        if (e instanceof AuthUnauthorizedError) return res.status(401).json({ error: e.message });
+        if (e instanceof AuthAccessDeniedError) return res.status(403).json({ error: e.message });
+        if (e?.status) return res.status(e.status).json({ error: e.message });
+        throw e;
+      }
+    })
+  );
+
+  app.post(
+    '/api/auth/logout',
+    asyncHandler(async (req: Request, res: Response) => {
+      let actor: { id?: string; empresa_id?: string } = {};
+      try {
+        const token = extrairToken(req);
+        if (token) {
+          const p = verifyAccessToken(token);
+          actor = { id: p.id, empresa_id: p.empresa_id };
+        }
+      } catch {
+        /* */
+      }
+      try {
+        await writeAuditFromReq(getDb(), req, {
+          action: 'auth.logout',
+          actor_user_id: actor.id,
+          empresa_id: actor.empresa_id,
+          actor_role: actor.empresa_id === 'admin' ? 'admin' : 'empresa',
+          result: 'ok',
+        });
+      } catch {
+        /* */
+      }
+      clearAuthCookie(res);
+      res.json({ success: true });
+    })
+  );
 }
