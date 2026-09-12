@@ -7,25 +7,19 @@ export function isPlanoOficial(p: string): p is PlanoOficial {
   return (PLANOS_OFICIAIS as readonly string[]).includes(String(p || '').toLowerCase());
 }
 
-/** Em dev (ou ALLOW_PLAN_SWITCH=1) o cliente pode alternar plano sem Stripe. */
+/** Só liga com ALLOW_PLAN_SWITCH=1. Em produção o default é OFF. */
 export function allowPlanSwitch(): boolean {
-  if (process.env.ALLOW_PLAN_SWITCH === '0') return false;
-  if (process.env.ALLOW_PLAN_SWITCH === '1') return true;
+  const v = String(process.env.ALLOW_PLAN_SWITCH || '').trim();
+  if (v === '1' || v.toLowerCase() === 'true') return true;
+  if (v === '0' || v.toLowerCase() === 'false') return false;
   return process.env.NODE_ENV !== 'production';
 }
 
-/** Trial / teste de 7 dias — tudo incluso (IA, PDF, dashboard completo). */
 export function isTrialPlan(plan: string | null | undefined): boolean {
   const p = String(plan || '').toLowerCase().trim();
   return p === 'trial' || p === 'teste' || p === 'test';
 }
 
-/**
- * PDF mensal liberado para:
- * - trial/teste (7 dias — tudo incluso)
- * - pro, ultra, corporativo, rei
- * Inicial pago NÃO tem PDF.
- */
 export function planTemPdf(plan: string | null | undefined): boolean {
   const p = String(plan || '').toLowerCase().trim();
   if (!p) return false;
@@ -34,9 +28,6 @@ export function planTemPdf(plan: string | null | undefined): boolean {
   return false;
 }
 
-/**
- * Libera PDF olhando plan E status (empresa em trial às vezes tem plan vazio/antigo).
- */
 export function empresaTemPdf(empresa: {
   plan?: string | null;
   status?: string | null;
