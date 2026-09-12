@@ -9,7 +9,7 @@ import { createUsuarioForEmpresa } from '../passwordResetRoutes.js';
 import { normalizarWhatsapp } from '../lib/whatsapp.js';
 import { notificarTrialAtivado } from '../lib/notifications.js';
 import { setAuthCookie, signAccessToken } from '../lib/auth.js';
-import { normalizarCnpj } from '../lib/cnpj.js';
+import { canonicalTaxId, taxIdValido } from '../lib/cnpj.js';
 import { notifyN8n } from '../lib/n8n.js';
 
 const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(
@@ -44,7 +44,7 @@ export type TrialResult = {
 
 export class TrialConflictError extends Error {
   status = 409;
-  constructor(message = 'Este CNPJ já ativou o período de testes.') {
+  constructor(message = 'Este identificador fiscal já ativou o período de testes.') {
     super(message);
     this.name = 'TrialConflictError';
   }
@@ -73,15 +73,17 @@ export async function ativarTrial(
   db: Database = getDb(),
   res?: Response
 ): Promise<TrialResult> {
-  const cnpj = normalizarCnpj(String(input.cnpj));
+  const cnpj = canonicalTaxId(String(input.cnpj));
   const nome = String(input.nome_empresa).trim();
   const email = String(input.email).trim().toLowerCase();
   const senha = String(input.senha);
   const googleReviewUrl = input.google_review_url ? String(input.google_review_url) : '';
   const wpp = normalizarWhatsapp(input.whatsapp || null);
 
-  if (!cnpj || cnpj.length !== 14) {
-    throw new TrialValidationError('CNPJ inválido.');
+  if (!taxIdValido(String(input.cnpj)) || !cnpj || cnpj.length < 5) {
+    throw new TrialValidationError(
+      'Identificador fiscal inválido. Use CNPJ (Brasil) ou Tax ID (5–20 caracteres).'
+    );
   }
   if (!nome || nome.length < 2) {
     throw new TrialValidationError('Nome da empresa inválido.');
@@ -92,13 +94,20 @@ export async function ativarTrial(
 
   if (input.whatsapp && String(input.whatsapp).trim() && !wpp) {
     throw new TrialValidationError(
-      'WhatsApp inválido. Use DDD + número (ex: 11999998888).'
+      'WhatsApp inválido. Use DDD + número (ex: 11999998888) ou código do país.'
     );
   }
 
   const existente = await db.get(`SELECT id FROM empresas WHERE cnpj = ?`, [cnpj]);
   if (existente) {
     throw new TrialConflictError();
+  }
+
+  const emailUser = await db.get(`SELECT id FROM usuarios WHERE lower(email) = lower(?) LIMIT 1`, [
+    email,
+  ]);
+  if (emailUser) {
+    throw new TrialConflictError('Este e-mail já está cadastrado.');
   }
 
   const id = crypto.randomUUID();
@@ -199,11 +208,11 @@ export async function ativarTrial(
     locale: input.locale,
   }).catch((e) => console.warn('e-mail trial:', e?.message || e));
 
-  // Captação n8n (CRM / WhatsApp / planilha / follow-up)
   notifyN8n('trial.ativado', {
     empresa_id: id,
     slug,
     cnpj,
+    tax_id: cnpj,
     nome_empresa: nome,
     email,
     whatsapp: wpp,
