@@ -8,6 +8,7 @@ import { notifyCrisisReview } from '../lib/push.js';
 import { normalizarWhatsapp, linkWhatsapp, mensagemClienteParaEmpresa } from '../lib/whatsapp.js';
 import { notificarCriticaPrivada, notificarAlertaCrise } from '../lib/notifications.js';
 import { normalizeLocale } from '../lib/locale.js';
+import { invalidatePdfCacheForEmpresa } from '../lib/pdfCache.js';
 export type ReviewInput={name?:string;comment?:string;rating:number;empresa_id?:string;empresa_ref?:string;website?:string;is_test?:boolean;ip?:string;client_whatsapp?:string;locale?:string};
 export type ReviewResult={success:true;id:number|undefined;ai:boolean;is_test?:boolean;sentiment?:string;ai_skipped_quota?:boolean;locale?:string;whatsapp_empresa_url?:string|null;whatsapp_mensagem?:string|null};
 export class ReviewNotFoundError extends Error{status=404;constructor(message='Empresa não encontrada.'){super(message);this.name='ReviewNotFoundError';}}
@@ -64,6 +65,9 @@ export async function criarReview(input:ReviewInput,db:Database=getDb()):Promise
     {sql:`INSERT INTO reviews (empresa_id,name,rating,comment,ai_reply,ai_tags) VALUES (?,?,?,?,?,?)`,params:baseParams}
   ];
   let lastErr:any;for(const a of attempts){try{result=await db.run(a.sql,a.params);lastErr=null;break;}catch(e){lastErr=e;}}if(lastErr)throw lastErr;
+  if(empresaId){
+    try{invalidatePdfCacheForEmpresa(empresaId);}catch(e:any){console.warn('pdf cache invalidation:',e?.message||e);}
+  }
   if(!isTest&&empresaId&&rating<=3){
     notifyCrisisReview(db,{empresaId,rating,name:name||undefined,slugOrId}).catch((e)=>console.warn('push crise:',e?.message||e));
     emailDaEmpresa(db,empresaId).then(async(email)=>{if(!email)return;await notificarCriticaPrivada({email,nomeEmpresa:nomeEmpresa||'Empresa',nomeCliente:name||undefined,rating,comment,aiReply,clientWhatsapp:clientWpp,slug:slugOrId,empresaId});try{const ha24h=new Date(Date.now()-24*60*60*1000).toISOString();const row=await db.get(`SELECT COUNT(*) as n FROM reviews WHERE empresa_id=? AND rating<=2 AND COALESCE(is_test,0)=0 AND createdAt>=?`,[empresaId,ha24h]);const n=Number(row?.n||0);if(n>=3)await notificarAlertaCrise({email,nomeEmpresa:nomeEmpresa||'Empresa',quantidade:n,slug:slugOrId,empresaId});}catch{}}).catch((e)=>console.warn('e-mail crítica:',e?.message||e));
