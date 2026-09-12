@@ -72,9 +72,10 @@ import {
 assertEnvOrExit();
 const JWT_SECRET = requireJwtSecret();
 
+/** Se /api/live não mostrar 1.1.6, o Render NÃO deployou este commit. */
 const BUILD = {
-  version: '1.1.4',
-  marker: 'pdf-postgres-resilient-v2',
+  version: '1.1.6',
+  marker: 'DEPLOY-PROOF-2026-09-12',
   started_at: new Date().toISOString(),
 };
 
@@ -152,7 +153,6 @@ app.get('/api/health', async (_req, res) => {
   res.status(dbPing.ok ? 200 : 503).json(body);
 });
 
-/** Metrics: mantém mecanismo da main (JOBS_SECRET). */
 app.get('/api/metrics', (req, res) => {
   const secret = process.env.JOBS_SECRET?.trim();
   if (process.env.NODE_ENV === 'production' && secret) {
