@@ -7,17 +7,22 @@ import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
-const CACHE_VERSION = 'pdf-v3';
+const CACHE_VERSION = 'pdf-v4';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 function cacheDir(): string {
-  const base =
-    process.env.PDF_CACHE_DIR ||
-    path.resolve(__dirname, '..', '..', 'data', 'pdf-cache');
+  const base = process.env.PDF_CACHE_DIR || path.resolve(__dirname, '..', '..', 'data', 'pdf-cache');
   fs.mkdirSync(base, { recursive: true });
   return base;
+}
+
+function empresaDir(empresaId: string): string {
+  const safeId = String(empresaId || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const dir = path.join(cacheDir(), safeId);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 function isValidPdf(buf: Buffer): boolean {
@@ -25,12 +30,8 @@ function isValidPdf(buf: Buffer): boolean {
 }
 
 function keyPath(empresaId: string, mesAno: string, plan: string): string {
-  const hash = crypto
-    .createHash('sha256')
-    .update(`${CACHE_VERSION}|${empresaId}|${mesAno}|${plan}`)
-    .digest('hex')
-    .slice(0, 24);
-  return path.join(cacheDir(), `${hash}.pdf`);
+  const hash = crypto.createHash('sha256').update(`${CACHE_VERSION}|${empresaId}|${mesAno}|${plan}`).digest('hex').slice(0, 24);
+  return path.join(empresaDir(empresaId), `${hash}.pdf`);
 }
 
 export function readPdfCache(empresaId: string, mesAno: string, plan: string): Buffer | null {
@@ -54,27 +55,24 @@ export function writePdfCache(empresaId: string, mesAno: string, plan: string, b
       console.warn('[pdfCache] recusando cache de PDF inválido');
       return;
     }
-    const filePath = keyPath(empresaId, mesAno, plan);
-    fs.writeFileSync(filePath, buffer);
+    fs.writeFileSync(keyPath(empresaId, mesAno, plan), buffer);
   } catch (error) {
     console.warn('[pdfCache] write:', (error as Error)?.message || error);
   }
 }
 
-/** Invalida fisicamente os PDFs de uma empresa em todos os formatos de cache conhecidos. */
+/** Remove todos os PDFs armazenados para uma empresa. */
 export function invalidatePdfCacheForEmpresa(empresaId: string): number {
   let removed = 0;
   try {
-    const directory = cacheDir();
+    const directory = empresaDir(empresaId);
     for (const name of fs.readdirSync(directory)) {
       if (!name.endsWith('.pdf')) continue;
-      // Os nomes são hashes; a forma segura de invalidar é não confiar no nome.
-      // A versão v3 já impede que caches anteriores sejam lidos.
-      void name;
+      try {
+        fs.unlinkSync(path.join(directory, name));
+        removed += 1;
+      } catch { /* best effort */ }
     }
-  } catch {
-    return removed;
-  }
-  void empresaId;
+  } catch { /* best effort */ }
   return removed;
 }
