@@ -3,10 +3,10 @@ import { getDb, dbEngine } from './db.js';
 import { getCurrentMonth } from './planUtils.js';
 
 export const PLAN_FEEDBACK_LIMITS: Record<string, number> = { trial: 30, teste: 30, inicial: 100, pro: 300, ultra: 800, corporativo: 2500, rei: 8000 };
-export const PLAN_TOKEN_LIMITS: Record<string, number> = { trial: 25_000, teste: 25_000, inicial: 0, pro: 0, ultra: 120_000, corporativo: 400_000, rei: 1_200_000 };
+export const PLAN_TOKEN_LIMITS: Record<string, number> = { trial: 10_000, teste: 25_000, inicial: 0, pro: 0, ultra: 120_000, corporativo: 400_000, rei: 1_200_000 };
 
 const AI_REVIEW_RESERVATION = Math.max(400, Number(process.env.AI_REVIEW_RESERVATION_TOKENS || 900));
-const AI_RESERVATION_TTL_MS = Math.max(5_000, Number(process.env.AI_REVIEW_RESERVATION_TTL_MS || 30_000));
+const AI_RESERVATION_TTL_MS = Math.max(5_000, Number(process.env.AI_RESERVATION_TTL_MS || 30_000));
 const aiReservations = new Map<string, { tokens: number; expiresAt: number }>();
 function cleanupAiReservations(now = Date.now()) { for (const [empresaId, r] of aiReservations) if (r.expiresAt <= now) aiReservations.delete(empresaId); }
 
