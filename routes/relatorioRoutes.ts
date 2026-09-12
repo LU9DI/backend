@@ -1,6 +1,6 @@
 /**
- * Relatório PDF mensal — autenticado, cache em disco, SEM tokens de IA.
- * Trial incluso (tudo nos 7 dias).
+ * Relatório PDF mensal — autenticado, cache memória+disco, SEM tokens de IA.
+ * Trial incluso. Otimizado: fingerprint de dados, dedup concorrente, write async.
  */
 import type { Express, Response } from 'express';
 import rateLimit from 'express-rate-limit';
@@ -19,7 +19,11 @@ import {
   isAdminUser,
   type AuthRequest,
 } from '../lib/auth.js';
-import { readPdfCache, writePdfCache } from '../lib/pdfCache.js';
+import {
+  readPdfCache,
+  writePdfCache,
+  withPdfInflight,
+} from '../lib/pdfCache.js';
 
 const pdfLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -38,6 +42,48 @@ function authModeOf(req: AuthRequest): string {
   if (isAdminUser(req.user)) return 'jwt_admin';
   if (req.user?.empresa_id) return 'jwt_cliente';
   return 'jwt';
+}
+
+/** Contagem leve para invalidar cache quando entram novas avaliações. */
+async function reviewFingerprint(
+  db: any,
+  empresaId: string,
+  mesAno: string
+): Promise<string> {
+  try {
+    const row = await db.get(
+      `SELECT COUNT(*)::int AS n FROM reviews WHERE empresa_id = $1`,
+      [empresaId]
+    );
+    // fallback sqlite-style
+    const n = Number(row?.n ?? row?.count ?? 0);
+    return `${n}|${mesAno}`;
+  } catch {
+    try {
+      const row = await db.get(
+        `SELECT COUNT(*) AS n FROM reviews WHERE empresa_id = ?`,
+        [empresaId]
+      );
+      return `${Number(row?.n || 0)}|${mesAno}`;
+    } catch {
+      return `0|${mesAno}`;
+    }
+  }
+}
+
+function sendPdf(
+  res: Response,
+  pdf: Buffer,
+  filename: string,
+  cache: 'HIT' | 'MISS'
+) {
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Length', String(pdf.length));
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('X-PDF-Cache', cache);
+  res.setHeader('X-PDF-Layout', PDF_LAYOUT_VERSION);
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.send(pdf);
 }
 
 export function mountRelatorioRoutes(app: Express) {
@@ -111,10 +157,13 @@ export function mountRelatorioRoutes(app: Express) {
         });
       }
       const mesAno = mesCheck.value;
+      const slug = empresa.slug || empresa.id.slice(0, 8);
+      const filename = `relatorio-${slug}-${mesAno}.pdf`;
 
-      // plan + versão de layout → invalida PDFs antigos automaticamente
-      const cacheKey = `${plan || 'trial'}|${PDF_LAYOUT_VERSION}`;
-      const cached = readPdfCache(empresa.id, mesAno, cacheKey);
+      const cachePlan = `${plan || 'trial'}|${PDF_LAYOUT_VERSION}`;
+      const fingerprint = await reviewFingerprint(db, empresa.id, mesAno);
+
+      const cached = readPdfCache(empresa.id, mesAno, cachePlan, fingerprint);
       if (cached) {
         await logPdfGeneration(db, {
           empresa_id: empresa.id,
@@ -125,22 +174,17 @@ export function mountRelatorioRoutes(app: Express) {
           auth_mode: auth_mode + '_cache',
           duration_ms: Date.now() - t0,
         });
-        const slug = empresa.slug || empresa.id.slice(0, 8);
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader(
-          'Content-Disposition',
-          `attachment; filename="relatorio-${slug}-${mesAno}.pdf"`
-        );
-        res.setHeader('X-PDF-Cache', 'HIT');
-        res.setHeader('X-PDF-Layout', PDF_LAYOUT_VERSION);
-        return res.send(cached);
+        return sendPdf(res, cached, filename, 'HIT');
       }
 
+      // schema só se ainda não garantido — barato com IF NOT EXISTS
       await ensureUnidadesSchema(db);
 
       let pdf: Buffer;
       try {
-        pdf = await gerarRelatorioMensalPDF(db, empresa.id, mesAno);
+        pdf = await withPdfInflight(empresa.id, mesAno, cachePlan, fingerprint, () =>
+          gerarRelatorioMensalPDF(db, empresa.id, mesAno)
+        );
       } catch (e: any) {
         await logPdfGeneration(db, {
           empresa_id: empresa.id,
@@ -158,7 +202,7 @@ export function mountRelatorioRoutes(app: Express) {
         });
       }
 
-      writePdfCache(empresa.id, mesAno, cacheKey, pdf);
+      writePdfCache(empresa.id, mesAno, cachePlan, pdf, fingerprint);
 
       await logPdfGeneration(db, {
         empresa_id: empresa.id,
@@ -170,14 +214,7 @@ export function mountRelatorioRoutes(app: Express) {
         duration_ms: Date.now() - t0,
       });
 
-      const slug = empresa.slug || empresa.id.slice(0, 8);
-      const filename = `relatorio-${slug}-${mesAno}.pdf`;
-
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.setHeader('X-PDF-Cache', 'MISS');
-      res.setHeader('X-PDF-Layout', PDF_LAYOUT_VERSION);
-      res.send(pdf);
+      return sendPdf(res, pdf, filename, 'MISS');
     })
   );
 }
