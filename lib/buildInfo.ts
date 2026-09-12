@@ -1,6 +1,6 @@
 /** Identidade do deploy. */
-export const APP_VERSION = '1.1.0';
-export const BUILD_MARKER = 'stable-boot+supabase+keepalive';
+export const APP_VERSION = '1.1.5';
+export const BUILD_MARKER = 'pdf-postgres-trial-fix';
 
 const STARTED_AT = new Date().toISOString();
 const STARTED_MS = Date.now();
