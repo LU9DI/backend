@@ -1,23 +1,17 @@
 /**
- * Relatório PDF mensal — autenticado, cache em disco, SEM tokens de IA.
- * Pode baixar quantas vezes quiser: cache evita regenerar e nunca chama Groq/Gemini.
+ * Relatório PDF mensal — autenticado, cache em disco, sem chamadas de IA.
  */
-import type { Express, Request, Response } from 'express';
+import type { Express, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { getDb, findEmpresa } from '../lib/db.js';
 import { gerarRelatorioMensalPDF, ensureUnidadesSchema } from '../relatorioPdf.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validateReportMonth } from '../lib/dateValidation.js';
-import { planTemPdf } from '../lib/plans.js';
+import { isTrialPlan, planTemPdf } from '../lib/plans.js';
 import { logPdfGeneration } from '../lib/opsLog.js';
-import {
-  autenticarToken,
-  isAdminUser,
-  type AuthRequest,
-} from '../lib/auth.js';
+import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
 import { readPdfCache, writePdfCache } from '../lib/pdfCache.js';
 
-/** Limite anti-abuso (não impede uso normal — 120/h por IP). */
 const pdfLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 120,
@@ -43,131 +37,69 @@ export function mountRelatorioRoutes(app: Express) {
     pdfLimiter,
     autenticarToken,
     asyncHandler(async (req: AuthRequest, res: Response) => {
-      const t0 = Date.now();
-      const auth_mode = authModeOf(req);
+      const startedAt = Date.now();
+      const authMode = authModeOf(req);
       const db = getDb();
-
       const empresa = await findEmpresa(req.params.ref);
+
       if (!empresa) {
-        await logPdfGeneration(db, {
-          status: 'error',
-          error: 'Empresa não encontrada',
-          auth_mode,
-          duration_ms: Date.now() - t0,
-        });
+        await logPdfGeneration(db, { status: 'error', error: 'Empresa não encontrada', auth_mode: authMode, duration_ms: Date.now() - startedAt });
         return res.status(404).json({ error: 'Empresa não encontrada.' });
       }
 
       if (!podeAcessarEmpresa(req, empresa.id)) {
-        await logPdfGeneration(db, {
-          empresa_id: empresa.id,
-          empresa_nome: empresa.nome_empresa,
-          status: 'forbidden',
-          error: 'Sem permissão',
-          auth_mode,
-          duration_ms: Date.now() - t0,
-        });
+        await logPdfGeneration(db, { empresa_id: empresa.id, empresa_nome: empresa.nome_empresa, status: 'forbidden', error: 'Sem permissão', auth_mode: authMode, duration_ms: Date.now() - startedAt });
         return res.status(403).json({ error: 'Sem permissão para baixar este relatório.' });
       }
 
       const plan = String(empresa.plan || '').toLowerCase();
-      if (!planTemPdf(plan)) {
-        await logPdfGeneration(db, {
-          empresa_id: empresa.id,
-          empresa_nome: empresa.nome_empresa,
-          status: 'forbidden',
-          error: `Plano ${plan} sem PDF`,
-          auth_mode,
-          duration_ms: Date.now() - t0,
-        });
-        return res.status(403).json({
-          error:
-            'Relatório PDF não disponível neste plano. Use o seletor de plano no painel (modo teste) ou faça upgrade.',
-          plan,
-        });
+      const trial = isTrialPlan(plan) || isTrialPlan(String(empresa.status || ''));
+      if (!planTemPdf(plan) && !trial) {
+        await logPdfGeneration(db, { empresa_id: empresa.id, empresa_nome: empresa.nome_empresa, status: 'forbidden', error: `Plano ${plan} sem PDF`, auth_mode: authMode, duration_ms: Date.now() - startedAt });
+        return res.status(403).json({ error: 'Relatório PDF não disponível neste plano.', plan });
       }
 
-      const mesCheck = validateReportMonth(req.query.mes, {
+      const monthCheck = validateReportMonth(req.query.mes, {
         defaultToCurrent: true,
         minYear: 2020,
         allowFutureMonths: 0,
       });
-      if (!mesCheck.ok) {
-        await logPdfGeneration(db, {
-          empresa_id: empresa.id,
-          empresa_nome: empresa.nome_empresa,
-          status: 'error',
-          error: mesCheck.error,
-          auth_mode,
-          duration_ms: Date.now() - t0,
-        });
-        return res.status(400).json({
-          error: mesCheck.error,
-          exemplo: '2026-09',
-        });
+      if (!monthCheck.ok) {
+        await logPdfGeneration(db, { empresa_id: empresa.id, empresa_nome: empresa.nome_empresa, status: 'error', error: monthCheck.error, auth_mode: authMode, duration_ms: Date.now() - startedAt });
+        return res.status(400).json({ error: monthCheck.error, exemplo: '2026-09' });
       }
-      const mesAno = mesCheck.value;
 
-      // Cache: redownload ilimitado sem CPU e SEM tokens
-      const cached = readPdfCache(empresa.id, mesAno, plan);
+      const mesAno = monthCheck.value;
+      const cachePlan = trial ? 'trial' : plan;
+      const cached = readPdfCache(empresa.id, mesAno, cachePlan);
       if (cached) {
-        await logPdfGeneration(db, {
-          empresa_id: empresa.id,
-          empresa_nome: empresa.nome_empresa,
-          mes: mesAno,
-          status: 'ok',
-          bytes: cached.length,
-          auth_mode: auth_mode + '_cache',
-          duration_ms: Date.now() - t0,
-        });
+        await logPdfGeneration(db, { empresa_id: empresa.id, empresa_nome: empresa.nome_empresa, mes: mesAno, status: 'ok', bytes: cached.length, auth_mode: `${authMode}_cache`, duration_ms: Date.now() - startedAt });
         const slug = empresa.slug || empresa.id.slice(0, 8);
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader(
-          'Content-Disposition',
-          `attachment; filename="relatorio-${slug}-${mesAno}.pdf"`
-        );
+        res.setHeader('Content-Disposition', `attachment; filename="relatorio-${slug}-${mesAno}.pdf"`);
         res.setHeader('X-PDF-Cache', 'HIT');
         return res.send(cached);
       }
 
       await ensureUnidadesSchema(db);
 
-      // Nunca passa callGroq → zero tokens de IA no PDF
       let pdf: Buffer;
       try {
-        pdf = await gerarRelatorioMensalPDF(db, empresa.id, mesAno /* sem callGroq */);
-      } catch (e: any) {
-        await logPdfGeneration(db, {
-          empresa_id: empresa.id,
-          empresa_nome: empresa.nome_empresa,
-          mes: mesAno,
-          status: 'error',
-          error: e?.message || 'Falha geração PDF',
-          auth_mode,
-          duration_ms: Date.now() - t0,
-        });
-        throw e;
+        // Intencionalmente sem callGroq: o download nunca consome tokens de IA.
+        pdf = await gerarRelatorioMensalPDF(db, empresa.id, mesAno);
+      } catch (error: any) {
+        await logPdfGeneration(db, { empresa_id: empresa.id, empresa_nome: empresa.nome_empresa, mes: mesAno, status: 'error', error: error?.message || 'Falha geração PDF', auth_mode: authMode, duration_ms: Date.now() - startedAt });
+        throw error;
       }
 
-      writePdfCache(empresa.id, mesAno, plan, pdf);
-
-      await logPdfGeneration(db, {
-        empresa_id: empresa.id,
-        empresa_nome: empresa.nome_empresa,
-        mes: mesAno,
-        status: 'ok',
-        bytes: pdf.length,
-        auth_mode,
-        duration_ms: Date.now() - t0,
-      });
+      writePdfCache(empresa.id, mesAno, cachePlan, pdf);
+      await logPdfGeneration(db, { empresa_id: empresa.id, empresa_nome: empresa.nome_empresa, mes: mesAno, status: 'ok', bytes: pdf.length, auth_mode: authMode, duration_ms: Date.now() - startedAt });
 
       const slug = empresa.slug || empresa.id.slice(0, 8);
-      const filename = `relatorio-${slug}-${mesAno}.pdf`;
-
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Disposition', `attachment; filename="relatorio-${slug}-${mesAno}.pdf"`);
       res.setHeader('X-PDF-Cache', 'MISS');
-      res.send(pdf);
+      return res.send(pdf);
     })
   );
 }
