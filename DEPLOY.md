@@ -1,82 +1,32 @@
-# Deploy checklist — Filtra.IA
+# Deploy Filtra.IA API (Render)
 
-## 1. Variáveis obrigatórias (produção)
+## Branch correta
 
-```env
-NODE_ENV=production
-JWT_SECRET=...          # >= 32 chars aleatórios
-APP_URL=https://seudominio.com
-FRONTEND_URL=https://seudominio.com
-API_PUBLIC_URL=https://api.seudominio.com   # ou mesmo host
-CORS_ORIGINS=https://seudominio.com
+O serviço no Render deve apontar para **uma** destas branches e fazer deploy do commit mais recente:
 
-# Pagamentos (pelo menos um)
-STRIPE_SECRET_KEY=sk_live_...
-STRIPE_WEBHOOK_SECRET=whsec_...
-# e/ou
-MP_ACCESS_TOKEN=APP_USR-...
-MP_WEBHOOK_SECRET=...
-MP_NOTIFICATION_URL=https://api.seudominio.com/api/webhook/mercadopago
-# e/ou
-PAYPAL_CLIENT_ID=...
-PAYPAL_CLIENT_SECRET=...
-PAYPAL_WEBHOOK_ID=...
-PAYPAL_MODE=live
+- `main` — build esperado: `1.1.4+` / marker com `pdf-postgres`
+- `fix/render-production-start` — build esperado: `1.1.5` / `pdf-postgres-trial-fix`
 
-# IA
-GROQ_API_KEY=...
-# opcional failover
-GEMINI_API_KEY=...
-
-# Jobs (cron)
-JOBS_SECRET=...
-
-# E-mail
-SMTP_HOST=...
-SMTP_PORT=587
-SMTP_USER=...
-SMTP_PASS=...
-SMTP_FROM=noreply@seudominio.com
-```
-
-## 2. Webhooks públicos (HTTPS)
-
-| Provider | URL |
-
-| Stripe | `POST /api/webhook/stripe` |
-| Mercado Pago | `POST /api/webhook/mercadopago` |
-| PayPal | `POST /api/webhook/paypal` |
-| n8n | `POST /api/webhook/n8n` |
-
-## 3. Cron sugerido
+## Como confirmar
 
 ```bash
-# Trial 1–2 dias + expirações + retries
-0 9 * * * curl -X POST -H "Authorization: Bearer $JOBS_SECRET" https://api.../api/jobs/expirations
-
-# Trial meio do período (~dia 5)
-0 10 * * * curl -X POST -H "Authorization: Bearer $JOBS_SECRET" https://api.../api/jobs/trial-mid
-
-# Backup SQLite diário
-30 3 * * * curl -X POST -H "Authorization: Bearer $JOBS_SECRET" https://api.../api/jobs/backup
-
-# Fila de retry a cada hora
-15 * * * * curl -X POST -H "Authorization: Bearer $JOBS_SECRET" https://api.../api/jobs/retry-failures
+curl -sS https://api.filtraai.com/api/live
 ```
 
-## 4. Health
+Se ainda aparecer `1.1.3` ou `codex-hardening-n8n-pg-metrics-intact`, o Render **não** está no commit novo.
 
-`GET /api/health` deve retornar `ok: true` e flags `stripe` / `paypal` / `pix` / `ai`.
+## Passos no Render
 
-## 5. Cookies / CORS
+1. Dashboard → serviço da API
+2. Settings → Branch = `main` **ou** `fix/render-production-start` (a que você usa)
+3. Manual Deploy → Deploy latest commit
+4. Aguarde Live
+5. Confira `/api/live` de novo
 
-- Produção: cookies com `Secure; SameSite=None` se front e API em domínios diferentes.
-- Preferir mesmo domínio (proxy reverso) com `SameSite=Lax`.
+## PDF
 
-## 6. Pós-deploy
+Trial e planos Pro+ geram PDF. Plano `inicial` não.
 
-1. Login admin
-2. Comprar plano teste (Stripe test / MP sandbox)
-3. Confirmar webhook no admin técnico
-4. Baixar PDF no painel
-5. Enviar 1 feedback de teste
+## Segurança
+
+Em produção, defina `ALLOW_PLAN_SWITCH=0` (ou remova a variável) para não permitir troca de plano sem pagamento.
