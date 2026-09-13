@@ -12,7 +12,12 @@ async function columnNames(db: Database, table: string): Promise<Set<string>> {
   }
 }
 
-async function addColumnIfMissing(db: Database, table: string, column: string, ddlType: string) {
+async function addColumnIfMissing(
+  db: Database,
+  table: string,
+  column: string,
+  ddlType: string
+) {
   const cols = await columnNames(db, table);
   if (cols.has(column)) return;
   try {
@@ -20,11 +25,13 @@ async function addColumnIfMissing(db: Database, table: string, column: string, d
     console.log(`[schema] + ${table}.${column}`);
   } catch (e: any) {
     const msg = String(e?.message || e);
-    if (!/already exists|duplicate column/i.test(msg)) console.warn(`[schema] ${table}.${column}:`, msg);
+    if (!/already exists|duplicate column/i.test(msg)) {
+      console.warn(`[schema] ${table}.${column}:`, msg);
+    }
   }
 }
 
-/** Colunas usadas pelo trial, painel, billing e agendamento de relatórios. */
+/** Colunas usadas pelo trial, painel e billing. */
 export async function ensureRuntimeSchema(db: Database) {
   await addColumnIfMissing(db, 'empresas', 'slug', 'TEXT');
   await addColumnIfMissing(db, 'empresas', 'google_review_url', 'TEXT');
@@ -41,8 +48,24 @@ export async function ensureRuntimeSchema(db: Database) {
   await addColumnIfMissing(db, 'empresas', 'report_last_sent_at', 'TEXT');
   await addColumnIfMissing(db, 'usuarios', 'email', 'TEXT');
 
-  try { await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_empresas_cnpj ON empresas(cnpj)`); } catch { /* */ }
-  try { await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_empresas_slug ON empresas(slug)`); } catch { /* */ }
-  try { await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios(email)`); } catch { /* */ }
-  try { await db.exec(`CREATE INDEX IF NOT EXISTS idx_empresas_report_due ON empresas(report_next_due_at)`); } catch { /* */ }
+  try {
+    await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_empresas_cnpj ON empresas(cnpj)`);
+  } catch {
+    /* */
+  }
+  try {
+    await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_empresas_slug ON empresas(slug)`);
+  } catch {
+    /* */
+  }
+  try {
+    await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios(email)`);
+  } catch {
+    /* */
+  }
+  try {
+    await db.exec(`CREATE INDEX IF NOT EXISTS idx_empresas_report_due ON empresas(report_next_due_at)`);
+  } catch {
+    /* */
+  }
 }
