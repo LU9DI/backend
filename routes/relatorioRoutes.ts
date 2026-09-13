@@ -1,173 +1,103 @@
 /**
- * Relatório PDF mensal — autenticado, cache em disco, SEM tokens de IA.
- * Pode baixar quantas vezes quiser: cache evita regenerar e nunca chama Groq/Gemini.
+ * Relatório inteligente via WhatsApp.
+ * Dados consolidados -> IA -> cache PostgreSQL/SQLite -> n8n/WhatsApp.
  */
-import type { Express, Request, Response } from 'express';
+import type { Express, Request, Response, NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
 import { getDb, findEmpresa } from '../lib/db.js';
-import { gerarRelatorioMensalPDF, ensureUnidadesSchema } from '../relatorioPdf.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { validateReportMonth } from '../lib/dateValidation.js';
-import { planTemPdf } from '../lib/plans.js';
-import { logPdfGeneration } from '../lib/opsLog.js';
+import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
+import { verifyInboundSecret } from '../lib/n8n.js';
+import { planTemIA } from '../lib/quota.js';
 import {
-  autenticarToken,
-  isAdminUser,
-  type AuthRequest,
-} from '../lib/auth.js';
-import { readPdfCache, writePdfCache } from '../lib/pdfCache.js';
+  buildReportPeriod,
+  ensureReportCacheSchema,
+  getOrGenerateWhatsAppReport,
+} from '../services/whatsappReportService.js';
 
-/** Limite anti-abuso (não impede uso normal — 120/h por IP). */
-const pdfLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 120,
+const reportLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'Muitos downloads de PDF deste IP. Aguarde um pouco.' },
+  message: { error: 'Muitas solicitações de relatório. Aguarde um pouco.' },
 });
 
-function podeAcessarEmpresa(req: AuthRequest, empresaId: string): boolean {
+function authReport(req: AuthRequest, res: Response, next: NextFunction) {
+  const secret = String(req.headers['x-filtra-secret'] || req.headers['x-n8n-secret'] || '').trim();
+  if (secret && verifyInboundSecret(secret)) {
+    (req as AuthRequest & { reportAuth?: string }).reportAuth = 'n8n';
+    return next();
+  }
+  return autenticarToken(req, res, next);
+}
+
+function podeAcessarEmpresa(req: AuthRequest & { reportAuth?: string }, empresaId: string): boolean {
+  if (req.reportAuth === 'n8n') return true;
   if (isAdminUser(req.user)) return true;
   return Boolean(req.user?.empresa_id && req.user.empresa_id === empresaId);
 }
 
-function authModeOf(req: AuthRequest): string {
-  if (isAdminUser(req.user)) return 'jwt_admin';
-  if (req.user?.empresa_id) return 'jwt_cliente';
-  return 'jwt';
-}
-
 export function mountRelatorioRoutes(app: Express) {
   app.get(
-    '/api/empresa/:ref/relatorio.pdf',
-    pdfLimiter,
-    autenticarToken,
-    asyncHandler(async (req: AuthRequest, res: Response) => {
+    '/api/reports/whatsapp/:clienteId',
+    reportLimiter,
+    authReport,
+    asyncHandler(async (req: AuthRequest & { reportAuth?: string }, res: Response) => {
       const t0 = Date.now();
-      const auth_mode = authModeOf(req);
-      const db = getDb();
-
-      const empresa = await findEmpresa(req.params.ref);
-      if (!empresa) {
-        await logPdfGeneration(db, {
-          status: 'error',
-          error: 'Empresa não encontrada',
-          auth_mode,
-          duration_ms: Date.now() - t0,
-        });
-        return res.status(404).json({ error: 'Empresa não encontrada.' });
+      const clienteRef = String(req.params.clienteId || '').trim();
+      if (!clienteRef || clienteRef.length > 160) {
+        return res.status(400).json({ error: 'clienteId inválido.' });
       }
 
+      const db = getDb();
+      await ensureReportCacheSchema(db);
+
+      const empresa = await findEmpresa(clienteRef);
+      if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
+
       if (!podeAcessarEmpresa(req, empresa.id)) {
-        await logPdfGeneration(db, {
-          empresa_id: empresa.id,
-          empresa_nome: empresa.nome_empresa,
-          status: 'forbidden',
-          error: 'Sem permissão',
-          auth_mode,
-          duration_ms: Date.now() - t0,
-        });
-        return res.status(403).json({ error: 'Sem permissão para baixar este relatório.' });
+        return res.status(403).json({ error: 'Sem permissão para acessar este relatório.' });
       }
 
       const plan = String(empresa.plan || '').toLowerCase();
-      if (!planTemPdf(plan)) {
-        await logPdfGeneration(db, {
-          empresa_id: empresa.id,
-          empresa_nome: empresa.nome_empresa,
-          status: 'forbidden',
-          error: `Plano ${plan} sem PDF`,
-          auth_mode,
-          duration_ms: Date.now() - t0,
-        });
+      if (!planTemIA(plan)) {
         return res.status(403).json({
-          error:
-            'Relatório PDF não disponível neste plano. Use o seletor de plano no painel (modo teste) ou faça upgrade.',
+          error: 'Relatório inteligente via WhatsApp não disponível neste plano.',
           plan,
         });
       }
 
-      const mesCheck = validateReportMonth(req.query.mes, {
-        defaultToCurrent: true,
-        minYear: 2020,
-        allowFutureMonths: 0,
-      });
-      if (!mesCheck.ok) {
-        await logPdfGeneration(db, {
-          empresa_id: empresa.id,
-          empresa_nome: empresa.nome_empresa,
-          status: 'error',
-          error: mesCheck.error,
-          auth_mode,
-          duration_ms: Date.now() - t0,
-        });
-        return res.status(400).json({
-          error: mesCheck.error,
-          exemplo: '2026-09',
-        });
-      }
-      const mesAno = mesCheck.value;
-
-      // Cache: redownload ilimitado sem CPU e SEM tokens
-      const cached = readPdfCache(empresa.id, mesAno, plan);
-      if (cached) {
-        await logPdfGeneration(db, {
-          empresa_id: empresa.id,
-          empresa_nome: empresa.nome_empresa,
-          mes: mesAno,
-          status: 'ok',
-          bytes: cached.length,
-          auth_mode: auth_mode + '_cache',
-          duration_ms: Date.now() - t0,
-        });
-        const slug = empresa.slug || empresa.id.slice(0, 8);
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader(
-          'Content-Disposition',
-          `attachment; filename="relatorio-${slug}-${mesAno}.pdf"`
-        );
-        res.setHeader('X-PDF-Cache', 'HIT');
-        return res.send(cached);
-      }
-
-      await ensureUnidadesSchema(db);
-
-      // Nunca passa callGroq → zero tokens de IA no PDF
-      let pdf: Buffer;
+      let periodo;
       try {
-        pdf = await gerarRelatorioMensalPDF(db, empresa.id, mesAno /* sem callGroq */);
+        periodo = buildReportPeriod(req.query.periodo as string | undefined, req.query.inicio as string | undefined, req.query.fim as string | undefined);
       } catch (e: any) {
-        await logPdfGeneration(db, {
-          empresa_id: empresa.id,
-          empresa_nome: empresa.nome_empresa,
-          mes: mesAno,
-          status: 'error',
-          error: e?.message || 'Falha geração PDF',
-          auth_mode,
-          duration_ms: Date.now() - t0,
-        });
-        throw e;
+        return res.status(400).json({ error: String(e?.message || 'Período inválido.') });
       }
 
-      writePdfCache(empresa.id, mesAno, plan, pdf);
+      try {
+        const result = await getOrGenerateWhatsAppReport(db, empresa.id, periodo);
+        const duration = Date.now() - t0;
+        console.log(`[REPORT] cliente=${empresa.id} periodo=${periodo.chave} cache=${result.cached ? 'HIT' : 'MISS'}${result.cached ? '' : ' ai=generated'} duration_ms=${duration}`);
 
-      await logPdfGeneration(db, {
-        empresa_id: empresa.id,
-        empresa_nome: empresa.nome_empresa,
-        mes: mesAno,
-        status: 'ok',
-        bytes: pdf.length,
-        auth_mode,
-        duration_ms: Date.now() - t0,
-      });
-
-      const slug = empresa.slug || empresa.id.slice(0, 8);
-      const filename = `relatorio-${slug}-${mesAno}.pdf`;
-
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.setHeader('X-PDF-Cache', 'MISS');
-      res.send(pdf);
+        return res.json({
+          success: true,
+          cliente_id: empresa.id,
+          periodo: {
+            tipo: periodo.tipo,
+            inicio: periodo.inicio,
+            fim: periodo.fim,
+          },
+          cached: result.cached,
+          texto: result.text,
+        });
+      } catch (e: any) {
+        console.error(`[REPORT] generation_failed cliente=${empresa.id} periodo=${periodo.chave}`);
+        return res.status(502).json({
+          success: false,
+          error: 'Não foi possível gerar o relatório agora. Tente novamente em instantes.',
+        });
+      }
     })
   );
 }
