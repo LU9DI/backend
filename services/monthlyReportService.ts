@@ -6,12 +6,15 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { Database } from 'sqlite';
 import { planTemPdf } from '../lib/plans.js';
+import { ensureRuntimeSchema } from '../lib/schemaEnsure.js';
 import { ensureMonthlyReportSchema, monthlyReportExists, saveMonthlyReport } from '../lib/monthlyReportStore.js';
 import type { ReportCycle } from '../lib/reportCycle.js';
 
 const execFileAsync = promisify(execFile);
 
-function normalizeLang(raw: unknown): 'pt-BR' | 'en-US' | 'es-ES' | 'zh-CN' {
+type ReportLang = 'pt-BR' | 'en-US' | 'es-ES' | 'zh-CN';
+
+function normalizeLang(raw: unknown): ReportLang {
   const s = String(raw || 'pt').toLowerCase();
   if (s.startsWith('en')) return 'en-US';
   if (s.startsWith('es')) return 'es-ES';
@@ -21,7 +24,7 @@ function normalizeLang(raw: unknown): 'pt-BR' | 'en-US' | 'es-ES' | 'zh-CN' {
 
 function depthForPlan(planRaw: string): 'pro' | 'ultra' | 'corporativo' | 'rei' {
   const p = String(planRaw || '').toLowerCase();
-  if (p === 'trial' || p === 'rei' || p === 'rei-anual') return 'rei';
+  if (p === 'trial' || p === 'teste' || p === 'rei' || p === 'rei-anual') return 'rei';
   if (p === 'corporativo' || p === 'corporate') return 'corporativo';
   if (p === 'ultra' || p === 'ultra-anual') return 'ultra';
   return 'pro';
@@ -64,6 +67,7 @@ export async function generateMonthlyReport(
   empresa: any,
   cycle: ReportCycle
 ): Promise<{ pdf: Buffer; cycleKey: string; fileName: string; alreadyExists: boolean }> {
+  await ensureRuntimeSchema(db);
   await ensureMonthlyReportSchema(db);
 
   const plan = String(empresa.plan || '').toLowerCase();
@@ -78,6 +82,8 @@ export async function generateMonthlyReport(
     };
   }
 
+  // Mantém compatibilidade com bancos legados. O adapter Postgres traduz
+  // PRAGMA table_info para information_schema.
   const cols = (await db.all(`PRAGMA table_info(reviews)`)).map((c: any) => c.name);
   if (!cols.includes('is_test')) await db.exec(`ALTER TABLE reviews ADD COLUMN is_test INTEGER DEFAULT 0`);
   if (!cols.includes('sentiment')) await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment TEXT`);
@@ -90,7 +96,7 @@ export async function generateMonthlyReport(
       WHERE empresa_id = ?
         AND createdAt >= ?
         AND createdAt < ?
-        AND IFNULL(is_test, 0) = 0
+        AND COALESCE(is_test, 0) = 0
         AND rating BETWEEN 1 AND 5
       ORDER BY createdAt ASC`,
     [empresa.id, cycle.start.toISOString(), cycle.endExclusive.toISOString()]
@@ -114,9 +120,9 @@ export async function generateMonthlyReport(
 
   for (const r of reviews as any[]) {
     const s = String(r.sentiment || '').toLowerCase();
-    if (s.includes('positivo')) sentimentCounts.positive++;
-    else if (s.includes('negativo')) sentimentCounts.negative++;
-    else if (s.includes('neutro')) sentimentCounts.neutral++;
+    if (s.includes('positivo') || s.includes('positive') || s.includes('positivo')) sentimentCounts.positive++;
+    else if (s.includes('negativo') || s.includes('negative')) sentimentCounts.negative++;
+    else if (s.includes('neutro') || s.includes('neutral')) sentimentCounts.neutral++;
 
     if (includeAi && r.ai_tags) {
       try {
@@ -153,14 +159,14 @@ export async function generateMonthlyReport(
   let units: any[] = [];
   if (includeUnits) {
     const unitRows = await db.all(
-      `SELECT id, nome FROM unidades WHERE empresa_id = ? AND IFNULL(ativo,1) = 1 ORDER BY nome`,
+      `SELECT id, nome FROM unidades WHERE empresa_id = ? AND COALESCE(ativo,1) = 1 ORDER BY nome`,
       [empresa.id]
     );
-    const byUnit = new Map<string, any>();
+    const byUnit = new Map<string, any[]>();
     for (const r of reviews as any[]) {
       if (!r.unidade_id) continue;
       if (!byUnit.has(r.unidade_id)) byUnit.set(r.unidade_id, []);
-      byUnit.get(r.unidade_id).push(r);
+      byUnit.get(r.unidade_id)!.push(r);
     }
     units = unitRows
       .map((u: any) => {
