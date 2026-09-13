@@ -12,8 +12,7 @@ function authorizedJob(req: Request): boolean {
   const header = String(req.headers.authorization || '');
   const bearer = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
   const custom = String(req.headers['x-jobs-secret'] || '').trim();
-  const q = String(req.query.secret || '').trim();
-  return bearer === secret || custom === secret || q === secret;
+  return bearer === secret || custom === secret;
 }
 
 function canAccess(req: AuthRequest, empresaId: string): boolean {
@@ -30,23 +29,34 @@ export function mountMonthlyReportRoutes(app: Express) {
 
     const now = new Date();
     const empresas = await db.all(
-      `SELECT id, nome_empresa, slug, plan, status, criado_em, locale
+      `SELECT id, nome_empresa, slug, plan, status, criado_em, plano_iniciado_em, locale
          FROM empresas
-        WHERE status = 'ativo'
-          AND plan IN ('pro', 'ultra', 'corporativo', 'rei')
-          AND criado_em IS NOT NULL
-        ORDER BY criado_em ASC`
+        WHERE status IN ('ativo', 'trial')
+          AND plan IN ('trial', 'teste', 'pro', 'ultra', 'corporativo', 'rei')
+          AND COALESCE(plano_iniciado_em, criado_em) IS NOT NULL
+        ORDER BY COALESCE(plano_iniciado_em, criado_em) ASC`
     );
 
-    const stats = { candidatos: empresas.length, gerados: 0, ja_existiam: 0, sem_ciclo_fechado: 0, erros: 0 };
+    const stats = {
+      candidatos: empresas.length,
+      gerados: 0,
+      ja_existiam: 0,
+      sem_ciclo_fechado: 0,
+      erros: 0,
+    };
     const errors: Array<{ empresa: string; error: string }> = [];
 
     for (const empresa of empresas || []) {
       try {
         if (!planTemPdf(empresa.plan)) continue;
-        const current = getCycleForDate(empresa.criado_em, now);
+
+        // Para dados legados, criado_em é apenas fallback. Novas ativações
+        // usam plano_iniciado_em, gravado no momento da compra/ativação.
+        const anchor = empresa.plano_iniciado_em || empresa.criado_em;
+        const current = getCycleForDate(anchor, now);
         const previousReference = new Date(current.start.getTime() - 1);
-        const closed = getCycleForDate(empresa.criado_em, previousReference);
+        const closed = getCycleForDate(anchor, previousReference);
+
         if (!cycleEnded(closed, now)) {
           stats.sem_ciclo_fechado++;
           continue;
@@ -57,7 +67,10 @@ export function mountMonthlyReportRoutes(app: Express) {
         else stats.gerados++;
       } catch (e: any) {
         stats.erros++;
-        errors.push({ empresa: empresa.nome_empresa || empresa.id, error: String(e?.message || e) });
+        errors.push({
+          empresa: empresa.nome_empresa || empresa.id,
+          error: String(e?.message || e),
+        });
       }
     }
 
@@ -79,7 +92,10 @@ export function mountMonthlyReportRoutes(app: Express) {
 
     const pdf = Buffer.isBuffer(report.pdf_data) ? report.pdf_data : Buffer.from(report.pdf_data);
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${report.file_name || `relatorio-${empresa.slug || empresa.id}-${report.cycle_key}.pdf`}"`);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${report.file_name || `relatorio-${empresa.slug || empresa.id}-${report.cycle_key}.pdf`}"`
+    );
     res.setHeader('Content-Length', String(pdf.length));
     res.send(pdf);
   });
