@@ -1,5 +1,5 @@
 /**
- * Filtra.AI API — bootstrap estável (cold start rápido no Render).
+ * Filtra.AI — bootstrap da API (produção-ready)
  */
 import express from 'express';
 import cors from 'cors';
@@ -8,14 +8,13 @@ import 'dotenv/config';
 import type { Server } from 'http';
 
 import { assertEnvOrExit } from './lib/env.js';
-import { initDB, getDb } from './lib/db.js';
+import { initDB, getDb, dbEngine, pingDb } from './lib/db.js';
 import { requireJwtSecret, setAuthCookie, autenticarToken } from './lib/auth.js';
+import { jwtRotationStatus } from './lib/jwtKeys.js';
 import { buildCorsOptions } from './lib/cors.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { requestIdMiddleware, securityHeaders } from './middleware/security.js';
 import { latencyMiddleware, getHttpMetrics } from './lib/metrics.js';
-import { getBuildInfo } from './lib/buildInfo.js';
-import { mountHealthRoutes } from './lib/healthMonitor.js';
 import { mountTrialRoutes } from './routes/trialRoutes.js';
 import { mountAuthRoutes } from './routes/authRoutes.js';
 import { mountEmpresaRoutes } from './routes/empresaRoutes.js';
@@ -25,12 +24,14 @@ import { mountAdminTecnicoRoutes } from './routes/adminTecnicoRoutes.js';
 import { mountAdminNegocioRoutes } from './routes/adminNegocioRoutes.js';
 import { mountTokenMetricsRoutes } from './routes/tokenMetricsRoutes.js';
 import { mountRelatorioRoutes } from './routes/relatorioRoutes.js';
+import { mountRelatorioInteligenteRoutes } from './routes/relatorioInteligenteRoutes.js';
 import { mountPlanSwitchRoutes } from './routes/planSwitchRoutes.js';
 import { mountWebAuthnRoutes } from './routes/webauthnRoutes.js';
 import { mountPushRoutes } from './routes/pushRoutes.js';
 import { mountJobsRoutes } from './routes/jobsRoutes.js';
 import { mountPayPalRoutes } from './routes/paypalRoutes.js';
 import { mountPixRoutes } from './routes/pixRoutes.js';
+import { mountWechatRoutes } from './routes/wechatRoutes.js';
 import { mountSubscriptionRoutes } from './routes/subscriptionRoutes.js';
 import { mountUnidadeRoutes } from './routes/unidadeRoutes.js';
 import { mountExportRoutes } from './routes/exportRoutes.js';
@@ -45,18 +46,20 @@ import { mountStripeRoutes } from './stripeRoutes.js';
 import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
 import { paypalConfigured } from './lib/paypal.js';
 import { mpConfigured } from './lib/mercadopago.js';
-import { n8nConfigured, n8nStatus } from './lib/n8n.js';
-import { getAiLoadStats } from './groqService.js';
+import { wechatConfigured } from './lib/wechat.js';
+import { aiConfigured, listAiProviders, getAiLoadStats } from './groqService.js';
 import { ensureUnidadesSchema } from './lib/unidades.js';
-import { ensureWebAuthnSchema } from './lib/webauthn.js';
-import { ensurePushSchema, initWebPush } from './lib/push.js';
+import { ensureWebAuthnSchema, webauthnConfig } from './lib/webauthn.js';
+import { ensurePushSchema, pushConfigured, initWebPush } from './lib/push.js';
 import { ensureAiUsageSchema } from './lib/aiUsage.js';
 import { ensureOpsTables } from './lib/opsLog.js';
 import { ensureAuditSchema } from './lib/auditLog.js';
 import { ensureRetryQueue, startRetryWorker } from './lib/retryQueue.js';
 import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
-import { ensureRuntimeSchema } from './lib/schemaEnsure.js';
+import { allowPlanSwitch } from './lib/plans.js';
+import { smtpConfigured } from './lib/mailer.js';
+import { n8nConfigured } from './lib/n8n.js';
 import {
   anonymizeOldClientWhatsapp,
   ensureReviewTreatmentColumns,
@@ -77,25 +80,63 @@ app.use(cookieParser());
 app.use(latencyMiddleware as any);
 app.use((req, res, next) => {
   if (req.originalUrl?.startsWith('/api/webhook/stripe')) return next();
-  return express.json({ limit: '40kb' })(req, res, next);
+  return express.json({ limit: '20kb' })(req, res, next);
 });
 app.use(cors(buildCorsOptions()));
 
-mountHealthRoutes(app);
+/** Health com ping real no banco — Render usa para saber se o serviço está vivo. */
+app.get('/api/health', async (_req, res) => {
+  const ai = getAiLoadStats();
+  let dbPing: { ok: boolean; engine: string; error?: string } = {
+    ok: false,
+    engine: 'unknown',
+  };
+  try {
+    dbPing = await pingDb();
+  } catch (e: any) {
+    dbPing = { ok: false, engine: 'unknown', error: String(e?.message || e) };
+  }
+
+  const body = {
+    ok: dbPing.ok,
+    db: dbPing.engine || (typeof dbEngine === 'function' ? dbEngine() : 'sqlite'),
+    db_ok: dbPing.ok,
+    stripe: stripeConfigured(),
+    paypal: paypalConfigured(),
+    pix: mpConfigured(),
+    wechat: wechatConfigured(),
+    ai: aiConfigured(),
+    ai_providers: listAiProviders(),
+    plan_switch: allowPlanSwitch(),
+    n8n: n8nConfigured(),
+    jwt: jwtRotationStatus(),
+    webauthn: webauthnConfig(),
+    push: pushConfigured(),
+    smtp: smtpConfigured(),
+    ai_latency: {
+      groq: ai.stats.groq.latency,
+      gemini: ai.stats.gemini.latency,
+    },
+    http_latency: getHttpMetrics().global,
+    env: process.env.NODE_ENV || 'development',
+    time: new Date().toISOString(),
+  };
+
+  res.status(dbPing.ok ? 200 : 503).json(body);
+});
 
 app.get('/api/metrics', (req, res) => {
   const secret = process.env.JOBS_SECRET?.trim();
   if (process.env.NODE_ENV === 'production' && secret) {
-    if (String(req.headers['x-jobs-secret'] || '') !== secret) {
+    const got = String(req.headers['x-jobs-secret'] || '');
+    if (got !== secret) {
       return res.status(401).json({ error: 'Não autorizado.' });
     }
   }
   res.json({
     time: new Date().toISOString(),
-    build: getBuildInfo(),
     http: getHttpMetrics(),
     ai: getAiLoadStats(),
-    n8n: n8nStatus(),
   });
 });
 
@@ -103,87 +144,109 @@ const PORT = Number(process.env.PORT || 5000);
 let server: Server | null = null;
 let shuttingDown = false;
 
-async function bootSafe(label: string, fn: () => Promise<void>) {
+async function runSentimentBackfillOnBoot() {
+  if (process.env.BACKFILL_SENTIMENT === '0') return;
   try {
-    await fn();
+    const db = getDb();
+    const missing = await countMissingSentiment(db);
+    if (missing === 0) return;
+    const limit = Math.max(1, Number(process.env.BACKFILL_SENTIMENT_LIMIT || 2000));
+    const r = await backfillSentiment(db, {
+      limit,
+      useAi: process.env.BACKFILL_SENTIMENT_AI === '1',
+    });
+    console.log(`🧠 Backfill sentimento: updated=${r.updated} errors=${r.errors}`);
   } catch (e: any) {
-    console.warn(`[boot] ${label}:`, e?.message || e);
+    console.warn('Backfill sentimento:', e?.message || e);
   }
 }
 
-/** Trabalho pesado depois do listen — cold start mais rápido. */
-async function backgroundBoot() {
-  await bootSafe('unidades', () => ensureUnidadesSchema(getDb()));
-  await bootSafe('webauthn', () => ensureWebAuthnSchema(getDb()));
-  await bootSafe('push', async () => {
-    await ensurePushSchema(getDb());
-    initWebPush();
-  });
-  await bootSafe('aiUsage', () => ensureAiUsageSchema(getDb()));
-  await bootSafe('ops', () => ensureOpsTables(getDb()));
-  await bootSafe('audit', () => ensureAuditSchema(getDb()));
-  await bootSafe('plan pricing', async () => {
-    await ensurePlanPricingSchema(getDb());
-    await refreshPlanPricesFromDb(getDb());
-  });
-  await bootSafe('retry', async () => {
-    await ensureRetryQueue(getDb());
-    registerAllRetryHandlers();
-    startRetryWorker();
-  });
-  await bootSafe('treatment', () => ensureReviewTreatmentColumns(getDb()));
-
-  if (process.env.BACKFILL_SENTIMENT === '1') {
-    await bootSafe('sentiment', async () => {
-      const missing = await countMissingSentiment(getDb());
-      if (missing === 0) return;
-      const limit = Math.max(1, Number(process.env.BACKFILL_SENTIMENT_LIMIT || 500));
-      await backfillSentiment(getDb(), { limit, useAi: false });
-    });
+async function runLgpdSweepOnBoot() {
+  if (process.env.LGPD_SWEEP === '0') return;
+  try {
+    const db = getDb();
+    await ensureReviewTreatmentColumns(db);
+    await anonymizeOldClientWhatsapp(db, { limit: 1000 });
+  } catch (e: any) {
+    console.warn('LGPD sweep:', e?.message || e);
   }
-
-  if (process.env.LGPD_SWEEP === '1') {
-    await bootSafe('lgpd', async () => {
-      await ensureReviewTreatmentColumns(getDb());
-      await anonymizeOldClientWhatsapp(getDb(), { limit: 500 });
-    });
-  }
-}
-
-/** Self-ping opcional (além do UptimeRobot). */
-function startSelfKeepAlive() {
-  const url = (process.env.KEEP_ALIVE_URL || process.env.RENDER_EXTERNAL_URL || '').trim();
-  if (!url) return;
-  const target = url.replace(/\/$/, '') + '/api/live';
-  const ms = Math.max(4 * 60_000, Number(process.env.KEEP_ALIVE_MS || 5 * 60_000));
-  const tick = async () => {
-    try {
-      await fetch(target, { signal: AbortSignal.timeout(8_000) });
-    } catch {
-      /* ignore */
-    }
-  };
-  setInterval(tick, ms).unref();
-  setTimeout(tick, 30_000).unref();
-  console.log(`💓 keep-alive → ${target} a cada ${Math.round(ms / 1000)}s`);
 }
 
 function gracefulShutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`⏹  ${signal}`);
-  const force = setTimeout(() => process.exit(1), 10_000);
+  console.log(`⏹  ${signal} — encerrando...`);
+  const force = setTimeout(() => {
+    console.error('Force exit após timeout de shutdown');
+    process.exit(1);
+  }, 10_000);
   force.unref();
-  if (server) server.close(() => process.exit(0));
-  else process.exit(0);
+
+  if (server) {
+    server.close(() => {
+      console.log('HTTP fechado.');
+      process.exit(0);
+    });
+  } else {
+    process.exit(0);
+  }
 }
 
 async function main() {
-  // DB + schema mínimo ANTES de escutar
   await initDB();
-  await bootSafe('runtimeSchema', () => ensureRuntimeSchema(getDb()));
+  try {
+    await ensureUnidadesSchema(getDb());
+  } catch (e) {
+    console.warn('ensureUnidadesSchema:', e);
+  }
+  try {
+    await ensureWebAuthnSchema(getDb());
+  } catch (e) {
+    console.warn('ensureWebAuthnSchema:', e);
+  }
+  try {
+    await ensurePushSchema(getDb());
+    initWebPush();
+  } catch (e) {
+    console.warn('ensurePushSchema:', e);
+  }
+  try {
+    await ensureAiUsageSchema(getDb());
+  } catch (e) {
+    console.warn('ensureAiUsageSchema:', e);
+  }
+  try {
+    await ensureOpsTables(getDb());
+  } catch (e) {
+    console.warn('ensureOpsTables:', e);
+  }
+  try {
+    await ensureAuditSchema(getDb());
+  } catch (e) {
+    console.warn('ensureAuditSchema:', e);
+  }
+  try {
+    await ensurePlanPricingSchema(getDb());
+    await refreshPlanPricesFromDb(getDb());
+  } catch (e) {
+    console.warn('plan pricing:', e);
+  }
+  try {
+    await ensureRetryQueue(getDb());
+    registerAllRetryHandlers();
+    startRetryWorker();
+  } catch (e) {
+    console.warn('retry queue:', e);
+  }
+  try {
+    await ensureReviewTreatmentColumns(getDb());
+  } catch (e) {
+    console.warn('treatment columns:', e);
+  }
 
-  // Rotas críticas já disponíveis no cold start
+  await runSentimentBackfillOnBoot();
+  await runLgpdSweepOnBoot();
+
   mountTrialRoutes(app);
   mountAuthRoutes(app);
   mountEmpresaRoutes(app);
@@ -193,12 +256,14 @@ async function main() {
   mountAdminNegocioRoutes(app);
   mountTokenMetricsRoutes(app);
   mountRelatorioRoutes(app);
+  mountRelatorioInteligenteRoutes(app);
   mountPlanSwitchRoutes(app);
   mountWebAuthnRoutes(app);
   mountPushRoutes(app);
   mountJobsRoutes(app);
   mountPayPalRoutes(app);
   mountPixRoutes(app);
+  mountWechatRoutes(app);
   mountSubscriptionRoutes(app);
   mountUnidadeRoutes(app);
   mountExportRoutes(app);
@@ -215,40 +280,19 @@ async function main() {
   app.use(notFoundHandler);
   app.use(errorHandler);
 
-  const build = getBuildInfo();
-  console.log(`📦 ${build.version} ${build.marker}`);
   console.log(
-    `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | MP: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | n8n: ${n8nConfigured() ? 'ok' : 'OFF'}`
+    `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | WeChat: ${wechatConfigured() ? 'ok' : 'OFF'} | n8n: ${n8nConfigured() ? 'ok' : 'OFF'}`
   );
+  if (!wechatConfigured()) {
+    console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
+  }
 
   server = app.listen(PORT, () => {
-    console.log(`🚀 Filtra.AI :${PORT}`);
+    console.log(`🚀 API Filtra.AI em http://localhost:${PORT}`);
   });
-
-  // Evita timeouts prematuros atrás do proxy do Render
-  server.keepAliveTimeout = 65_000;
-  server.headersTimeout = 66_000;
-
-  // Não bloqueia o listen
-  setImmediate(() => {
-    backgroundBoot().catch((e) => console.warn('backgroundBoot', e));
-  });
-
-  startSelfKeepAlive();
 
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-  process.on('unhandledRejection', (reason: any) => {
-    console.error('unhandledRejection:', reason?.message || reason);
-  });
-  process.on('uncaughtException', (err) => {
-    console.error('uncaughtException:', err?.message || err);
-    // Em produção, tenta graceful em vez de morrer silencioso
-    if (process.env.NODE_ENV === 'production') {
-      gracefulShutdown('uncaughtException');
-    }
-  });
 }
 
 main().catch((e) => {
