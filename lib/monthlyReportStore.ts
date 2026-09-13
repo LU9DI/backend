@@ -17,11 +17,17 @@ export async function ensureMonthlyReportSchema(db: Database): Promise<void> {
       file_path TEXT,
       file_name TEXT,
       bytes INTEGER,
+      pdf_data BYTEA,
       generated_at TIMESTAMPTZ NOT NULL,
       error TEXT,
       UNIQUE (empresa_id, cycle_key)
     )
   `);
+
+  const cols = (await db.all(`PRAGMA table_info(monthly_reports)`)).map((c: any) => c.name);
+  if (!cols.includes('pdf_data')) {
+    await db.exec(`ALTER TABLE monthly_reports ADD COLUMN pdf_data BYTEA`);
+  }
 
   try {
     await db.exec(`CREATE INDEX IF NOT EXISTS idx_monthly_reports_empresa ON monthly_reports(empresa_id)`);
@@ -43,6 +49,21 @@ export async function monthlyReportExists(
   return Boolean(row);
 }
 
+export async function getMonthlyReport(
+  db: Database,
+  empresaId: string,
+  cycleKey: string
+): Promise<any | null> {
+  return db.get(
+    `SELECT id, empresa_id, cycle_key, cycle_start, cycle_end, plan,
+            status, file_name, bytes, pdf_data, generated_at, error
+       FROM monthly_reports
+      WHERE empresa_id = ? AND cycle_key = ?
+      LIMIT 1`,
+    [empresaId, cycleKey]
+  );
+}
+
 export async function saveMonthlyReport(
   db: Database,
   input: {
@@ -56,19 +77,21 @@ export async function saveMonthlyReport(
     filePath?: string | null;
     fileName?: string | null;
     bytes?: number | null;
+    pdfData?: Buffer | null;
     error?: string | null;
   }
 ): Promise<void> {
   await db.run(
     `INSERT INTO monthly_reports
       (id, empresa_id, cycle_key, cycle_start, cycle_end, plan, status,
-       file_path, file_name, bytes, generated_at, error)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       file_path, file_name, bytes, pdf_data, generated_at, error)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (empresa_id, cycle_key) DO UPDATE SET
        status = excluded.status,
        file_path = excluded.file_path,
        file_name = excluded.file_name,
        bytes = excluded.bytes,
+       pdf_data = excluded.pdf_data,
        generated_at = excluded.generated_at,
        error = excluded.error`,
     [
@@ -82,6 +105,7 @@ export async function saveMonthlyReport(
       input.filePath || null,
       input.fileName || null,
       input.bytes ?? null,
+      input.pdfData || null,
       new Date().toISOString(),
       input.error || null,
     ]
