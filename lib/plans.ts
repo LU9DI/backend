@@ -20,14 +20,6 @@ export function isTrialPlan(plan: string | null | undefined): boolean {
   return p === 'trial' || p === 'teste';
 }
 
-/** Legado: disponibilidade do antigo PDF mensal. */
-export function planTemPdf(plan: string | null | undefined): boolean {
-  const p = String(plan || '').toLowerCase();
-  if (isTrialPlan(p)) return true;
-  if (['pro', 'ultra', 'corporativo', 'rei'].includes(p)) return true;
-  return false;
-}
-
 /**
  * Relatório WhatsApp: resumo determinístico dos dados existentes no painel.
  * Inicial não possui o recurso. Pro é o nível básico; Trial/Teste recebe o nível Rei.
