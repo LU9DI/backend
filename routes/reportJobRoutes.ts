@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from 'express';
 import { getDb } from '../lib/db.js';
-import { planTemPdf } from '../lib/plans.js';
+import { planoTemRelatorioWhatsApp } from '../lib/plans.js';
 import { normalizarWhatsapp } from '../lib/whatsapp.js';
 import { buildReportPeriod, getOrGenerateWhatsAppReport } from '../services/whatsappReportService.js';
 
@@ -20,7 +20,7 @@ export function mountReportJobRoutes(app: Express) {
       const rows = await db.all(`SELECT e.id,e.nome_empresa,e.plan,e.status,e.whatsapp,e.report_next_due_at FROM empresas e WHERE e.status='ativo' AND e.report_next_due_at IS NOT NULL AND e.report_next_due_at<=? ORDER BY e.report_next_due_at ASC LIMIT 100`, [nowIso]);
       const stats = { candidatos: rows.length, enviados: 0, sem_whatsapp: 0, sem_n8n: 0, erros: 0, pulados: 0 }; const n8nConfigured = Boolean(process.env.N8N_WHATSAPP_REPORT_URL?.trim());
       for (const empresa of rows) {
-        if (!planTemPdf(empresa.plan)) { stats.pulados++; continue; }
+        if (!planoTemRelatorioWhatsApp(empresa.plan)) { stats.pulados++; continue; }
         const whatsapp = normalizarWhatsapp(empresa.whatsapp); if (!whatsapp) { stats.sem_whatsapp++; continue; } if (!n8nConfigured) { stats.sem_n8n++; continue; }
         const dueIso = String(empresa.report_next_due_at), nextDue = nextMonthAfterDue(dueIso);
         const claimed = await db.run(`UPDATE empresas SET report_next_due_at=? WHERE id=? AND report_next_due_at=?`, [nextDue, empresa.id, dueIso]); if (Number(claimed.changes || 0) !== 1) { stats.pulados++; continue; }
