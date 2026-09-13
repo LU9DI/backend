@@ -49,6 +49,30 @@ export async function ensureRuntimeSchema(db: Database) {
   await addColumnIfMissing(db, 'usuarios', 'email', 'TEXT');
 
   try {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS relatorio_destinatarios (
+        id TEXT PRIMARY KEY,
+        empresa_id TEXT NOT NULL,
+        canal TEXT NOT NULL,
+        destino TEXT NOT NULL,
+        nome TEXT,
+        ativo INTEGER NOT NULL DEFAULT 1,
+        criado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_relatorio_dest_empresa_canal_destino
+      ON relatorio_destinatarios(empresa_id, canal, destino)
+    `);
+    await db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_relatorio_dest_empresa
+      ON relatorio_destinatarios(empresa_id, ativo)
+    `);
+  } catch (e: any) {
+    console.warn('[schema] relatorio_destinatarios:', e?.message || e);
+  }
+
+  try {
     await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_empresas_cnpj ON empresas(cnpj)`);
   } catch {
     /* */
