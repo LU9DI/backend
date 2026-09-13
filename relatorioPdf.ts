@@ -1,6 +1,11 @@
 /**
- * Relatório PDF mensal — Puppeteer (Chromium) + HTML por plano.
- * Período = ciclo de assinatura (dia âncora), não dia 1 do mês civil.
+ * Relatório PDF — Puppeteer, 1 layout por plano (benefícios reais).
+ *
+ * Pro   → 1 página: KPIs + barras
+ * Ultra → + sentimento + temas IA (sempre, mesmo zerado)
+ * Corp  → + página de filiais
+ * Rei   → + fichas + destaques executivos
+ * Trial → mesmo conteúdo Ultra (benefício do trial)
  */
 import type { Database } from 'sqlite';
 import puppeteer from 'puppeteer-core';
@@ -34,43 +39,96 @@ type UnitRow = {
   positive: number;
 };
 
-const THEME: Record<
+/** Benefícios oficiais espelhados no PDF */
+const PLAN: Record<
   PdfDepth,
-  { accent: string; title: string; includes: string[]; locked: string[] }
+  {
+    accent: string;
+    soft: string;
+    label: string;
+    tagline: string;
+    benefits: string[];
+    notIncluded: string[];
+  }
 > = {
   pro: {
     accent: '#4f46e5',
-    title: 'Relatório Pro',
-    includes: ['Resumo do ciclo', 'Distribuição 1★–5★'],
-    locked: ['Sentimento e temas IA → Ultra+', 'Ranking de filiais → Corporativo+'],
+    soft: '#eef2ff',
+    label: 'PRO',
+    tagline: 'Relatório essencial do ciclo',
+    benefits: [
+      'Volume de avaliações do ciclo',
+      'Nota média e % positivas/críticas',
+      'Gráfico de distribuição 1★ a 5★',
+    ],
+    notIncluded: [
+      'Análise de sentimento (Ultra+)',
+      'Temas detectados pela IA (Ultra+)',
+      'Ranking de filiais (Corporativo+)',
+    ],
   },
   ultra: {
-    accent: '#0d9488',
-    title: 'Relatório Ultra',
-    includes: ['Tudo do Pro', 'Sentimento', 'Temas da IA'],
-    locked: ['Ranking de filiais → Corporativo+', 'Ficha por unidade → Rei'],
+    accent: '#0f766e',
+    soft: '#f0fdfa',
+    label: 'ULTRA',
+    tagline: 'Essencial + inteligência de sentimento',
+    benefits: [
+      'Tudo do Pro',
+      'Sentimento: positivo / neutro / negativo',
+      'Temas principais detectados pela IA',
+    ],
+    notIncluded: [
+      'Ranking de filiais (Corporativo+)',
+      'Ficha detalhada por unidade (Rei)',
+    ],
   },
   corp: {
-    accent: '#1d4ed8',
-    title: 'Relatório Corporativo',
-    includes: ['Tudo do Ultra', 'Ranking de unidades'],
-    locked: ['Ficha detalhada por unidade → Rei'],
+    accent: '#1e40af',
+    soft: '#eff6ff',
+    label: 'CORPORATIVO',
+    tagline: 'Multi-unidade e visão de rede',
+    benefits: [
+      'Tudo do Ultra',
+      'Ranking de unidades / filiais',
+      'Comparativo volume × nota × críticas',
+    ],
+    notIncluded: ['Ficha executiva por unidade (Rei)', 'Destaques automáticos da rede (Rei)'],
   },
   rei: {
-    accent: '#b45309',
-    title: 'Relatório Rei',
-    includes: ['Tudo do Corporativo', 'Ficha por unidade', 'Destaques do ciclo'],
-    locked: [],
+    accent: '#92400e',
+    soft: '#fffbeb',
+    label: 'REI',
+    tagline: 'Relatório executivo completo',
+    benefits: [
+      'Tudo do Corporativo',
+      'Ficha de cada unidade',
+      'Destaques: melhor e pior desempenho',
+    ],
+    notIncluded: [],
   },
 };
 
-function depthFor(plan: string, trial: boolean): PdfDepth {
+export function depthForPlan(plan: string, trial: boolean): PdfDepth {
   if (trial) return 'ultra';
-  const p = plan.toLowerCase();
+  const p = String(plan || '').toLowerCase().trim();
   if (p === 'rei') return 'rei';
   if (p === 'corporativo' || p === 'corporate') return 'corp';
   if (p === 'ultra') return 'ultra';
+  if (p === 'pro') return 'pro';
+  // inicial sem PDF; qualquer outro pago cai no pro
   return 'pro';
+}
+
+/** Permite admin testar layouts: pro|ultra|corp|rei */
+export function parsePreviewDepth(raw: unknown): PdfDepth | null {
+  const s = String(raw || '')
+    .toLowerCase()
+    .trim();
+  if (s === 'pro' || s === 'ultra' || s === 'corp' || s === 'corporativo') {
+    return s === 'corporativo' ? 'corp' : (s as PdfDepth);
+  }
+  if (s === 'rei') return 'rei';
+  return null;
 }
 
 function esc(v: unknown): string {
@@ -141,21 +199,13 @@ function themes(rs: Review[]) {
         }
       }
     } catch {
-      /* ignore */
+      /* */
     }
   }
   return [...m.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, 8)
     .map(([tag, count]) => ({ tag, count }));
-}
-
-function insight(total: number, mean: number, critical: number, positive: number) {
-  if (!total) return 'Ainda não há avaliações neste ciclo. O relatório preenche sozinho.';
-  if (mean >= 4.5) return `Ciclo forte: média ${mean.toFixed(1)} com ${pct(positive, total)}% positivas.`;
-  if (mean >= 4) return `Bom ciclo (média ${mean.toFixed(1)}). Dá para reduzir as ${critical} críticas.`;
-  if (mean >= 3) return `Ciclo estável (média ${mean.toFixed(1)}). Priorize as ${critical} críticas.`;
-  return `Atenção: média ${mean.toFixed(1)} e ${critical} críticas neste ciclo.`;
 }
 
 async function loadReviews(db: Database, id: string, range: CycleRange): Promise<Review[]> {
@@ -167,7 +217,7 @@ async function loadReviews(db: Database, id: string, range: CycleRange): Promise
       const rows = (await db.all(q, [id])) as Review[];
       return (rows || []).filter((r) => !isTest(r) && inCycleRange(rowDate(r), range));
     } catch {
-      /* next */
+      /* */
     }
   }
   return [];
@@ -184,9 +234,20 @@ async function loadUnits(db: Database, id: string) {
   }
 }
 
-function buildHtml(opts: {
+function barsHtml(d: number[]) {
+  const max = Math.max(...d, 1);
+  const colors = ['#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e'];
+  return d
+    .map((n, i) => {
+      const w = Math.round((n / max) * 100);
+      return `<div class="bar"><span>${i + 1}★</span><div class="track"><i style="width:${w}%;background:${colors[i]}"></i></div><b>${n}</b></div>`;
+    })
+    .join('');
+}
+
+function buildHtml(o: {
   empresa: string;
-  planLabel: string;
+  planName: string;
   depth: PdfDepth;
   periodo: string;
   total: number;
@@ -197,179 +258,214 @@ function buildHtml(opts: {
   sent: { pos: number; neu: number; neg: number };
   themes: { tag: string; count: number }[];
   units: UnitRow[];
+  preview?: boolean;
 }): string {
-  const t = THEME[opts.depth];
-  const maxBar = Math.max(...opts.dist, 1);
-  const bars = opts.dist
-    .map((n, i) => {
-      const colors = ['#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e'];
-      const w = Math.round((n / maxBar) * 100);
-      return `<div class="bar-row"><span>${i + 1}★</span><div class="track"><i style="width:${w}%;background:${colors[i]}"></i></div><b>${n}</b></div>`;
-    })
-    .join('');
+  const p = PLAN[o.depth];
+  const ben = p.benefits.map((x) => `<li>✓ ${esc(x)}</li>`).join('');
+  const not =
+    p.notIncluded.length > 0
+      ? p.notIncluded.map((x) => `<li>○ ${esc(x)}</li>`).join('')
+      : '<li>✓ Nenhuma restrição — plano completo</li>';
 
-  const includes = t.includes.map((x) => `<li>${esc(x)}</li>`).join('');
-  const locked = t.locked.length
-    ? t.locked.map((x) => `<li>${esc(x)}</li>`).join('')
-    : '<li>Relatório completo deste plano</li>';
+  // —— seções por plano ——
+  let body = `
+  <section>
+    <h2>Resumo do ciclo</h2>
+    <div class="kpis">
+      <div class="kpi"><em>Volume</em><strong>${o.total}</strong><small>avaliações</small></div>
+      <div class="kpi"><em>Nota média</em><strong>${o.total ? o.mean.toFixed(1) : '—'}</strong><small>escala 1–5</small></div>
+      <div class="kpi"><em>Positivas</em><strong>${o.positive}</strong><small>${pct(o.positive, o.total)}% · 4–5★</small></div>
+      <div class="kpi"><em>Críticas</em><strong>${o.critical}</strong><small>${pct(o.critical, o.total)}% · 1–3★</small></div>
+    </div>
+  </section>
+  <section>
+    <h2>Distribuição de notas</h2>
+    ${barsHtml(o.dist)}
+  </section>`;
 
-  let extra = '';
-
-  if (opts.depth !== 'pro') {
-    extra += `
-    <section>
-      <h2>3. Sentimento</h2>
-      <div class="cards3">
-        <div class="card"><span class="ok">Positivo</span><strong>${opts.sent.pos}</strong><small>${pct(opts.sent.pos, opts.total)}%</small></div>
-        <div class="card"><span class="warn">Neutro</span><strong>${opts.sent.neu}</strong><small>${pct(opts.sent.neu, opts.total)}%</small></div>
-        <div class="card"><span class="bad">Negativo</span><strong>${opts.sent.neg}</strong><small>${pct(opts.sent.neg, opts.total)}%</small></div>
-      </div>
-    </section>
-    <section>
-      <h2>4. Temas da IA</h2>
-      ${
-        opts.themes.length
-          ? `<table><thead><tr><th>Tema</th><th>Qtd</th></tr></thead><tbody>${opts.themes
-              .map((x) => `<tr><td>${esc(x.tag)}</td><td>${x.count}</td></tr>`)
-              .join('')}</tbody></table>`
-          : `<p class="muted">Nenhum tema neste ciclo.</p>`
-      }
-    </section>`;
-  } else {
-    extra += `
-    <section>
-      <h2>3. Análise avançada</h2>
-      <p>No <b>Pro</b> você vê volume, nota e distribuição. Sentimento, temas e filiais entram em <b>Ultra</b>, <b>Corporativo</b> e <b>Rei</b>.</p>
+  if (o.depth === 'pro') {
+    body += `
+    <section class="notice">
+      <h2>Limite do plano Pro</h2>
+      <p>Este PDF mostra apenas o essencial. Com <b>Ultra</b> você ganha sentimento e temas da IA.
+      Com <b>Corporativo</b> e <b>Rei</b>, entra a visão por filial.</p>
     </section>`;
   }
 
-  if (opts.depth === 'corp' || opts.depth === 'rei') {
-    extra += `
-    <section class="break">
-      <h2>5. Ranking de unidades</h2>
+  if (o.depth === 'ultra' || o.depth === 'corp' || o.depth === 'rei') {
+    body += `
+    <section>
+      <h2>Sentimento (benefício Ultra+)</h2>
+      <div class="kpis3">
+        <div class="kpi ok"><em>Positivo</em><strong>${o.sent.pos}</strong><small>${pct(o.sent.pos, o.total)}%</small></div>
+        <div class="kpi warn"><em>Neutro</em><strong>${o.sent.neu}</strong><small>${pct(o.sent.neu, o.total)}%</small></div>
+        <div class="kpi bad"><em>Negativo</em><strong>${o.sent.neg}</strong><small>${pct(o.sent.neg, o.total)}%</small></div>
+      </div>
+    </section>
+    <section>
+      <h2>Temas da IA (benefício Ultra+)</h2>
       ${
-        opts.units.length
-          ? `<table><thead><tr><th>#</th><th>Unidade</th><th>Volume</th><th>Média</th><th>Críticas</th></tr></thead><tbody>${opts.units
+        o.themes.length
+          ? `<table><thead><tr><th>Tema</th><th>Ocorrências</th></tr></thead><tbody>${o.themes
+              .map((t) => `<tr><td>${esc(t.tag)}</td><td>${t.count}</td></tr>`)
+              .join('')}</tbody></table>`
+          : `<div class="empty">Nenhum tema neste ciclo ainda — a seção faz parte do seu plano e aparece assim que houver tags de IA.</div>`
+      }
+    </section>`;
+  }
+
+  if (o.depth === 'corp' || o.depth === 'rei') {
+    body += `
+    <section class="page-break">
+      <h2>Ranking de unidades (benefício Corporativo+)</h2>
+      ${
+        o.units.length
+          ? `<table><thead><tr><th>#</th><th>Unidade</th><th>Volume</th><th>Média</th><th>Críticas</th></tr></thead><tbody>${o.units
               .map(
                 (u, i) =>
                   `<tr><td>${i + 1}</td><td>${esc(u.nome)}</td><td>${u.total}</td><td><b>${u.avg.toFixed(1)}</b></td><td>${u.critical}</td></tr>`
               )
               .join('')}</tbody></table>`
-          : `<p class="muted">Nenhuma unidade com avaliações neste ciclo.</p>`
+          : `<div class="empty">Nenhuma filial com avaliações neste ciclo. Cadastre unidades no painel — esta página existe porque seu plano inclui multi-unidade.</div>`
       }
     </section>`;
   }
 
-  if (opts.depth === 'rei' && opts.units.length) {
-    const best = opts.units.reduce((a, b) => (b.avg > a.avg ? b : a));
-    const worst = opts.units.reduce((a, b) => (b.avg < a.avg ? b : a));
-    extra += `
-    <section>
-      <h2>6. Ficha por unidade</h2>
-      ${opts.units
-        .slice(0, 8)
-        .map(
-          (u) => `
-        <div class="unit">
-          <h3>${esc(u.nome)}</h3>
-          <div class="cards4">
-            <div class="card"><span>Volume</span><strong>${u.total}</strong></div>
-            <div class="card"><span>Média</span><strong>${u.avg.toFixed(1)}</strong></div>
-            <div class="card"><span>Críticas</span><strong>${u.critical}</strong></div>
-            <div class="card"><span>Positivas</span><strong>${u.positive}</strong></div>
-          </div>
-        </div>`
-        )
-        .join('')}
-    </section>
-    <section>
-      <h2>7. Destaques</h2>
-      <ul>
-        <li>Melhor média: <b>${esc(best.nome)}</b> (${best.avg.toFixed(1)})</li>
-        <li>Atenção: <b>${esc(worst.nome)}</b> (${worst.avg.toFixed(1)})</li>
-        <li>Críticas no ciclo: <b>${opts.critical}</b></li>
-      </ul>
-    </section>`;
+  if (o.depth === 'rei') {
+    if (o.units.length) {
+      const best = o.units.reduce((a, b) => (b.avg >= a.avg ? b : a));
+      const worst = o.units.reduce((a, b) => (b.avg <= a.avg ? b : a));
+      body += `
+      <section>
+        <h2>Ficha por unidade (benefício Rei)</h2>
+        ${o.units
+          .slice(0, 8)
+          .map(
+            (u) => `
+          <div class="unit">
+            <h3>${esc(u.nome)}</h3>
+            <div class="kpis">
+              <div class="kpi"><em>Volume</em><strong>${u.total}</strong></div>
+              <div class="kpi"><em>Média</em><strong>${u.avg.toFixed(1)}</strong></div>
+              <div class="kpi"><em>Críticas</em><strong>${u.critical}</strong></div>
+              <div class="kpi"><em>Positivas</em><strong>${u.positive}</strong></div>
+            </div>
+          </div>`
+          )
+          .join('')}
+      </section>
+      <section>
+        <h2>Destaques executivos (benefício Rei)</h2>
+        <ul class="exec">
+          <li><b>Melhor média:</b> ${esc(best.nome)} (${best.avg.toFixed(1)})</li>
+          <li><b>Ponto de atenção:</b> ${esc(worst.nome)} (${worst.avg.toFixed(1)})</li>
+          <li><b>Críticas no ciclo:</b> ${o.critical}</li>
+        </ul>
+      </section>`;
+    } else {
+      body += `
+      <section>
+        <h2>Ficha por unidade + destaques (benefício Rei)</h2>
+        <div class="empty">Quando houver filiais com avaliações, o Rei mostra ficha individual e destaques automático da rede.</div>
+      </section>`;
+    }
   }
 
   return `<!doctype html>
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8"/>
-<title>${esc(t.title)} — ${esc(opts.empresa)}</title>
+<title>${esc(p.label)} — ${esc(o.empresa)}</title>
 <style>
-  @page { size: A4; margin: 16mm 14mm 16mm; }
+  @page { size: A4; margin: 14mm 12mm; }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #0f172a; font-size: 10pt; line-height: 1.45; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .accent { color: ${t.accent}; }
-  .bar { height: 4px; width: 48px; background: ${t.accent}; margin: 8px 0 14px; border-radius: 2px; }
-  h1 { font-size: 18pt; margin: 0 0 4px; }
-  h2 { font-size: 12pt; margin: 18px 0 8px; color: #0f172a; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }
+  body {
+    margin: 0; font-family: Arial, Helvetica, sans-serif; color: #0f172a;
+    font-size: 10pt; line-height: 1.45;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .banner {
+    background: ${p.accent}; color: #fff; border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 14px;
+  }
+  .banner .plan { font-size: 22pt; font-weight: 800; letter-spacing: .06em; }
+  .banner .tag { opacity: .95; font-size: 10pt; margin-top: 2px; }
+  .banner .who { margin-top: 8px; font-size: 11pt; font-weight: 700; }
+  .banner .meta { font-size: 8.5pt; opacity: .9; margin-top: 2px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+  .card {
+    border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px;
+    background: ${p.soft};
+  }
+  .card h3 { margin: 0 0 6px; font-size: 9pt; text-transform: uppercase; letter-spacing: .04em; color: ${p.accent}; }
+  .card ul { margin: 0; padding-left: 16px; font-size: 8.5pt; color: #334155; }
+  h2 {
+    font-size: 12pt; margin: 16px 0 8px; padding-bottom: 4px;
+    border-bottom: 2px solid ${p.accent}; color: #0f172a;
+  }
   h3 { font-size: 10.5pt; margin: 0 0 6px; }
-  .brand { font-size: 9pt; color: #64748b; font-weight: 700; letter-spacing: .04em; }
-  .plan { font-size: 16pt; font-weight: 800; color: ${t.accent}; margin: 2px 0; }
-  .meta { color: #64748b; font-size: 9pt; margin-bottom: 10px; }
-  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0 14px; }
-  .box { border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; }
-  .box.ok { background: #f0fdf4; border-color: #bbf7d0; }
-  .box.muted { background: #f8fafc; }
-  .box b { display: block; margin-bottom: 4px; font-size: 8.5pt; }
-  .box ul { margin: 0; padding-left: 16px; font-size: 8.5pt; color: #334155; }
-  .insight { background: #f8fafc; border-left: 3px solid ${t.accent}; padding: 8px 12px; margin: 8px 0 14px; font-size: 9.5pt; }
-  .cards4, .cards3 { display: grid; gap: 8px; }
-  .cards4 { grid-template-columns: repeat(4, 1fr); }
-  .cards3 { grid-template-columns: repeat(3, 1fr); }
-  .card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; background: #f8fafc; }
-  .card span { display: block; font-size: 7pt; text-transform: uppercase; color: #64748b; font-weight: 700; }
-  .card strong { display: block; font-size: 16pt; margin-top: 4px; }
-  .card small { color: #64748b; font-size: 8pt; }
-  .ok { color: #15803d !important; }
-  .warn { color: #b45309 !important; }
-  .bad { color: #b91c1c !important; }
-  .bar-row { display: grid; grid-template-columns: 28px 1fr 28px; gap: 8px; align-items: center; margin: 6px 0; font-size: 9pt; }
-  .track { height: 10px; background: #eef2f7; border-radius: 99px; overflow: hidden; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .kpis3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .kpi {
+    border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px;
+    background: #f8fafc;
+  }
+  .kpi em { display: block; font-style: normal; font-size: 7pt; text-transform: uppercase; color: #64748b; font-weight: 700; }
+  .kpi strong { display: block; font-size: 18pt; margin-top: 4px; }
+  .kpi small { color: #64748b; font-size: 8pt; }
+  .kpi.ok strong { color: #15803d; }
+  .kpi.warn strong { color: #b45309; }
+  .kpi.bad strong { color: #b91c1c; }
+  .bar { display: grid; grid-template-columns: 28px 1fr 28px; gap: 8px; align-items: center; margin: 6px 0; }
+  .track { height: 11px; background: #e2e8f0; border-radius: 99px; overflow: hidden; }
   .track i { display: block; height: 100%; border-radius: 99px; }
   table { width: 100%; border-collapse: collapse; font-size: 9pt; }
-  th { text-align: left; background: ${t.accent}; color: #fff; padding: 7px 8px; }
+  th { text-align: left; background: ${p.accent}; color: #fff; padding: 7px 8px; }
   td { padding: 7px 8px; border-bottom: 1px solid #e2e8f0; }
-  .unit { margin: 10px 0 14px; padding: 10px; border: 1px solid #e2e8f0; border-radius: 8px; }
-  .muted { color: #64748b; }
-  .break { page-break-before: always; }
-  footer { margin-top: 20px; font-size: 7.5pt; color: #94a3b8; text-align: center; }
+  .unit { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px; margin: 8px 0 12px; background: #fff; }
+  .empty {
+    border: 1px dashed #cbd5e1; border-radius: 10px; padding: 12px;
+    background: #f8fafc; color: #64748b; font-size: 9pt;
+  }
+  .notice {
+    background: ${p.soft}; border-left: 4px solid ${p.accent};
+    padding: 10px 12px; border-radius: 0 8px 8px 0; margin-top: 12px;
+  }
+  .exec { margin: 0; padding-left: 18px; }
+  .page-break { page-break-before: always; }
+  footer {
+    margin-top: 22px; text-align: center; font-size: 7.5pt; color: #94a3b8;
+  }
+  .preview {
+    background: #fef2f2; color: #991b1b; font-size: 8pt; padding: 6px 10px;
+    border-radius: 6px; margin-bottom: 10px; font-weight: 700;
+  }
 </style>
 </head>
 <body>
-  <div class="brand">FILTRA.AI</div>
-  <div class="plan">${esc(t.title)}</div>
-  <h1>${esc(opts.empresa)}</h1>
-  <div class="meta">Ciclo · ${esc(opts.periodo)} &nbsp;|&nbsp; Plano <b>${esc(opts.planLabel)}</b></div>
-  <div class="bar"></div>
+  ${o.preview ? `<div class="preview">PREVIEW ADMIN · layout forçado: ${esc(p.label)}</div>` : ''}
 
-  <div class="split">
-    <div class="box ok"><b>Inclui neste plano</b><ul>${includes}</ul></div>
-    <div class="box muted"><b>Só em planos superiores</b><ul>${locked}</ul></div>
+  <div class="banner">
+    <div class="plan">PLANO ${esc(p.label)}</div>
+    <div class="tag">${esc(p.tagline)}</div>
+    <div class="who">${esc(o.empresa)}</div>
+    <div class="meta">Ciclo ${esc(o.periodo)} · Conta: ${esc(o.planName)}</div>
   </div>
 
-  <div class="insight"><b>Leitura rápida:</b> ${esc(insight(opts.total, opts.mean, opts.critical, opts.positive))}</div>
-
-  <section>
-    <h2>1. Resumo do ciclo</h2>
-    <div class="cards4">
-      <div class="card"><span>Volume</span><strong>${opts.total}</strong><small>avaliações</small></div>
-      <div class="card"><span>Nota média</span><strong>${opts.total ? opts.mean.toFixed(1) : '—'}</strong><small>1 a 5</small></div>
-      <div class="card"><span>Positivas</span><strong>${opts.positive}</strong><small>${pct(opts.positive, opts.total)}%</small></div>
-      <div class="card"><span>Críticas</span><strong>${opts.critical}</strong><small>${pct(opts.critical, opts.total)}%</small></div>
+  <div class="grid2">
+    <div class="card">
+      <h3>Benefícios deste PDF</h3>
+      <ul>${ben}</ul>
     </div>
-  </section>
+    <div class="card">
+      <h3>Não incluso neste plano</h3>
+      <ul>${not}</ul>
+    </div>
+  </div>
 
-  <section>
-    <h2>2. Distribuição de notas</h2>
-    ${bars}
-  </section>
+  ${body}
 
-  ${extra}
-
-  <footer>Filtra.AI · ${esc(t.title)} · ciclo de assinatura · sem projeção futura</footer>
+  <footer>Filtra.AI · PDF ${esc(p.label)} · benefícios do plano · ciclo de assinatura</footer>
 </body>
 </html>`;
 }
@@ -400,7 +496,7 @@ async function htmlToPdf(html: string): Promise<Buffer> {
     const pdf = await page.pdf({
       format: 'A4',
       printBackground: true,
-      margin: { top: '14mm', right: '12mm', bottom: '14mm', left: '12mm' },
+      margin: { top: '12mm', right: '11mm', bottom: '12mm', left: '11mm' },
     });
     return Buffer.from(pdf);
   } finally {
@@ -421,7 +517,7 @@ export async function ensureUnidadesSchema(db: Database): Promise<void> {
       )
     `);
   } catch {
-    /* ok */
+    /* */
   }
 }
 
@@ -430,18 +526,20 @@ export async function gerarRelatorioMensalPDF(
   empresaId: string,
   mesAno: string,
   _unused?: unknown,
-  _lang?: string | null
-): Promise<Buffer> {
+  _lang?: string | null,
+  opts?: { forceDepth?: PdfDepth | null }
+): Promise<{ buffer: Buffer; depth: PdfDepth; planLabel: string }> {
   const empresa = await db.get('SELECT * FROM empresas WHERE id = ?', [empresaId]);
   if (!empresa) throw new Error('Empresa não encontrada.');
   if (!empresaTemPdf(empresa)) throw new Error('Relatório PDF não disponível neste plano.');
 
   const plan = String(empresa.plan || empresa.status || 'trial').toLowerCase();
   const trial = isTrialPlan(plan) || isTrialPlan(String(empresa.status || ''));
-  const depth = depthFor(plan, trial);
+  const depth = opts?.forceDepth || depthForPlan(plan, trial);
+  const pLabel = trial && !opts?.forceDepth ? 'Trial' : planLabel(plan);
+
   const anchor = subscriptionAnchorDay(empresa as any);
   const range = cycleRangeForMonth(mesAno, anchor);
-
   const reviews = await loadReviews(db, empresaId, range);
   const unitsRaw = depth === 'corp' || depth === 'rei' ? await loadUnits(db, empresaId) : [];
 
@@ -449,8 +547,6 @@ export async function gerarRelatorioMensalPDF(
   const mean = avg(reviews);
   const positive = reviews.filter((r) => Number(r.rating) >= 4).length;
   const critical = reviews.filter((r) => Number(r.rating) <= 3).length;
-  const se = sentimentBreak(reviews);
-  const th = themes(reviews);
 
   const units: UnitRow[] = unitsRaw
     .map((u) => {
@@ -472,7 +568,7 @@ export async function gerarRelatorioMensalPDF(
 
   const html = buildHtml({
     empresa: String(empresa.nome_empresa || 'Empresa'),
-    planLabel: trial ? 'Trial' : planLabel(plan),
+    planName: pLabel,
     depth,
     periodo: range.label,
     total,
@@ -480,14 +576,15 @@ export async function gerarRelatorioMensalPDF(
     positive,
     critical,
     dist: dist(reviews),
-    sent: se,
-    themes: th,
+    sent: sentimentBreak(reviews),
+    themes: themes(reviews),
     units,
+    preview: Boolean(opts?.forceDepth),
   });
 
-  const pdf = await htmlToPdf(html);
-  if (pdf.length < 100 || pdf.subarray(0, 4).toString() !== '%PDF') {
+  const buffer = await htmlToPdf(html);
+  if (buffer.length < 100 || buffer.subarray(0, 4).toString() !== '%PDF') {
     throw new Error('Puppeteer gerou PDF inválido.');
   }
-  return pdf;
+  return { buffer, depth, planLabel: pLabel };
 }

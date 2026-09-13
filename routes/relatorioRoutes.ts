@@ -1,19 +1,20 @@
-/**
- * Relatório PDF mensal — Puppeteer + HTML por plano.
- */
+/** Relatório PDF mensal — Puppeteer, layout por plano. */
 import type { Express, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { getDb, findEmpresa } from '../lib/db.js';
-import { gerarRelatorioMensalPDF, ensureUnidadesSchema } from '../relatorioPdf.js';
+import {
+  gerarRelatorioMensalPDF,
+  ensureUnidadesSchema,
+  parsePreviewDepth,
+} from '../relatorioPdf.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validateReportMonth } from '../lib/dateValidation.js';
 import { empresaTemPdf } from '../lib/plans.js';
 import { logPdfGeneration } from '../lib/opsLog.js';
 import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
 import { readPdfCache, writePdfCache, withPdfInflight } from '../lib/pdfCache.js';
-import { normalizePdfLang } from '../lib/pdfI18n.js';
 
-const PDF_LAYOUT_VERSION = 'puppeteer-plan-v1';
+const PDF_LAYOUT_VERSION = 'puppeteer-plan-v3';
 
 const pdfLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -52,24 +53,6 @@ async function reviewFingerprint(db: any, empresaId: string, mesAno: string): Pr
   }
 }
 
-function sendPdf(
-  res: Response,
-  pdf: Buffer,
-  filename: string,
-  cache: 'HIT' | 'MISS',
-  lang: string
-) {
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Length', String(pdf.length));
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.setHeader('X-PDF-Cache', cache);
-  res.setHeader('X-PDF-Layout', PDF_LAYOUT_VERSION);
-  res.setHeader('X-PDF-Engine', 'puppeteer');
-  res.setHeader('X-PDF-Lang', lang);
-  res.setHeader('Cache-Control', 'private, max-age=300');
-  res.send(pdf);
-}
-
 export function mountRelatorioRoutes(app: Express) {
   app.get(
     '/api/empresa/:ref/relatorio.pdf',
@@ -92,31 +75,14 @@ export function mountRelatorioRoutes(app: Express) {
       }
 
       if (!podeAcessarEmpresa(req, empresa.id)) {
-        await logPdfGeneration(db, {
-          empresa_id: empresa.id,
-          empresa_nome: empresa.nome_empresa,
-          status: 'forbidden',
-          error: 'Sem permissão',
-          auth_mode,
-          duration_ms: Date.now() - t0,
-        });
         return res.status(403).json({ error: 'Sem permissão para baixar este relatório.' });
       }
 
       const plan = String(empresa.plan || empresa.status || 'trial').toLowerCase();
       if (!empresaTemPdf(empresa)) {
-        await logPdfGeneration(db, {
-          empresa_id: empresa.id,
-          empresa_nome: empresa.nome_empresa,
-          status: 'forbidden',
-          error: `Plano ${plan} sem PDF`,
-          auth_mode,
-          duration_ms: Date.now() - t0,
-        });
         return res.status(403).json({
           error: 'Relatório PDF não disponível neste plano. Trial e planos Pro+ incluem PDF.',
           plan,
-          status: empresa.status,
         });
       }
 
@@ -126,88 +92,82 @@ export function mountRelatorioRoutes(app: Express) {
         allowFutureMonths: 0,
       });
       if (!mesCheck.ok) {
-        await logPdfGeneration(db, {
-          empresa_id: empresa.id,
-          empresa_nome: empresa.nome_empresa,
-          status: 'error',
-          error: mesCheck.error,
-          auth_mode,
-          duration_ms: Date.now() - t0,
-        });
         return res.status(400).json({ error: mesCheck.error, exemplo: '2026-09' });
       }
-
       const mesAno = mesCheck.value;
-      const normalized = normalizePdfLang(
-        String(
-          req.query.lang ||
-            req.query.locale ||
-            (empresa as any).locale ||
-            (empresa as any).idioma ||
-            'pt'
-        )
-      );
-      const langMap: Record<string, string> = {
-        pt: 'pt-BR',
-        en: 'en-US',
-        es: 'es-ES',
-        zh: 'zh-CN',
-      };
-      const lang = langMap[normalized] || normalized;
+
+      // Admin pode forçar layout: ?preview_plan=pro|ultra|corp|rei
+      const preview =
+        isAdminUser(req.user) ? parsePreviewDepth(req.query.preview_plan) : null;
+
       const slug = empresa.slug || empresa.id.slice(0, 8);
       const filename = `relatorio-${slug}-${mesAno}.pdf`;
-      const cachePlan = `${plan || 'trial'}|${PDF_LAYOUT_VERSION}`;
+      const cachePlan = `${plan}|${PDF_LAYOUT_VERSION}|${preview || 'auto'}`;
       const fingerprint = await reviewFingerprint(db, empresa.id, mesAno);
 
-      const cached = readPdfCache(empresa.id, mesAno, cachePlan, fingerprint);
-      if (cached) {
-        await logPdfGeneration(db, {
-          empresa_id: empresa.id,
-          empresa_nome: empresa.nome_empresa,
-          mes: mesAno,
-          status: 'ok',
-          bytes: cached.length,
-          auth_mode: auth_mode + '_cache',
-          duration_ms: Date.now() - t0,
-        });
-        return sendPdf(res, cached, filename, 'HIT', lang);
+      // Não usa cache em preview forçado
+      if (!preview) {
+        const cached = readPdfCache(empresa.id, mesAno, cachePlan, fingerprint);
+        if (cached) {
+          res.setHeader('Content-Type', 'application/pdf');
+          res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+          res.setHeader('X-PDF-Cache', 'HIT');
+          res.setHeader('X-PDF-Layout', PDF_LAYOUT_VERSION);
+          res.setHeader('X-PDF-Engine', 'puppeteer');
+          res.setHeader('X-PDF-Plan', plan);
+          return res.send(cached);
+        }
       }
 
       await ensureUnidadesSchema(db);
 
-      let pdf: Buffer;
+      let result: { buffer: Buffer; depth: string; planLabel: string };
       try {
-        pdf = await withPdfInflight(empresa.id, mesAno, cachePlan, fingerprint, () =>
-          gerarRelatorioMensalPDF(db, empresa.id, mesAno, undefined, lang)
+        result = await withPdfInflight(empresa.id, mesAno, cachePlan, fingerprint, () =>
+          gerarRelatorioMensalPDF(db, empresa.id, mesAno, undefined, null, {
+            forceDepth: preview,
+          })
         );
       } catch (e: any) {
+        console.error('[pdf]', e?.message || e);
         await logPdfGeneration(db, {
           empresa_id: empresa.id,
           empresa_nome: empresa.nome_empresa,
           mes: mesAno,
           status: 'error',
-          error: e?.message || 'Falha geração PDF',
+          error: e?.message || 'Falha PDF',
           auth_mode,
           duration_ms: Date.now() - t0,
         });
-        console.error('[pdf] puppeteer falhou:', e?.message || e);
         return res.status(500).json({
-          error: 'Falha ao gerar o PDF. Tente novamente em instantes.',
+          error: 'Falha ao gerar o PDF.',
           detail: String(e?.message || e).slice(0, 200),
         });
       }
 
-      writePdfCache(empresa.id, mesAno, cachePlan, pdf, fingerprint);
+      if (!preview) {
+        writePdfCache(empresa.id, mesAno, cachePlan, result.buffer, fingerprint);
+      }
+
       await logPdfGeneration(db, {
         empresa_id: empresa.id,
         empresa_nome: empresa.nome_empresa,
         mes: mesAno,
         status: 'ok',
-        bytes: pdf.length,
+        bytes: result.buffer.length,
         auth_mode,
         duration_ms: Date.now() - t0,
       });
-      return sendPdf(res, pdf, filename, 'MISS', lang);
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Length', String(result.buffer.length));
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('X-PDF-Cache', preview ? 'PREVIEW' : 'MISS');
+      res.setHeader('X-PDF-Layout', PDF_LAYOUT_VERSION);
+      res.setHeader('X-PDF-Engine', 'puppeteer');
+      res.setHeader('X-PDF-Plan', result.depth);
+      res.setHeader('X-PDF-Plan-Label', result.planLabel);
+      return res.send(result.buffer);
     })
   );
 }
