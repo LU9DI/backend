@@ -1,6 +1,6 @@
 /**
- * Relatório PDF mensal — autenticado, cache memória+disco, SEM tokens de IA.
- * Idioma: ?lang=pt|en|es|zh (ou locale da empresa).
+ * Relatório PDF mensal — autenticado, cache memória+disco.
+ * Motor: ReportLab (Python) com fallback Chromium HTML.
  */
 import type { Express, Response } from 'express';
 import rateLimit from 'express-rate-limit';
@@ -8,7 +8,7 @@ import { getDb, findEmpresa } from '../lib/db.js';
 import {
   gerarRelatorioMensalPDF,
   ensureUnidadesSchema,
-} from '../relatorioPdfChromium.js';
+} from '../relatorioPdfReportlab.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validateReportMonth } from '../lib/dateValidation.js';
 import { empresaTemPdf } from '../lib/plans.js';
@@ -25,7 +25,7 @@ import {
 } from '../lib/pdfCache.js';
 import { normalizePdfLang } from '../lib/pdfI18n.js';
 
-const PDF_LAYOUT_VERSION = 'html-chromium-v1';
+const PDF_LAYOUT_VERSION = 'reportlab-v1';
 const pdfLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 120,
@@ -51,7 +51,9 @@ async function reviewFingerprint(db: any, empresaId: string, mesAno: string): Pr
     try {
       const row = await db.get(`SELECT COUNT(*) AS n FROM reviews WHERE empresa_id = ?`, [empresaId]);
       return `${Number(row?.n || 0)}|${mesAno}`;
-    } catch { return `0|${mesAno}`; }
+    } catch {
+      return `0|${mesAno}`;
+    }
   }
 }
 function sendPdf(res: Response, pdf: Buffer, filename: string, cache: 'HIT' | 'MISS', lang: string) {
@@ -64,54 +66,137 @@ function sendPdf(res: Response, pdf: Buffer, filename: string, cache: 'HIT' | 'M
   res.setHeader('Cache-Control', 'private, max-age=300');
   res.send(pdf);
 }
+
 export function mountRelatorioRoutes(app: Express) {
-  app.get('/api/empresa/:ref/relatorio.pdf', pdfLimiter, autenticarToken, asyncHandler(async (req: AuthRequest, res: Response) => {
-    const t0 = Date.now();
-    const auth_mode = authModeOf(req);
-    const db = getDb();
-    const empresa = await findEmpresa(req.params.ref);
-    if (!empresa) {
-      await logPdfGeneration(db, { status:'error', error:'Empresa não encontrada', auth_mode, duration_ms:Date.now()-t0 });
-      return res.status(404).json({ error: 'Empresa não encontrada.' });
-    }
-    if (!podeAcessarEmpresa(req, empresa.id)) {
-      await logPdfGeneration(db, { empresa_id:empresa.id, empresa_nome:empresa.nome_empresa, status:'forbidden', error:'Sem permissão', auth_mode, duration_ms:Date.now()-t0 });
-      return res.status(403).json({ error: 'Sem permissão para baixar este relatório.' });
-    }
-    const plan = String(empresa.plan || empresa.status || 'trial').toLowerCase();
-    if (!empresaTemPdf(empresa)) {
-      await logPdfGeneration(db, { empresa_id:empresa.id, empresa_nome:empresa.nome_empresa, status:'forbidden', error:`Plano ${plan} sem PDF`, auth_mode, duration_ms:Date.now()-t0 });
-      return res.status(403).json({ error:'Relatório PDF não disponível neste plano. Trial e planos Pro+ incluem PDF. Faça upgrade se estiver no Inicial.', plan, status:empresa.status });
-    }
-    const mesCheck = validateReportMonth(req.query.mes, { defaultToCurrent:true, minYear:2020, allowFutureMonths:0 });
-    if (!mesCheck.ok) {
-      await logPdfGeneration(db, { empresa_id:empresa.id, empresa_nome:empresa.nome_empresa, status:'error', error:mesCheck.error, auth_mode, duration_ms:Date.now()-t0 });
-      return res.status(400).json({ error:mesCheck.error, exemplo:'2026-09' });
-    }
-    const mesAno = mesCheck.value;
-    const normalized = normalizePdfLang(String(req.query.lang || req.query.locale || (empresa as any).locale || (empresa as any).idioma || 'pt'));
-    const langMap:Record<string,string>={pt:'pt-BR',en:'en-US',es:'es-ES',zh:'zh-CN'};
-    const lang = langMap[normalized] || normalized;
-    const slug = empresa.slug || empresa.id.slice(0,8);
-    const filename = `relatorio-${slug}-${mesAno}-${lang}.pdf`;
-    const cachePlan = `${plan || 'trial'}|${PDF_LAYOUT_VERSION}|${lang}`;
-    const fingerprint = await reviewFingerprint(db, empresa.id, mesAno);
-    const cached = readPdfCache(empresa.id, mesAno, cachePlan, fingerprint);
-    if (cached) {
-      await logPdfGeneration(db, { empresa_id:empresa.id, empresa_nome:empresa.nome_empresa, mes:mesAno, status:'ok', bytes:cached.length, auth_mode:auth_mode+'_cache', duration_ms:Date.now()-t0 });
-      return sendPdf(res, cached, filename, 'HIT', lang);
-    }
-    await ensureUnidadesSchema(db);
-    let pdf: Buffer;
-    try {
-      pdf = await withPdfInflight(empresa.id, mesAno, cachePlan, fingerprint, () => gerarRelatorioMensalPDF(db, empresa.id, mesAno, undefined, lang));
-    } catch (e:any) {
-      await logPdfGeneration(db, { empresa_id:empresa.id, empresa_nome:empresa.nome_empresa, mes:mesAno, status:'error', error:e?.message || 'Falha geração PDF', auth_mode, duration_ms:Date.now()-t0 });
-      console.error('[pdf] geração falhou:', e?.message || e);
-      return res.status(500).json({ error:'Falha ao gerar o PDF. Tente novamente em instantes.', detail:String(e?.message || e).slice(0,200) });
-    }
-    writePdfCache(empresa.id, mesAno, cachePlan, pdf, fingerprint);
-    await logPdfGeneration(db, { empresa_id:empresa.id, empresa_nome:empresa.nome_empresa, mes:mesAno, status:'ok', bytes:pdf.length, auth_mode, duration_ms:Date.now()-t0 });
-    return sendPdf(res, pdf, filename, 'MISS', lang);
-  }));
+  app.get(
+    '/api/empresa/:ref/relatorio.pdf',
+    pdfLimiter,
+    autenticarToken,
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+      const t0 = Date.now();
+      const auth_mode = authModeOf(req);
+      const db = getDb();
+      const empresa = await findEmpresa(req.params.ref);
+      if (!empresa) {
+        await logPdfGeneration(db, {
+          status: 'error',
+          error: 'Empresa não encontrada',
+          auth_mode,
+          duration_ms: Date.now() - t0,
+        });
+        return res.status(404).json({ error: 'Empresa não encontrada.' });
+      }
+      if (!podeAcessarEmpresa(req, empresa.id)) {
+        await logPdfGeneration(db, {
+          empresa_id: empresa.id,
+          empresa_nome: empresa.nome_empresa,
+          status: 'forbidden',
+          error: 'Sem permissão',
+          auth_mode,
+          duration_ms: Date.now() - t0,
+        });
+        return res.status(403).json({ error: 'Sem permissão para baixar este relatório.' });
+      }
+      const plan = String(empresa.plan || empresa.status || 'trial').toLowerCase();
+      if (!empresaTemPdf(empresa)) {
+        await logPdfGeneration(db, {
+          empresa_id: empresa.id,
+          empresa_nome: empresa.nome_empresa,
+          status: 'forbidden',
+          error: `Plano ${plan} sem PDF`,
+          auth_mode,
+          duration_ms: Date.now() - t0,
+        });
+        return res.status(403).json({
+          error:
+            'Relatório PDF não disponível neste plano. Trial e planos Pro+ incluem PDF. Faça upgrade se estiver no Inicial.',
+          plan,
+          status: empresa.status,
+        });
+      }
+      const mesCheck = validateReportMonth(req.query.mes, {
+        defaultToCurrent: true,
+        minYear: 2020,
+        allowFutureMonths: 0,
+      });
+      if (!mesCheck.ok) {
+        await logPdfGeneration(db, {
+          empresa_id: empresa.id,
+          empresa_nome: empresa.nome_empresa,
+          status: 'error',
+          error: mesCheck.error,
+          auth_mode,
+          duration_ms: Date.now() - t0,
+        });
+        return res.status(400).json({ error: mesCheck.error, exemplo: '2026-09' });
+      }
+      const mesAno = mesCheck.value;
+      const normalized = normalizePdfLang(
+        String(
+          req.query.lang ||
+            req.query.locale ||
+            (empresa as any).locale ||
+            (empresa as any).idioma ||
+            'pt'
+        )
+      );
+      const langMap: Record<string, string> = {
+        pt: 'pt-BR',
+        en: 'en-US',
+        es: 'es-ES',
+        zh: 'zh-CN',
+      };
+      const lang = langMap[normalized] || normalized;
+      const slug = empresa.slug || empresa.id.slice(0, 8);
+      const filename = `relatorio-${slug}-${mesAno}-${lang}.pdf`;
+      const cachePlan = `${plan || 'trial'}|${PDF_LAYOUT_VERSION}|${lang}`;
+      const fingerprint = await reviewFingerprint(db, empresa.id, mesAno);
+      const cached = readPdfCache(empresa.id, mesAno, cachePlan, fingerprint);
+      if (cached) {
+        await logPdfGeneration(db, {
+          empresa_id: empresa.id,
+          empresa_nome: empresa.nome_empresa,
+          mes: mesAno,
+          status: 'ok',
+          bytes: cached.length,
+          auth_mode: auth_mode + '_cache',
+          duration_ms: Date.now() - t0,
+        });
+        return sendPdf(res, cached, filename, 'HIT', lang);
+      }
+      await ensureUnidadesSchema(db);
+      let pdf: Buffer;
+      try {
+        pdf = await withPdfInflight(empresa.id, mesAno, cachePlan, fingerprint, () =>
+          gerarRelatorioMensalPDF(db, empresa.id, mesAno, undefined, lang)
+        );
+      } catch (e: any) {
+        await logPdfGeneration(db, {
+          empresa_id: empresa.id,
+          empresa_nome: empresa.nome_empresa,
+          mes: mesAno,
+          status: 'error',
+          error: e?.message || 'Falha geração PDF',
+          auth_mode,
+          duration_ms: Date.now() - t0,
+        });
+        console.error('[pdf] geração falhou:', e?.message || e);
+        return res.status(500).json({
+          error: 'Falha ao gerar o PDF. Tente novamente em instantes.',
+          detail: String(e?.message || e).slice(0, 200),
+        });
+      }
+      writePdfCache(empresa.id, mesAno, cachePlan, pdf, fingerprint);
+      await logPdfGeneration(db, {
+        empresa_id: empresa.id,
+        empresa_nome: empresa.nome_empresa,
+        mes: mesAno,
+        status: 'ok',
+        bytes: pdf.length,
+        auth_mode,
+        duration_ms: Date.now() - t0,
+      });
+      return sendPdf(res, pdf, filename, 'MISS', lang);
+    })
+  );
 }
