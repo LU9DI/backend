@@ -18,6 +18,7 @@ import { latencyMiddleware, getHttpMetrics } from './lib/metrics.js';
 import { mountTrialRoutes } from './routes/trialRoutes.js';
 import { mountAuthRoutes } from './routes/authRoutes.js';
 import { mountEmpresaRoutes } from './routes/empresaRoutes.js';
+import { mountRelatorioDestinatariosRoutes } from './routes/relatorioDestinatariosRoutes.js';
 import { mountReviewRoutes } from './routes/reviewRoutes.js';
 import { mountAdminDashboardRoutes } from './routes/adminDashboardRoutes.js';
 import { mountAdminTecnicoRoutes } from './routes/adminTecnicoRoutes.js';
@@ -247,6 +248,7 @@ async function main() {
   mountTrialRoutes(app);
   mountAuthRoutes(app);
   mountEmpresaRoutes(app);
+  mountRelatorioDestinatariosRoutes(app);
   mountReviewRoutes(app);
   mountAdminDashboardRoutes(app);
   mountAdminTecnicoRoutes(app);
