@@ -1,0 +1,27 @@
+name: Monthly reports
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate closed billing-cycle reports
+        env:
+          API_URL: ${{ vars.FILTRA_API_URL || 'https://api.filtraai.com' }}
+          JOBS_SECRET: ${{ secrets.JOBS_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${JOBS_SECRET}" ]; then
+            echo "JOBS_SECRET is not configured in GitHub Actions."
+            exit 1
+          fi
+
+          curl --fail-with-body --silent --show-error \
+            --retry 3 --retry-delay 5 \
+            --request POST \
+            --header "Authorization: Bearer ${JOBS_SECRET}" \
+            "${API_URL}/api/jobs/monthly-reports"
