@@ -4,16 +4,12 @@
  * Desliga com ALLOW_PLAN_SWITCH=0
  */
 import type { Express, Response } from 'express';
+import type { AuthRequest } from '../lib/auth.js';
 import { getDb, findEmpresa } from '../lib/db.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import {
-  PLANOS_OFICIAIS,
-  isPlanoOficial,
-  allowPlanSwitch,
-  planTemPdf,
-  planLabel,
-} from '../lib/plans.js';
-import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
+import { PLANOS_OFICIAIS, isPlanoOficial, allowPlanSwitch, planLabel } from '../lib/plans.js';
+import { planTemIA } from '../lib/quota.js';
+import { autenticarToken, isAdminUser } from '../lib/auth.js';
 
 function podeGerirEmpresa(req: AuthRequest, empresaId: string): boolean {
   if (isAdminUser(req.user)) return true;
@@ -27,7 +23,8 @@ export function mountPlanSwitchRoutes(app: Express) {
       planos: PLANOS_OFICIAIS.map((p) => ({
         key: p,
         label: planLabel(p),
-        pdf: planTemPdf(p),
+        relatorio_whatsapp: planTemIA(p),
+        pdf: false,
       })),
     });
   });
@@ -38,33 +35,23 @@ export function mountPlanSwitchRoutes(app: Express) {
     asyncHandler(async (req: AuthRequest, res: Response) => {
       if (!allowPlanSwitch()) {
         return res.status(403).json({
-          error:
-            'Troca de plano por teste desativada em produção. Defina ALLOW_PLAN_SWITCH=1 no .env para liberar.',
+          error: 'Troca de plano por teste desativada em produção. Defina ALLOW_PLAN_SWITCH=1 no .env para liberar.',
         });
       }
 
       const empresa = await findEmpresa(req.params.ref);
       if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
-
-      if (!podeGerirEmpresa(req, empresa.id)) {
-        return res.status(403).json({ error: 'Sem permissão para alterar o plano desta empresa.' });
-      }
+      if (!podeGerirEmpresa(req, empresa.id)) return res.status(403).json({ error: 'Sem permissão para alterar o plano desta empresa.' });
 
       const raw = String(req.body.plan || req.body.plano || '').toLowerCase().trim();
       if (!isPlanoOficial(raw)) {
-        return res.status(400).json({
-          error: `Plano inválido. Use um de: ${PLANOS_OFICIAIS.join(', ')}`,
-          planos: PLANOS_OFICIAIS,
-        });
+        return res.status(400).json({ error: `Plano inválido. Use um de: ${PLANOS_OFICIAIS.join(', ')}`, planos: PLANOS_OFICIAIS });
       }
 
       const expira = new Date();
       expira.setDate(expira.getDate() + 30);
-
       await getDb().run(
-        `UPDATE empresas
-         SET plan = ?, status = 'ativo', expira_em = ?, cancel_at_period_end = 0
-         WHERE id = ?`,
+        `UPDATE empresas SET plan = ?, status = 'ativo', expira_em = ?, cancel_at_period_end = 0 WHERE id = ?`,
         [raw, expira.toISOString(), empresa.id]
       );
 
@@ -74,7 +61,8 @@ export function mountPlanSwitchRoutes(app: Express) {
         label: planLabel(raw),
         status: 'ativo',
         expira_em: expira.toISOString(),
-        pdf_disponivel: planTemPdf(raw),
+        relatorio_whatsapp_disponivel: planTemIA(raw),
+        pdf_disponivel: false,
         modo_teste: true,
         mensagem: `Plano alterado para ${planLabel(raw)} (modo teste — sem cobrança Stripe).`,
       });
