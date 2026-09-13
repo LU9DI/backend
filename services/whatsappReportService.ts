@@ -151,16 +151,26 @@ async function claim(db: Database, id: string, p: ReportPeriod) {
 async function wait(db: Database, id: string, p: ReportPeriod) { for (let i = 0; i < WAIT_ATTEMPTS; i++) { await new Promise(r => setTimeout(r, WAIT_MS)); const x = await getCache(db, id, p); if (x?.status === 'ready' && x.texto_relatorio) return x; } return getCache(db, id, p); }
 async function recover(db: Database, row: CacheRow, p: ReportPeriod) { const t = Date.parse(row.generation_started_at || ''); if (row.status === 'generating' && Number.isFinite(t) && Date.now() - t > GENERATION_TIMEOUT_MS) await db.run(`DELETE FROM relatorios_cache WHERE cliente_id=? AND periodo_inicio=? AND periodo_fim=? AND status='generating'`, [row.cliente_id, p.inicio, p.fim]); }
 
+function cacheMatchesTier(row: CacheRow | undefined, plan?: string | null): boolean {
+  return Boolean(row?.status === 'ready' && row.texto_relatorio && row.dados_hash?.startsWith(`${tier(plan)}:`));
+}
+
 export async function getOrGenerateWhatsAppReport(db: Database, id: string, p: ReportPeriod, plan?: string | null): Promise<{ text: string; cached: boolean; model: string; data: Data }> {
   await ensureReportCacheSchema(db);
+  const currentTier = tier(plan);
   let r = await getCache(db, id, p);
-  if (r?.status === 'ready' && r.texto_relatorio) return { text: r.texto_relatorio, cached: true, model: 'none', data: {} as Data };
-  if (r?.status === 'generating') { await recover(db, r, p); r = await getCache(db, id, p); if (r?.status === 'generating') { const x = await wait(db, id, p); if (x?.status === 'ready' && x.texto_relatorio) return { text: x.texto_relatorio, cached: true, model: 'none', data: {} as Data }; throw Error('Geração do relatório já está em andamento. Tente novamente em instantes.'); } }
-  if (!await claim(db, id, p)) { const x = await wait(db, id, p); if (x?.status === 'ready' && x.texto_relatorio) return { text: x.texto_relatorio, cached: true, model: 'none', data: {} as Data }; throw Error('Geração do relatório já está em andamento. Tente novamente em instantes.'); }
+  if (cacheMatchesTier(r, plan)) return { text: r!.texto_relatorio!, cached: true, model: 'none', data: {} as Data };
+  if (r?.status === 'ready' && r.texto_relatorio && r.dados_hash && !r.dados_hash.startsWith(`${currentTier}:`)) {
+    await db.run(`DELETE FROM relatorios_cache WHERE cliente_id=? AND periodo_inicio=? AND periodo_fim=? AND status='ready'`, [id, p.inicio, p.fim]);
+    r = await getCache(db, id, p);
+  }
+  if (r?.status === 'generating') { await recover(db, r, p); r = await getCache(db, id, p); if (r?.status === 'generating') { const x = await wait(db, id, p); if (cacheMatchesTier(x, plan)) return { text: x!.texto_relatorio!, cached: true, model: 'none', data: {} as Data }; throw Error('Geração do relatório já está em andamento. Tente novamente em instantes.'); } }
+  if (!await claim(db, id, p)) { const x = await wait(db, id, p); if (cacheMatchesTier(x, plan)) return { text: x!.texto_relatorio!, cached: true, model: 'none', data: {} as Data }; throw Error('Geração do relatório já está em andamento. Tente novamente em instantes.'); }
   try {
     const d = await data(db, id, p);
     const t = text(d, p, plan);
-    const h = crypto.createHash('sha256').update(JSON.stringify({ ...d, tier: tier(plan) })).digest('hex');
+    const digest = crypto.createHash('sha256').update(JSON.stringify({ ...d, tier: currentTier })).digest('hex');
+    const h = `${currentTier}:${digest}`;
     await db.run(`UPDATE relatorios_cache SET dados_hash=?,texto_relatorio=?,modelo_ia='none',status='ready',updated_at=? WHERE cliente_id=? AND periodo_inicio=? AND periodo_fim=?`, [h, t, new Date().toISOString(), id, p.inicio, p.fim]);
     return { text: t, cached: false, model: 'none', data: d };
   } catch (e) {
