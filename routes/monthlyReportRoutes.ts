@@ -1,7 +1,5 @@
 import type { Express, Request, Response } from 'express';
-import crypto from 'node:crypto';
-import { getDb } from '../lib/db.js';
-import { findEmpresa } from '../lib/db.js';
+import { getDb, findEmpresa } from '../lib/db.js';
 import { planTemPdf } from '../lib/plans.js';
 import { getCycleForDate, cycleEnded } from '../lib/reportCycle.js';
 import { ensureMonthlyReportSchema, getMonthlyReport } from '../lib/monthlyReportStore.js';
@@ -24,10 +22,6 @@ function canAccess(req: AuthRequest, empresaId: string): boolean {
 }
 
 export function mountMonthlyReportRoutes(app: Express) {
-  /**
-   * Job diário. O Render Cron pode chamar este endpoint 1x/dia.
-   * O job é idempotente: empresa + ciclo possui uma única linha.
-   */
   app.post('/api/jobs/monthly-reports', async (req: Request, res: Response) => {
     if (!authorizedJob(req)) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -44,25 +38,15 @@ export function mountMonthlyReportRoutes(app: Express) {
         ORDER BY criado_em ASC`
     );
 
-    const stats = {
-      candidatos: empresas.length,
-      gerados: 0,
-      ja_existiam: 0,
-      sem_ciclo_fechado: 0,
-      erros: 0,
-    };
+    const stats = { candidatos: empresas.length, gerados: 0, ja_existiam: 0, sem_ciclo_fechado: 0, erros: 0 };
     const errors: Array<{ empresa: string; error: string }> = [];
 
     for (const empresa of empresas || []) {
       try {
         if (!planTemPdf(empresa.plan)) continue;
-
-        // O ciclo atual normalmente ainda está aberto. O relatório que acabou
-        // de fechar é o ciclo imediatamente anterior ao atual.
         const current = getCycleForDate(empresa.criado_em, now);
         const previousReference = new Date(current.start.getTime() - 1);
         const closed = getCycleForDate(empresa.criado_em, previousReference);
-
         if (!cycleEnded(closed, now)) {
           stats.sem_ciclo_fechado++;
           continue;
@@ -73,45 +57,30 @@ export function mountMonthlyReportRoutes(app: Express) {
         else stats.gerados++;
       } catch (e: any) {
         stats.erros++;
-        errors.push({
-          empresa: empresa.nome_empresa || empresa.id,
-          error: String(e?.message || e),
-        });
+        errors.push({ empresa: empresa.nome_empresa || empresa.id, error: String(e?.message || e) });
       }
     }
 
     res.json({ success: stats.erros === 0, ...stats, errors });
   });
 
-  /** Download do relatório automático por ciclo. */
-  app.get(
-    '/api/empresa/:ref/relatorios/:cycleKey.pdf',
-    autenticarToken,
-    async (req: AuthRequest, res: Response) => {
-      const empresa = await findEmpresa(req.params.ref);
-      if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
-      if (!canAccess(req, empresa.id)) return res.status(403).json({ error: 'Sem permissão.' });
-      if (!planTemPdf(empresa.plan)) return res.status(403).json({ error: 'Plano sem relatório PDF.' });
+  app.get('/api/empresa/:ref/relatorios/:cycleKey.pdf', autenticarToken, async (req: AuthRequest, res: Response) => {
+    const empresa = await findEmpresa(req.params.ref);
+    if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
+    if (!canAccess(req, empresa.id)) return res.status(403).json({ error: 'Sem permissão.' });
+    if (!planTemPdf(empresa.plan)) return res.status(403).json({ error: 'Plano sem relatório PDF.' });
 
-      const db = getDb();
-      await ensureMonthlyReportSchema(db);
-      const report = await getMonthlyReport(db, empresa.id, req.params.cycleKey);
-
-      if (!report || !report.pdf_data) {
-        return res.status(404).json({ error: 'Relatório não encontrado para este ciclo.' });
-      }
-
-      const pdf = Buffer.isBuffer(report.pdf_data)
-        ? report.pdf_data
-        : Buffer.from(report.pdf_data);
-
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="${report.file_name || `relatorio-${empresa.slug || empresa.id}-${report.cycle_key}.pdf`}"`
-      );
-      res.setHeader('Content-Length', String(pdf.length));
-      res.send(pdf);
+    const db = getDb();
+    await ensureMonthlyReportSchema(db);
+    const report = await getMonthlyReport(db, empresa.id, req.params.cycleKey);
+    if (!report || !report.pdf_data) {
+      return res.status(404).json({ error: 'Relatório não encontrado para este ciclo.' });
     }
-  );
+
+    const pdf = Buffer.isBuffer(report.pdf_data) ? report.pdf_data : Buffer.from(report.pdf_data);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${report.file_name || `relatorio-${empresa.slug || empresa.id}-${report.cycle_key}.pdf`}"`);
+    res.setHeader('Content-Length', String(pdf.length));
+    res.send(pdf);
+  });
 }
