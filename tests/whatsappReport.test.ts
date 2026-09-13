@@ -19,21 +19,36 @@ test('report cache schema enforces one report per client and period', async () =
   await db.close();
 });
 
-test('cache miss generates the WhatsApp report locally without AI', async () => {
+test('report is strictly derived from panel data and uses zero AI tokens', async () => {
   const db = await open({ filename: ':memory:', driver: sqlite3.Database });
   await db.exec(`CREATE TABLE reviews (id INTEGER PRIMARY KEY AUTOINCREMENT, empresa_id TEXT, rating INTEGER, comment TEXT, ai_tags TEXT, createdAt TEXT, is_test INTEGER DEFAULT 0)`);
   await db.run(`INSERT INTO reviews (empresa_id, rating, createdAt, is_test, ai_tags) VALUES (?, ?, ?, 0, ?)`, ['empresa-1', 5, '2026-09-08T10:00:00.000Z', JSON.stringify(['Atendimento', 'Rapidez'])]);
+  await db.run(`INSERT INTO reviews (empresa_id, rating, createdAt, is_test, ai_tags) VALUES (?, ?, ?, 0, ?)`, ['empresa-1', 2, '2026-09-09T10:00:00.000Z', JSON.stringify(['Tempo de espera'])]);
   await ensureReportCacheSchema(db);
-  const result = await getOrGenerateWhatsAppReport(db, 'empresa-1', buildReportPeriod('semana', '2026-09-07', '2026-09-13'));
+  const result = await getOrGenerateWhatsAppReport(db, 'empresa-1', buildReportPeriod('semana', '2026-09-07', '2026-09-13'), 'rei');
   assert.equal(result.cached, false);
   assert.equal(result.model, 'none');
-  assert.match(result.text, /Nota média/);
+  assert.equal(result.data.score_medio, 3.5);
+  assert.equal(result.data.total_avaliacoes, 2);
+  assert.equal(result.data.estrelas['5'], 1);
+  assert.equal(result.data.estrelas['2'], 1);
+  assert.match(result.text, /3,5\/5/);
   assert.match(result.text, /Atendimento/);
-  assert.match(result.text, /Rapidez/);
-  const cached = await getOrGenerateWhatsAppReport(db, 'empresa-1', buildReportPeriod('semana', '2026-09-07', '2026-09-13'));
-  assert.equal(cached.cached, true);
-  assert.equal(cached.model, 'none');
-  assert.equal(cached.text, result.text);
+  assert.match(result.text, /Tempo de espera/);
+  assert.doesNotMatch(result.text, /recomenda-se|preservar|acompanhar os pontos|provavelmente|crescimento/i);
+  await db.close();
+});
+
+test('trial uses the same report tier as rei', async () => {
+  const db = await open({ filename: ':memory:', driver: sqlite3.Database });
+  await db.exec(`CREATE TABLE reviews (id INTEGER PRIMARY KEY AUTOINCREMENT, empresa_id TEXT, rating INTEGER, comment TEXT, ai_tags TEXT, createdAt TEXT, is_test INTEGER DEFAULT 0)`);
+  await db.run(`INSERT INTO reviews (empresa_id, rating, createdAt, is_test, ai_tags) VALUES (?, ?, ?, 0, ?)`, ['empresa-1', 5, '2026-09-08T10:00:00.000Z', JSON.stringify(['Atendimento'])]);
+  const period = buildReportPeriod('semana', '2026-09-07', '2026-09-13');
+  const rei = await getOrGenerateWhatsAppReport(db, 'empresa-rei', period, 'rei');
+  const trial = await getOrGenerateWhatsAppReport(db, 'empresa-trial', period, 'trial');
+  assert.equal(trial.text, rei.text);
+  assert.equal(trial.model, 'none');
+  assert.equal(rei.model, 'none');
   await db.close();
 });
 
