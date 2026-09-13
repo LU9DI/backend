@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Filtra.AI — relatório mensal PDF (ReportLab), profundidade por plano."""
+"""Filtra.AI — relatório mensal PDF (ReportLab), profundidade por plano.
+Período = ciclo da assinatura (ex. 15/09–14/10), não necessariamente dia 1.
+"""
 from __future__ import annotations
 
 import json
@@ -18,11 +20,10 @@ from reportlab.platypus import (
     Spacer,
     Table,
     TableStyle,
-    KeepTogether,
     PageBreak,
     HRFlowable,
 )
-from reportlab.graphics.shapes import Drawing, Rect, String, Line
+from reportlab.graphics.shapes import Drawing
 from reportlab.graphics.charts.barcharts import VerticalBarChart
 from reportlab.graphics.charts.piecharts import Pie
 
@@ -53,7 +54,7 @@ def pct(n: int, total: int) -> str:
     return f"{round(n / total * 100)}%" if total else "0%"
 
 
-def period_label(mes: str) -> str:
+def fallback_period_label(mes: str) -> str:
     try:
         y, m = mes.split("-")
         return f"{MONTHS_PT[int(m) - 1]} / {y}"
@@ -76,7 +77,7 @@ def depth_of(plan: str, trial: bool) -> str:
 
 def make_styles():
     base = getSampleStyleSheet()
-    styles = {
+    return {
         "brand": ParagraphStyle(
             "brand", parent=base["Normal"], fontName="Helvetica-Bold",
             fontSize=22, textColor=NAVY, spaceAfter=4,
@@ -114,7 +115,6 @@ def make_styles():
             fontSize=7, textColor=MUTED, alignment=1,
         ),
     }
-    return styles
 
 
 def header_footer(canvas, doc, empresa: str, periodo: str, plan_label: str):
@@ -133,13 +133,13 @@ def header_footer(canvas, doc, empresa: str, periodo: str, plan_label: str):
     canvas.setFont("Helvetica", 8)
     canvas.drawRightString(PAGE_W - 16 * mm, PAGE_H - 12 * mm, (empresa or "")[:42])
     canvas.setFillColor(colors.HexColor("#94a3b8"))
-    canvas.drawRightString(PAGE_W - 16 * mm, PAGE_H - 17 * mm, periodo)
+    canvas.drawRightString(PAGE_W - 16 * mm, PAGE_H - 17 * mm, (periodo or "")[:40])
     canvas.setStrokeColor(LINE)
     canvas.setLineWidth(0.4)
     canvas.line(16 * mm, 12 * mm, PAGE_W - 16 * mm, 12 * mm)
     canvas.setFillColor(MUTED)
     canvas.setFont("Helvetica", 7)
-    canvas.drawString(16 * mm, 7 * mm, "Filtra.AI · relatório de reputação")
+    canvas.drawString(16 * mm, 7 * mm, "Filtra.AI · ciclo de assinatura")
     canvas.drawRightString(PAGE_W - 16 * mm, 7 * mm, f"Página {doc.page}")
     canvas.restoreState()
 
@@ -147,29 +147,24 @@ def header_footer(canvas, doc, empresa: str, periodo: str, plan_label: str):
 def kpi_table(styles, items: list[tuple[str, str, str]]):
     cells = []
     for label, value, sub in items:
-        block = [
+        cells.append([
             Paragraph(label.upper(), styles["kpi_label"]),
             Paragraph(value, styles["kpi_value"]),
             Paragraph(sub, styles["kpi_sub"]),
-        ]
-        cells.append(block)
+        ])
     data = [cells]
     col = (PAGE_W - 32 * mm) / max(len(items), 1)
     t = Table(data, colWidths=[col] * len(items))
-    t.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, -1), PALE),
-                ("BOX", (0, 0), (-1, -1), 0.5, LINE),
-                ("INNERGRID", (0, 0), (-1, -1), 0.4, LINE),
-                ("LEFTPADDING", (0, 0), (-1, -1), 8),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-                ("TOPPADDING", (0, 0), (-1, -1), 8),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ]
-        )
-    )
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), PALE),
+        ("BOX", (0, 0), (-1, -1), 0.5, LINE),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, LINE),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
     return t
 
 
@@ -224,9 +219,11 @@ def build_pdf(payload: dict[str, Any]) -> bytes:
     plan = str(payload.get("plan") or "trial").lower()
     trial = bool(payload.get("trial"))
     mes = str(payload.get("mes") or "")
-    periodo = period_label(mes)
+    # Preferir rótulo do ciclo de assinatura (ex. 15/09/2026 – 14/10/2026)
+    periodo = str(payload.get("period_label") or "").strip() or fallback_period_label(mes)
     plan_label = "Trial" if trial else str(payload.get("plan_label") or plan.upper())
     depth = depth_of(plan, trial)
+    anchor = payload.get("anchor_day")
 
     total = int(payload.get("total") or 0)
     avg = float(payload.get("avg") or 0)
@@ -249,7 +246,7 @@ def build_pdf(payload: dict[str, Any]) -> bytes:
         rightMargin=16 * mm,
         topMargin=28 * mm,
         bottomMargin=18 * mm,
-        title=f"{empresa} — {mes}",
+        title=f"{empresa} — {periodo}",
         author="Filtra.AI",
     )
 
@@ -257,71 +254,43 @@ def build_pdf(payload: dict[str, Any]) -> bytes:
     story.append(Paragraph("Filtra.AI", styles["brand"]))
     story.append(HRFlowable(width="100%", thickness=2, color=INDIGO, spaceAfter=8))
     story.append(Paragraph(empresa, styles["h1"]))
-    story.append(
-        Paragraph(
-            f"Relatório mensal de reputação · {periodo} · Plano {plan_label}",
-            styles["meta"],
-        )
-    )
+    meta = f"Ciclo de assinatura · {periodo} · Plano {plan_label}"
+    if anchor:
+        meta += f" · dia âncora {anchor}"
+    story.append(Paragraph(meta, styles["meta"]))
     story.append(Spacer(1, 8))
 
-    # KPIs
     story.append(Paragraph("Resumo do período", styles["h2"]))
-    story.append(
-        kpi_table(
-            styles,
-            [
-                ("Volume", str(total), "Avaliações válidas"),
-                ("Nota média", f"{avg:.1f}" if total else "—", "Escala 1 a 5"),
-                ("Positivas", f"{positive} ({pct(positive, total)})", "Notas 4–5"),
-                ("Críticas", f"{critical} ({pct(critical, total)})", "Notas 1–3"),
-            ],
-        )
-    )
+    story.append(kpi_table(styles, [
+        ("Volume", str(total), "Avaliações válidas"),
+        ("Nota média", f"{avg:.1f}" if total else "—", "Escala 1 a 5"),
+        ("Positivas", f"{positive} ({pct(positive, total)})", "Notas 4–5"),
+        ("Críticas", f"{critical} ({pct(critical, total)})", "Notas 1–3"),
+    ]))
 
-    # Distribution — all plans
     story.append(Paragraph("Distribuição de notas", styles["h2"]))
     story.append(bar_chart(dist))
-    story.append(
-        Paragraph(
-            f"Positivas (4–5★): {positive} ({pct(positive, total)})  ·  "
-            f"Críticas (1–3★): {critical} ({pct(critical, total)})",
-            styles["body"],
-        )
-    )
+    story.append(Paragraph(
+        f"Positivas (4–5★): {positive} ({pct(positive, total)})  ·  "
+        f"Críticas (1–3★): {critical} ({pct(critical, total)})",
+        styles["body"],
+    ))
 
-    # Ultra+ sentiment & themes
     if depth in ("ultra", "corp", "rei"):
         story.append(Paragraph("Sentimento", styles["h2"]))
-        sent_table = Table(
-            [[
-                Paragraph(
-                    f"<b>Positivo</b><br/>{sent.get('pos', 0)} ({pct(int(sent.get('pos', 0)), total)})",
-                    styles["body"],
-                ),
-                Paragraph(
-                    f"<b>Neutro</b><br/>{sent.get('neu', 0)} ({pct(int(sent.get('neu', 0)), total)})",
-                    styles["body"],
-                ),
-                Paragraph(
-                    f"<b>Negativo</b><br/>{sent.get('neg', 0)} ({pct(int(sent.get('neg', 0)), total)})",
-                    styles["body"],
-                ),
-            ]],
-            colWidths=[(PAGE_W - 32 * mm) / 3] * 3,
-        )
-        sent_table.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, -1), PALE),
-                    ("BOX", (0, 0), (-1, -1), 0.5, LINE),
-                    ("INNERGRID", (0, 0), (-1, -1), 0.4, LINE),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 10),
-                    ("TOPPADDING", (0, 0), (-1, -1), 10),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
-                ]
-            )
-        )
+        sent_table = Table([[
+            Paragraph(f"<b>Positivo</b><br/>{sent.get('pos', 0)} ({pct(int(sent.get('pos', 0)), total)})", styles["body"]),
+            Paragraph(f"<b>Neutro</b><br/>{sent.get('neu', 0)} ({pct(int(sent.get('neu', 0)), total)})", styles["body"]),
+            Paragraph(f"<b>Negativo</b><br/>{sent.get('neg', 0)} ({pct(int(sent.get('neg', 0)), total)})", styles["body"]),
+        ]], colWidths=[(PAGE_W - 32 * mm) / 3] * 3)
+        sent_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), PALE),
+            ("BOX", (0, 0), (-1, -1), 0.5, LINE),
+            ("INNERGRID", (0, 0), (-1, -1), 0.4, LINE),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ]))
         story.append(sent_table)
 
         if depth == "rei":
@@ -338,24 +307,19 @@ def build_pdf(payload: dict[str, Any]) -> bytes:
             for th in themes[:10]:
                 rows.append([str(th.get("tag") or "")[:48], str(th.get("count") or 0)])
             tt = Table(rows, colWidths=[PAGE_W - 32 * mm - 40 * mm, 40 * mm])
-            tt.setStyle(
-                TableStyle(
-                    [
-                        ("BACKGROUND", (0, 0), (-1, 0), NAVY),
-                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                        ("FONTSIZE", (0, 0), (-1, -1), 8),
-                        ("BACKGROUND", (0, 1), (-1, -1), PALE),
-                        ("GRID", (0, 0), (-1, -1), 0.4, LINE),
-                        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                        ("TOPPADDING", (0, 0), (-1, -1), 5),
-                        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-                    ]
-                )
-            )
+            tt.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("BACKGROUND", (0, 1), (-1, -1), PALE),
+                ("GRID", (0, 0), (-1, -1), 0.4, LINE),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]))
             story.append(tt)
 
-    # Corp / Rei units
     if depth in ("corp", "rei") and units:
         story.append(PageBreak())
         story.append(Paragraph("Ranking de unidades", styles["h2"]))
@@ -368,66 +332,45 @@ def build_pdf(payload: dict[str, Any]) -> bytes:
                 str(u.get("critical") or 0),
             ])
         ut = Table(rows, colWidths=[90 * mm, 30 * mm, 30 * mm, 30 * mm])
-        ut.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), NAVY),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 8),
-                    ("BACKGROUND", (0, 1), (-1, -1), colors.white),
-                    ("GRID", (0, 0), (-1, -1), 0.4, LINE),
-                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, PALE]),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                    ("TOPPADDING", (0, 0), (-1, -1), 5),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-                ]
-            )
-        )
+        ut.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("BACKGROUND", (0, 1), (-1, -1), colors.white),
+            ("GRID", (0, 0), (-1, -1), 0.4, LINE),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, PALE]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
         story.append(ut)
 
         if depth == "rei":
             for u in units[:8]:
                 story.append(Spacer(1, 10))
-                story.append(
-                    Paragraph(
-                        f"Unidade: {u.get('nome') or '—'}",
-                        styles["h2"],
-                    )
-                )
-                story.append(
-                    kpi_table(
-                        styles,
-                        [
-                            ("Volume", str(u.get("total") or 0), "Neste período"),
-                            ("Média", f"{float(u.get('avg') or 0):.1f}", "1–5"),
-                            ("Críticas", str(u.get("critical") or 0), "1–3★"),
-                            (
-                                "Positivas",
-                                str(u.get("positive") or 0),
-                                pct(int(u.get("positive") or 0), int(u.get("total") or 0)),
-                            ),
-                        ],
-                    )
-                )
+                story.append(Paragraph(f"Unidade: {u.get('nome') or '—'}", styles["h2"]))
+                story.append(kpi_table(styles, [
+                    ("Volume", str(u.get("total") or 0), "Neste ciclo"),
+                    ("Média", f"{float(u.get('avg') or 0):.1f}", "1–5"),
+                    ("Críticas", str(u.get("critical") or 0), "1–3★"),
+                    ("Positivas", str(u.get("positive") or 0),
+                     pct(int(u.get("positive") or 0), int(u.get("total") or 0))),
+                ]))
 
     if total == 0:
         story.append(Spacer(1, 12))
-        story.append(
-            Paragraph(
-                "Nenhuma avaliação válida neste período. "
-                "O relatório continua disponível; os números sobem com novos feedbacks.",
-                styles["body"],
-            )
-        )
+        story.append(Paragraph(
+            "Nenhuma avaliação válida neste ciclo de assinatura. "
+            "O relatório continua disponível; os números sobem com novos feedbacks.",
+            styles["body"],
+        ))
 
     story.append(Spacer(1, 16))
-    story.append(
-        Paragraph(
-            "Dados do painel Filtra.AI · sem projeção de resultados futuros.",
-            styles["footer"],
-        )
-    )
+    story.append(Paragraph(
+        "Dados do painel Filtra.AI · período alinhado à data de assinatura · sem projeção futura.",
+        styles["footer"],
+    ))
 
     def on_page(c, d):
         header_footer(c, d, empresa, periodo, plan_label)
