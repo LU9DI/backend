@@ -1,4 +1,4 @@
-/** Relatório WhatsApp: resumo determinístico por plano, sem IA e com cache. */
+/** Relatório WhatsApp: resumo determinístico dos dados do painel, sem IA e com cache. */
 import crypto from 'crypto';
 import type { Database } from 'sqlite';
 
@@ -60,15 +60,42 @@ function tier(plan: string | null | undefined): Tier { const p = String(plan || 
 const n = (v: number) => v.toLocaleString('pt-BR', { maximumFractionDigits: 2 });
 const stars = (d: Data) => `⭐ 5 estrelas: ${d.estrelas['5']}\n⭐ 4 estrelas: ${d.estrelas['4']}\n⭐ 3 estrelas: ${d.estrelas['3']}\n⭐ 2 estrelas: ${d.estrelas['2']}\n⭐ 1 estrela: ${d.estrelas['1']}`;
 
+/**
+ * Monta somente uma versão compacta dos dados existentes no painel.
+ * Não cria diagnóstico, causa, recomendação, previsão ou informação externa.
+ */
 function text(d: Data, p: ReportPeriod, plan?: string | null) {
-  const t = tier(plan), l: string[] = [`📊 *Relatório de Reputação — ${t === 'rei' ? 'Rei' : t.charAt(0).toUpperCase() + t.slice(1)}*`, `📅 *Período:* ${p.inicio} a ${p.fim}`, ''];
-  l.push(`⭐ *Nota média:* ${d.score_medio != null ? `${n(d.score_medio)}/5` : '—'}`, `💬 *Avaliações:* ${d.total_avaliacoes}`);
-  if (d.variacao_score != null) l.push(`${d.variacao_score > 0 ? '📈' : d.variacao_score < 0 ? '📉' : '➡️'} *Variação:* ${d.variacao_score > 0 ? '+' : ''}${n(d.variacao_score)}`);
+  const t = tier(plan), nomePlano = t === 'rei' ? 'Rei' : t.charAt(0).toUpperCase() + t.slice(1);
+  const l: string[] = [`📊 *Relatório de Reputação — ${nomePlano}*`, `📅 *Período:* ${p.inicio} a ${p.fim}`, ''];
+
+  if (d.score_medio != null) l.push(`⭐ *Nota média:* ${n(d.score_medio)}/5`);
+  else l.push('⭐ *Nota média:* Sem dados no período');
+  l.push(`💬 *Avaliações:* ${d.total_avaliacoes}`);
+
+  if (d.variacao_score != null) l.push(`${d.variacao_score > 0 ? '📈' : d.variacao_score < 0 ? '📉' : '➡️'} *Variação da nota:* ${d.variacao_score > 0 ? '+' : ''}${n(d.variacao_score)}`);
+
   if (t !== 'inicial') l.push('', '*Distribuição das avaliações*', stars(d));
-  if (t === 'ultra' || t === 'corporativo' || t === 'rei') { l.push('', `📈 *Tendência:* ${d.tendencia === 'positiva' ? 'Positiva' : d.tendencia === 'negativa' ? 'Negativa' : d.tendencia === 'sem_dados' ? 'Sem dados suficientes' : 'Estável'}`); if (d.score_anterior != null) l.push(`📊 *Nota período anterior:* ${n(d.score_anterior)}/5`); }
-  if (t === 'pro' || t === 'ultra' || t === 'corporativo' || t === 'rei') { if (d.top_elogios.length) l.push('', '👍 *Principais elogios*', ...d.top_elogios.map(x => `• ${x}`)); if (d.top_reclamacoes.length) l.push('', '⚠️ *Pontos de atenção*', ...d.top_reclamacoes.map(x => `• ${x}`)); }
-  if (t === 'corporativo' || t === 'rei') { l.push('', '🎯 *Leitura executiva*'); if (!d.total_avaliacoes) l.push('Sem avaliações suficientes para uma leitura do período.'); else if (d.tendencia === 'positiva') l.push('A reputação apresentou evolução positiva no período.'); else if (d.tendencia === 'negativa') l.push('A reputação apresentou queda. Recomenda-se acompanhar os pontos de atenção.'); else l.push('A reputação permaneceu estável no período.'); }
-  if (t === 'rei') { l.push('', '💡 *Prioridade*'); if (d.top_reclamacoes.length) l.push(`Acompanhar: ${d.top_reclamacoes.slice(0, 2).join(' e ')}.`); else if (d.top_elogios.length) l.push(`Preservar os pontos fortes: ${d.top_elogios.slice(0, 2).join(' e ')}.`); else l.push('Manter o acompanhamento da reputação.'); }
+
+  if (t === 'ultra' || t === 'corporativo' || t === 'rei') {
+    if (d.score_anterior != null) l.push('', `📊 *Nota do período anterior:* ${n(d.score_anterior)}/5`);
+    if (d.tendencia !== 'sem_dados') l.push(`📌 *Variação registrada:* ${d.tendencia === 'positiva' ? 'positiva' : d.tendencia === 'negativa' ? 'negativa' : 'estável'}`);
+  }
+
+  if (t === 'pro' || t === 'ultra' || t === 'corporativo' || t === 'rei') {
+    if (d.top_elogios.length) l.push('', '👍 *Principais elogios extraídos*', ...d.top_elogios.map(x => `• ${x}`));
+    if (d.top_reclamacoes.length) l.push('', '⚠️ *Principais reclamações extraídas*', ...d.top_reclamacoes.map(x => `• ${x}`));
+  }
+
+  if (t === 'corporativo' || t === 'rei') {
+    l.push('', '📋 *Resumo dos dados*');
+    if (d.total_avaliacoes === 0) l.push('Nenhuma avaliação registrada no período.');
+    else {
+      if (d.top_elogios.length) l.push(`Elogios mais frequentes: ${d.top_elogios.slice(0, 3).join(', ')}.`);
+      if (d.top_reclamacoes.length) l.push(`Reclamações mais frequentes: ${d.top_reclamacoes.slice(0, 3).join(', ')}.`);
+      if (!d.top_elogios.length && !d.top_reclamacoes.length) l.push('Não há tags de elogios ou reclamações disponíveis no painel para este período.');
+    }
+  }
+
   return l.join('\n');
 }
 
