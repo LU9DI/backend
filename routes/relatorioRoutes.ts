@@ -7,6 +7,7 @@ import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
 import { verifyInboundSecret } from '../lib/n8n.js';
 import { ensureReviewFraudColumns } from '../lib/reviewFraud.js';
 import { ensureReportCacheSchema, buildReportPeriod, getOrGenerateWhatsAppReport } from '../services/whatsappReportService.js';
+import { planoTemRelatorioWhatsApp } from '../lib/plans.js';
 
 const reportLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -51,6 +52,17 @@ export function mountRelatorioRoutes(app: Express) {
       if (!podeAcessarEmpresa(req, empresa.id)) return res.status(403).json({ error: 'Sem permissão para acessar este relatório.' });
 
       const plan = String(empresa.plan || '').toLowerCase();
+      if (!planoTemRelatorioWhatsApp(plan)) {
+        return res.status(403).json({
+          success: false,
+          error: 'REPORT_NOT_AVAILABLE',
+          code: 'REPORT_NOT_AVAILABLE',
+          message: 'O relatório mensal via WhatsApp não está disponível no plano Inicial.',
+          cliente_id: empresa.id,
+          plano: plan || 'inicial',
+        });
+      }
+
       let periodo;
       try {
         periodo = buildReportPeriod(
@@ -63,9 +75,6 @@ export function mountRelatorioRoutes(app: Express) {
       }
 
       try {
-        // Regeneração manual: remove somente o cache pronto deste período.
-        // Se outro processo estiver gerando, não o interrompemos; o mecanismo
-        // normal de lock/concurrency do serviço continua valendo.
         if (force) {
           await db.run(
             `DELETE FROM relatorios_cache WHERE cliente_id=? AND periodo_inicio=? AND periodo_fim=? AND status='ready'`,
@@ -97,6 +106,9 @@ export function mountRelatorioRoutes(app: Express) {
           error: 'AI Generation Failed',
           code: 'REPORT_GENERATION_FAILED',
           message: 'Não foi possível gerar o relatório agora. Tente novamente em instantes.',
+          cliente_id: empresa.id,
+          plano: plan,
+          periodo: { inicio: periodo.inicio, fim: periodo.fim },
         });
       }
     })
