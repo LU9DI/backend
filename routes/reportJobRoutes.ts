@@ -41,13 +41,9 @@ async function sendToN8n(payload: Record<string, unknown>): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10000);
   try {
-    const response = await fetch(url, {
-      method: 'POST', headers, body: JSON.stringify(payload), signal: controller.signal,
-    });
+    const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload), signal: controller.signal });
     return response.ok;
-  } finally {
-    clearTimeout(timer);
-  }
+  } finally { clearTimeout(timer); }
 }
 
 export function mountReportJobRoutes(app: Express) {
@@ -62,21 +58,16 @@ export function mountReportJobRoutes(app: Express) {
         `SELECT e.id,e.nome_empresa,e.plan,e.status,e.report_next_due_at
          FROM empresas e
          WHERE e.status='ativo' AND e.report_next_due_at IS NOT NULL AND e.report_next_due_at<=?
-         ORDER BY e.report_next_due_at ASC LIMIT 100`,
-        [nowIso]
+         ORDER BY e.report_next_due_at ASC LIMIT 100`, [nowIso]
       );
       const stats = { candidatos: rows.length, enviados: 0, sem_destinatarios: 0, sem_n8n: 0, erros: 0, pulados: 0 };
       const n8nConfigured = Boolean(process.env.N8N_WHATSAPP_REPORT_URL?.trim());
 
       for (const empresa of rows) {
         if (!planoTemRelatorioWhatsApp(empresa.plan)) { stats.pulados++; continue; }
-
         const destinatarios = await db.all(
-          `SELECT id, canal, destino, nome
-           FROM relatorio_destinatarios
-           WHERE empresa_id = ? AND ativo = 1
-           ORDER BY criado_em ASC`,
-          [empresa.id]
+          `SELECT id, canal, destino, nome FROM relatorio_destinatarios
+           WHERE empresa_id = ? AND ativo = 1 ORDER BY criado_em ASC`, [empresa.id]
         );
         if (!destinatarios?.length) { stats.sem_destinatarios++; continue; }
         if (!n8nConfigured) { stats.sem_n8n++; continue; }
@@ -84,18 +75,18 @@ export function mountReportJobRoutes(app: Express) {
         const dueIso = String(empresa.report_next_due_at);
         const nextDue = nextMonthAfterDue(dueIso);
         const claimed = await db.run(
-          `UPDATE empresas SET report_next_due_at=? WHERE id=? AND report_next_due_at=?`,
-          [nextDue, empresa.id, dueIso]
+          `UPDATE empresas SET report_next_due_at=? WHERE id=? AND report_next_due_at=?`, [nextDue, empresa.id, dueIso]
         );
         if (Number(claimed.changes || 0) !== 1) { stats.pulados++; continue; }
 
         const period = buildReportPeriod('mes', previousMonthSameDay(dueIso), previousDay(dateOnly(dueIso)));
+        const idempotencyKey = `relatorio:${String(empresa.id)}:${period.chave}`;
         try {
-          // O relatório é gerado uma única vez. O mesmo payload segue para o n8n,
-          // que deve processar cada destinatário de forma independente.
+          // Gera/recupera exatamente um relatório para o período e o distribui como um único payload.
           const report = await getOrGenerateWhatsAppReport(db, String(empresa.id), period, String(empresa.plan || 'inicial'));
           const payload = {
             tipo: 'relatorio_reputacao_mensal',
+            idempotency_key: idempotencyKey,
             cliente_id: String(empresa.id),
             nome_empresa: empresa.nome_empresa,
             plano: String(empresa.plan || 'inicial'),
@@ -111,12 +102,12 @@ export function mountReportJobRoutes(app: Express) {
           const accepted = await sendToN8n(payload);
           if (!accepted) {
             await db.run(`UPDATE empresas SET report_next_due_at=? WHERE id=? AND report_next_due_at=?`, [dueIso, empresa.id, nextDue]);
-            console.error(`[REPORT] dispatch_failed cliente=${empresa.id}`);
+            console.error(`[REPORT] dispatch_failed cliente=${empresa.id} idempotency=${idempotencyKey}`);
             stats.erros++;
             continue;
           }
           await db.run(`UPDATE empresas SET report_last_sent_at=? WHERE id=?`, [nowIso, empresa.id]);
-          console.log(`[REPORT] cliente=${empresa.id} periodo=${period.chave} generated_once=1 cached=${report.cached} tokens=0 recipients=${destinatarios.length}`);
+          console.log(`[REPORT] cliente=${empresa.id} periodo=${period.chave} generated_once=1 cached=${report.cached} tokens=0 recipients=${destinatarios.length} idempotency=${idempotencyKey}`);
           stats.enviados++;
         } catch (error: any) {
           await db.run(`UPDATE empresas SET report_next_due_at=? WHERE id=? AND report_next_due_at=?`, [dueIso, empresa.id, nextDue]);
