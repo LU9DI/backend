@@ -8,6 +8,7 @@ import {
   n8nConfigured,
   n8nStatus,
   notifyN8n,
+  pingN8nWebhook,
   verifyInboundSecret,
 } from '../lib/n8n.js';
 import { ensureRuntimeSchema } from '../lib/schemaEnsure.js';
@@ -50,11 +51,20 @@ export function mountN8nRoutes(app: Express) {
     '/api/n8n/ping',
     limiter,
     asyncHandler(async (_req: Request, res: Response) => {
-      if (!n8nConfigured()) {
-        return res.status(503).json({ error: 'N8N_WEBHOOK_URL não configurado.', configured: false });
+      const result = await pingN8nWebhook();
+      if (!result.configured) {
+        return res.status(503).json({
+          success: false,
+          configured: false,
+          error: result.detail,
+        });
       }
-      const ok = await notifyN8n('ping', { message: 'Filtra.AI connectivity check' });
-      res.json({ success: ok, configured: true });
+      res.status(result.ok ? 200 : 502).json({
+        success: result.ok,
+        configured: true,
+        status: result.status,
+        detail: result.detail,
+      });
     })
   );
 
@@ -139,10 +149,11 @@ export function mountN8nRoutes(app: Express) {
         (await db.get(`SELECT * FROM empresas WHERE slug = ?`, [empresaRef]));
       if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
 
+      const now = new Date().toISOString();
       await db.run(
         `INSERT INTO reviews (empresa_id, name, rating, comment, createdAt)
-         VALUES (?, ?, ?, ?, datetime('now'))`,
-        [empresa.id, name, rating, comment || null]
+         VALUES (?, ?, ?, ?, ?)`,
+        [empresa.id, name, rating, comment || null, now]
       );
 
       if (rating <= 3) {
