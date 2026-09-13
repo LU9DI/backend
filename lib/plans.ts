@@ -29,12 +29,12 @@ export function planTemPdf(plan: string | null | undefined): boolean {
 }
 
 /**
- * Relatório WhatsApp mensal: resumo dos dados existentes no painel.
- * Não depende de IA nem do recurso legado de PDF.
+ * Relatório WhatsApp: resumo determinístico dos dados existentes no painel.
+ * Inicial não possui o recurso. Pro é o nível básico; Trial/Teste recebe o nível Rei.
  */
 export function planoTemRelatorioWhatsApp(plan: string | null | undefined): boolean {
   const p = String(plan || '').toLowerCase();
-  return isTrialPlan(p) || PLANOS_OFICIAIS.includes(p as PlanoOficial);
+  return isTrialPlan(p) || ['pro', 'ultra', 'corporativo', 'rei'].includes(p);
 }
 
 export function planLabel(plan: string): string {
