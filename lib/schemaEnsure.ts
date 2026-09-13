@@ -44,6 +44,7 @@ export async function ensureRuntimeSchema(db: Database) {
   await addColumnIfMissing(db, 'empresas', 'cancel_at_period_end', 'INTEGER DEFAULT 0');
   await addColumnIfMissing(db, 'empresas', 'stripe_customer_id', 'TEXT');
   await addColumnIfMissing(db, 'empresas', 'stripe_subscription_id', 'TEXT');
+  await addColumnIfMissing(db, 'empresas', 'plano_iniciado_em', 'TIMESTAMPTZ');
   await addColumnIfMissing(db, 'usuarios', 'email', 'TEXT');
 
   try {
