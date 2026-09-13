@@ -22,10 +22,10 @@ const FEATURES: Record<
 > = {
   inicial: {
     features: ['100 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos'],
-    missingFeatures: ['Integrado com IA'],
+    missingFeatures: ['Integrado com IA', 'Relatório inteligente'],
   },
   pro: {
-    features: ['300 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos', '1 Relatório PDF/mês'],
+    features: ['300 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos', 'Relatório inteligente'],
     missingFeatures: ['Integrado com IA'],
   },
   ultra: {
@@ -33,7 +33,7 @@ const FEATURES: Record<
       '800 feedbacks/mês',
       'WPP Integrado',
       'IA Ativa',
-      '1 Relatório PDF/mês',
+      'Relatório inteligente',
       'Dashboard com análises',
     ],
     highlight: true,
@@ -43,7 +43,7 @@ const FEATURES: Record<
       '2.500 feedbacks/mês',
       'WPP Integrado',
       'IA Ativa',
-      '1 Relatório PDF/mês',
+      'Relatório inteligente',
       'Dashboard Multi-unidades',
       'Suporte Prioritário',
       'Acesso antecipado a novas funções',
@@ -54,7 +54,7 @@ const FEATURES: Record<
       '8.000 feedbacks/mês',
       'WPP Integrado',
       'IA Ativa',
-      '1 Relatório PDF/mês',
+      'Relatório inteligente',
       'Dashboard Multi-unidades',
       'Suporte Prioritário',
       'Acesso antecipado a novas funções',
