@@ -1,6 +1,7 @@
 /**
  * Relatório PDF mensal — autenticado, cache memória+disco.
  * Motor: ReportLab (Python) com fallback Chromium HTML.
+ * Layout version muda quando o template por plano muda (invalida cache).
  */
 import type { Express, Response } from 'express';
 import rateLimit from 'express-rate-limit';
@@ -25,7 +26,8 @@ import {
 } from '../lib/pdfCache.js';
 import { normalizePdfLang } from '../lib/pdfI18n.js';
 
-const PDF_LAYOUT_VERSION = 'reportlab-v1';
+/** Bump ao mudar layout por plano → cache antigo some. */
+const PDF_LAYOUT_VERSION = 'reportlab-plan-v2';
 const pdfLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 120,
@@ -109,7 +111,7 @@ export function mountRelatorioRoutes(app: Express) {
         });
         return res.status(403).json({
           error:
-            'Relatório PDF não disponível neste plano. Trial e planos Pro+ incluem PDF. Faça upgrade se estiver no Inicial.',
+            'Relatório PDF não disponível neste plano. Trial e planos Pro+ incluem PDF.',
           plan,
           status: empresa.status,
         });
