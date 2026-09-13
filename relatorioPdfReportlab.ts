@@ -1,12 +1,19 @@
 /**
- * PDF via ReportLab (Python) — layout profissional por plano.
- * Fallback: relatorioPdfChromium se Python/reportlab indisponível.
+ * PDF via ReportLab (Python) — layout por plano.
+ * Período = ciclo da assinatura (dia em que o plano/trial começou), não dia 1 do mês.
+ * Fallback: Chromium HTML.
  */
 import type { Database } from 'sqlite';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { empresaTemPdf, isTrialPlan, planLabel } from './lib/plans.js';
+import {
+  subscriptionAnchorDay,
+  cycleRangeForMonth,
+  inCycleRange,
+  type CycleRange,
+} from './lib/billingCycle.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(__dirname, 'pdf', 'reportlab_report.py');
@@ -83,7 +90,11 @@ function themes(rs: Review[]) {
     .map(([tag, count]) => ({ tag, count }));
 }
 
-async function loadReviews(db: Database, id: string, month: string): Promise<Review[]> {
+async function loadReviews(
+  db: Database,
+  id: string,
+  range: CycleRange
+): Promise<Review[]> {
   for (const q of [
     `SELECT * FROM reviews WHERE empresa_id = ?`,
     `SELECT rating, is_test, ai_tags, sentiment, unidade_id, origin, created_at FROM reviews WHERE empresa_id = ?`,
@@ -92,9 +103,7 @@ async function loadReviews(db: Database, id: string, month: string): Promise<Rev
       const rows = (await db.all(q, [id])) as Review[];
       return (rows || []).filter((r) => {
         if (isTest(r)) return false;
-        const d = rowDate(r);
-        if (!d) return true;
-        return d.slice(0, 7) === month;
+        return inCycleRange(rowDate(r), range);
       });
     } catch {
       /* try next */
@@ -195,7 +204,10 @@ export async function gerarRelatorioMensalPDF(
           ? 'ultra'
           : 'pro';
 
-  const reviews = await loadReviews(db, empresaId, mesAno);
+  const anchor = subscriptionAnchorDay(empresa as any);
+  const range = cycleRangeForMonth(mesAno, anchor);
+
+  const reviews = await loadReviews(db, empresaId, range);
   const unitsRaw =
     depth === 'corp' || depth === 'rei' ? await loadUnits(db, empresaId) : [];
 
@@ -230,6 +242,10 @@ export async function gerarRelatorioMensalPDF(
     plan_label: planLabel(plan),
     trial,
     mes: mesAno,
+    period_label: range.label,
+    cycle_start: range.startIso,
+    cycle_end: range.endIso,
+    anchor_day: anchor,
     total,
     avg: mean,
     positive,
