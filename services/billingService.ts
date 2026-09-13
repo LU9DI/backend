@@ -40,9 +40,25 @@ export async function activatePlan(
   const expira =
     periodEndIso || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
+  // A data de início do ciclo é definida na compra/ativação do plano.
+  // Renovações do mesmo plano preservam a âncora original.
+  const atual = await db.get(
+    'SELECT plan, plano_iniciado_em FROM empresas WHERE id = ?',
+    [empresaId]
+  );
+  const precisaNovaAncora =
+    !atual?.plano_iniciado_em ||
+    (atual?.plan && normalizePlanDb(String(atual.plan)) !== normalized);
+
   await db.run(
-    `UPDATE empresas SET status = 'ativo', plan = ?, expira_em = ?, cancel_at_period_end = 0 WHERE id = ?`,
-    [normalized, expira, empresaId]
+    `UPDATE empresas
+        SET status = 'ativo',
+            plan = ?,
+            expira_em = ?,
+            cancel_at_period_end = 0,
+            plano_iniciado_em = CASE WHEN ? = 1 THEN ? ELSE plano_iniciado_em END
+      WHERE id = ?`,
+    [normalized, expira, precisaNovaAncora ? 1 : 0, new Date().toISOString(), empresaId]
   );
   if (customerId) {
     await db.run(`UPDATE empresas SET stripe_customer_id = ? WHERE id = ?`, [customerId, empresaId]);
