@@ -5,7 +5,7 @@ import { normalizarWhatsapp, linkWhatsapp } from '../lib/whatsapp.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { ensureReviewFraudColumns } from '../lib/reviewFraud.js';
 import {
-  planTemPdf,
+  planTemRelatorio,
   allowPlanSwitch,
   PLANOS_OFICIAIS,
   planLabel,
@@ -84,6 +84,21 @@ function podeGerirEmpresa(req: AuthRequest, empresaId: string): boolean {
   return Boolean(req.user?.empresa_id && req.user.empresa_id === empresaId);
 }
 
+/** Idempotente em SQLite e Postgres (ignora column already exists). */
+async function ensureReviewSentimentColumns(db: any): Promise<void> {
+  for (const sql of [
+    `ALTER TABLE reviews ADD COLUMN sentiment TEXT`,
+    `ALTER TABLE reviews ADD COLUMN sentiment_score REAL`,
+    `ALTER TABLE reviews ADD COLUMN sentiment_source TEXT`,
+  ]) {
+    try {
+      await db.exec(sql);
+    } catch {
+      /* coluna ja existe */
+    }
+  }
+}
+
 export function mountEmpresaRoutes(app: Express) {
   app.get(
     '/api/empresa/:ref/validar',
@@ -118,7 +133,6 @@ export function mountEmpresaRoutes(app: Express) {
     })
   );
 
-  /** Troca de plano em modo teste (sem Stripe) — requer login */
   app.patch(
     '/api/empresa/:ref/plano',
     planPatchLimiter,
@@ -127,7 +141,7 @@ export function mountEmpresaRoutes(app: Express) {
       if (!allowPlanSwitch()) {
         return res.status(403).json({
           error:
-            'Troca de plano de teste desativada em produção. Use Stripe/checkout ou defina ALLOW_PLAN_SWITCH=1.',
+            'Troca de plano de teste desativada em produção. Use checkout ou defina ALLOW_PLAN_SWITCH=1.',
           code: 'PLAN_SWITCH_DISABLED',
         });
       }
@@ -156,13 +170,15 @@ export function mountEmpresaRoutes(app: Express) {
         [plan, status, expira, empresa.id]
       );
 
+      const relatorio_ok = planTemRelatorio(plan);
       res.json({
         success: true,
         plan,
         status,
         expira_em: expira,
         mensagem: `Plano ${planLabel(plan)} ativo (modo teste — sem cobrança).`,
-        pdf_disponivel: planTemPdf(plan),
+        relatorio_disponivel: relatorio_ok,
+        pdf_disponivel: relatorio_ok,
       });
     })
   );
@@ -200,7 +216,6 @@ export function mountEmpresaRoutes(app: Express) {
     })
   );
 
-  /** Link Google Maps / Google Review (nota ≥4 redireciona para cá) */
   app.patch(
     '/api/empresa/:ref/google',
     autenticarToken,
@@ -244,12 +259,7 @@ export function mountEmpresaRoutes(app: Express) {
       const db = getDb();
       await ensureReviewFraudColumns(db);
       await ensureReviewTreatmentColumns(db);
-      const cols = (await db.all(`PRAGMA table_info(reviews)`)).map((c: any) => c.name);
-      if (!cols.includes('sentiment')) await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment TEXT`);
-      if (!cols.includes('sentiment_score'))
-        await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_score REAL`);
-      if (!cols.includes('sentiment_source'))
-        await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_source TEXT`);
+      await ensureReviewSentimentColumns(db);
 
       const rows = await db.all(
         `SELECT id, name, rating, comment, ai_reply, ai_tags, createdAt,
@@ -352,7 +362,7 @@ export function mountEmpresaRoutes(app: Express) {
       const plan = String(empresa.plan || 'trial').toLowerCase();
       const trial = isTrialPlan(plan);
       const nivel = nivelDashboard(plan);
-      const pdf_disponivel = planTemPdf(plan);
+      const relatorio_disponivel = planTemRelatorio(plan);
       const tem_ia = trial || planTemIA(plan);
 
       const feedback_limite = getFeedbackLimit(plan);
@@ -417,7 +427,8 @@ export function mountEmpresaRoutes(app: Express) {
         },
         dashboard: {
           nivel,
-          pdf_disponivel,
+          relatorio_disponivel,
+          pdf_disponivel: relatorio_disponivel,
           tem_ia,
           trial_completo: trial,
           plan_switch: allowPlanSwitch(),
@@ -450,7 +461,9 @@ export function mountEmpresaRoutes(app: Express) {
           painel: `${base}/painel/${ref}`,
           widget: `${base}/widget/${ref}`,
           embed: `${base}/avaliacao/${ref}`,
-          relatorio_pdf: pdf_disponivel ? `/api/empresa/${ref}/relatorio.pdf` : null,
+          relatorio_enviar: relatorio_disponivel
+            ? `/api/empresa/${ref}/relatorio/enviar`
+            : null,
           login: `${base}/login`,
         },
       });
