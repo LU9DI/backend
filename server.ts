@@ -28,6 +28,7 @@ import { mountPlanSwitchRoutes } from './routes/planSwitchRoutes.js';
 import { mountWebAuthnRoutes } from './routes/webauthnRoutes.js';
 import { mountPushRoutes } from './routes/pushRoutes.js';
 import { mountJobsRoutes } from './routes/jobsRoutes.js';
+import { mountMonthlyReportRoutes } from './routes/monthlyReportRoutes.js';
 import { mountPayPalRoutes } from './routes/paypalRoutes.js';
 import { mountPixRoutes } from './routes/pixRoutes.js';
 import { mountWechatRoutes } from './routes/wechatRoutes.js';
@@ -57,15 +58,9 @@ import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
 import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
-import {
-  anonymizeOldClientWhatsapp,
-  ensureReviewTreatmentColumns,
-} from './lib/lgpd.js';
+import { anonymizeOldClientWhatsapp, ensureReviewTreatmentColumns } from './lib/lgpd.js';
 import { ensureRuntimeSchema } from './lib/schemaEnsure.js';
-import {
-  backfillSentiment,
-  countMissingSentiment,
-} from './services/sentimentBackfill.js';
+import { backfillSentiment, countMissingSentiment } from './services/sentimentBackfill.js';
 
 assertEnvOrExit();
 const JWT_SECRET = requireJwtSecret();
@@ -85,16 +80,12 @@ app.use(cors(buildCorsOptions()));
 /** Health com ping real no banco — Render usa para saber se o serviço está vivo. */
 app.get('/api/health', async (_req, res) => {
   const ai = getAiLoadStats();
-  let dbPing: { ok: boolean; engine: string; error?: string } = {
-    ok: false,
-    engine: 'unknown',
-  };
+  let dbPing: { ok: boolean; engine: string; error?: string } = { ok: false, engine: 'unknown' };
   try {
     dbPing = await pingDb();
   } catch (e: any) {
     dbPing = { ok: false, engine: 'unknown', error: String(e?.message || e) };
   }
-
   const body = {
     ok: dbPing.ok,
     db: dbPing.engine || (typeof dbEngine === 'function' ? dbEngine() : 'sqlite'),
@@ -110,15 +101,11 @@ app.get('/api/health', async (_req, res) => {
     webauthn: webauthnConfig(),
     push: pushConfigured(),
     smtp: smtpConfigured(),
-    ai_latency: {
-      groq: ai.stats.groq.latency,
-      gemini: ai.stats.gemini.latency,
-    },
+    ai_latency: { groq: ai.stats.groq.latency, gemini: ai.stats.gemini.latency },
     http_latency: getHttpMetrics().global,
     env: process.env.NODE_ENV || 'development',
     time: new Date().toISOString(),
   };
-
   res.status(dbPing.ok ? 200 : 503).json(body);
 });
 
@@ -126,15 +113,9 @@ app.get('/api/metrics', (req, res) => {
   const secret = process.env.JOBS_SECRET?.trim();
   if (process.env.NODE_ENV === 'production' && secret) {
     const got = String(req.headers['x-jobs-secret'] || '');
-    if (got !== secret) {
-      return res.status(401).json({ error: 'Não autorizado.' });
-    }
+    if (got !== secret) return res.status(401).json({ error: 'Não autorizado.' });
   }
-  res.json({
-    time: new Date().toISOString(),
-    http: getHttpMetrics(),
-    ai: getAiLoadStats(),
-  });
+  res.json({ time: new Date().toISOString(), http: getHttpMetrics(), ai: getAiLoadStats() });
 });
 
 const PORT = Number(process.env.PORT || 5000);
@@ -148,10 +129,7 @@ async function runSentimentBackfillOnBoot() {
     const missing = await countMissingSentiment(db);
     if (missing === 0) return;
     const limit = Math.max(1, Number(process.env.BACKFILL_SENTIMENT_LIMIT || 2000));
-    const r = await backfillSentiment(db, {
-      limit,
-      useAi: process.env.BACKFILL_SENTIMENT_AI === '1',
-    });
+    const r = await backfillSentiment(db, { limit, useAi: process.env.BACKFILL_SENTIMENT_AI === '1' });
     console.log(`🧠 Backfill sentimento: updated=${r.updated} errors=${r.errors}`);
   } catch (e: any) {
     console.warn('Backfill sentimento:', e?.message || e);
@@ -178,7 +156,6 @@ function gracefulShutdown(signal: string) {
     process.exit(1);
   }, 10_000);
   force.unref();
-
   if (server) {
     server.close(() => {
       console.log('HTTP fechado.');
@@ -191,60 +168,16 @@ function gracefulShutdown(signal: string) {
 
 async function main() {
   await initDB();
-  try {
-    await ensureRuntimeSchema(getDb());
-  } catch (e) {
-    console.warn('ensureRuntimeSchema:', e);
-  }
-  try {
-    await ensureUnidadesSchema(getDb());
-  } catch (e) {
-    console.warn('ensureUnidadesSchema:', e);
-  }
-  try {
-    await ensureWebAuthnSchema(getDb());
-  } catch (e) {
-    console.warn('ensureWebAuthnSchema:', e);
-  }
-  try {
-    await ensurePushSchema(getDb());
-    initWebPush();
-  } catch (e) {
-    console.warn('ensurePushSchema:', e);
-  }
-  try {
-    await ensureAiUsageSchema(getDb());
-  } catch (e) {
-    console.warn('ensureAiUsageSchema:', e);
-  }
-  try {
-    await ensureOpsTables(getDb());
-  } catch (e) {
-    console.warn('ensureOpsTables:', e);
-  }
-  try {
-    await ensureAuditSchema(getDb());
-  } catch (e) {
-    console.warn('ensureAuditSchema:', e);
-  }
-  try {
-    await ensurePlanPricingSchema(getDb());
-    await refreshPlanPricesFromDb(getDb());
-  } catch (e) {
-    console.warn('plan pricing:', e);
-  }
-  try {
-    await ensureRetryQueue(getDb());
-    registerAllRetryHandlers();
-    startRetryWorker();
-  } catch (e) {
-    console.warn('retry queue:', e);
-  }
-  try {
-    await ensureReviewTreatmentColumns(getDb());
-  } catch (e) {
-    console.warn('treatment columns:', e);
-  }
+  try { await ensureRuntimeSchema(getDb()); } catch (e) { console.warn('ensureRuntimeSchema:', e); }
+  try { await ensureUnidadesSchema(getDb()); } catch (e) { console.warn('ensureUnidadesSchema:', e); }
+  try { await ensureWebAuthnSchema(getDb()); } catch (e) { console.warn('ensureWebAuthnSchema:', e); }
+  try { await ensurePushSchema(getDb()); initWebPush(); } catch (e) { console.warn('ensurePushSchema:', e); }
+  try { await ensureAiUsageSchema(getDb()); } catch (e) { console.warn('ensureAiUsageSchema:', e); }
+  try { await ensureOpsTables(getDb()); } catch (e) { console.warn('ensureOpsTables:', e); }
+  try { await ensureAuditSchema(getDb()); } catch (e) { console.warn('ensureAuditSchema:', e); }
+  try { await ensurePlanPricingSchema(getDb()); await refreshPlanPricesFromDb(getDb()); } catch (e) { console.warn('plan pricing:', e); }
+  try { await ensureRetryQueue(getDb()); registerAllRetryHandlers(); startRetryWorker(); } catch (e) { console.warn('retry queue:', e); }
+  try { await ensureReviewTreatmentColumns(getDb()); } catch (e) { console.warn('treatment columns:', e); }
 
   await runSentimentBackfillOnBoot();
   await runLgpdSweepOnBoot();
@@ -262,6 +195,7 @@ async function main() {
   mountWebAuthnRoutes(app);
   mountPushRoutes(app);
   mountJobsRoutes(app);
+  mountMonthlyReportRoutes(app);
   mountPayPalRoutes(app);
   mountPixRoutes(app);
   mountWechatRoutes(app);
@@ -280,17 +214,10 @@ async function main() {
   app.use(notFoundHandler);
   app.use(errorHandler);
 
-  console.log(
-    `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | WeChat: ${wechatConfigured() ? 'ok' : 'OFF'}`
-  );
-  if (!wechatConfigured()) {
-    console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
-  }
+  console.log(`💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | WeChat: ${wechatConfigured() ? 'ok' : 'OFF'}`);
+  if (!wechatConfigured()) console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
 
-  server = app.listen(PORT, () => {
-    console.log(`🚀 API Filtra.IA em http://localhost:${PORT}`);
-  });
-
+  server = app.listen(PORT, () => console.log(`🚀 API Filtra.IA em http://localhost:${PORT}`));
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }
