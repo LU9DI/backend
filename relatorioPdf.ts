@@ -1,46 +1,493 @@
-/** Filtra.AI monthly PDF engine — production-safe, plan-aware and without intentional failure paths. */
+/**
+ * Relatório PDF mensal — Puppeteer (Chromium) + HTML por plano.
+ * Período = ciclo de assinatura (dia âncora), não dia 1 do mês civil.
+ */
 import type { Database } from 'sqlite';
-import PDFDocument from 'pdfkit';
+import puppeteer from 'puppeteer-core';
+import { empresaTemPdf, isTrialPlan, planLabel } from './lib/plans.js';
+import {
+  subscriptionAnchorDay,
+  cycleRangeForMonth,
+  inCycleRange,
+  type CycleRange,
+} from './lib/billingCycle.js';
 
-export type PdfDepth='pro'|'ultra'|'corp'|'rei';
-export const PDF_LAYOUT_VERSION='v7';
+export type PdfDepth = 'pro' | 'ultra' | 'corp' | 'rei';
 
-type Review={rating:number;unidade_id?:string|null;origin?:string|null;createdAt?:string|Date;createdat?:string|Date;created_at?:string|Date;is_test?:number|boolean|null;ai_tags?:string|null;sentiment?:string|null};
-type Unit={id:string;nome:string;slug?:string|null};
-type Lang='pt-BR'|'en-US'|'es-ES'|'fr-FR'|'de-DE'|'it-IT'|'zh-CN';
-const C={navy:'#0f172a',indigo:'#4f46e5',ink:'#1e293b',muted:'#64748b',line:'#e2e8f0',pale:'#f8fafc',white:'#fff',red:'#dc2626',green:'#16a34a',amber:'#d97706',star:['#ef4444','#f97316','#eab308','#84cc16','#22c55e']};
-const M={left:48,right:48,top:92,bottom:48};
-const L:Record<Lang,Record<string,string>>={
-'pt-BR':{subtitle:'Relatório mensal de reputação',period:'Período',plan:'Plano',summary:'Resumo executivo',volume:'Volume',volumeSub:'Avaliações válidas',avg:'Nota média',avgSub:'Escala de 1 a 5',critical:'Críticas',criticalSub:'Notas 1–3',positive:'Positivas',distribution:'Distribuição de notas',compare:'Positivas (4–5 estrelas): {p} ({pp})  •  Críticas (1–3 estrelas): {c} ({cp})',sentiment:'Sentimento',pos:'Positivo',neu:'Neutro',neg:'Negativo',themes:'Principais temas',ranking:'Ranking de unidades',unit:'Unidade',branch:'Detalhes da unidade',noUnits:'Nenhuma unidade com avaliações no período.',empty:'Nenhuma avaliação válida foi registrada neste período.',page:'Página',total:'Total',thisPeriod:'Neste período'},
-'en-US':{subtitle:'Monthly reputation report',period:'Period',plan:'Plan',summary:'Executive summary',volume:'Volume',volumeSub:'Valid reviews',avg:'Average rating',avgSub:'Scale 1 to 5',critical:'Critical',criticalSub:'Ratings 1–3',positive:'Positive',distribution:'Rating distribution',compare:'Positive (4–5 stars): {p} ({pp})  •  Critical (1–3 stars): {c} ({cp})',sentiment:'Sentiment',pos:'Positive',neu:'Neutral',neg:'Negative',themes:'Top themes',ranking:'Unit ranking',unit:'Unit',branch:'Unit details',noUnits:'No units with reviews in this period.',empty:'No valid reviews were recorded for this period.',page:'Page',total:'Total',thisPeriod:'This period'},
-'es-ES':{subtitle:'Informe mensual de reputación',period:'Período',plan:'Plan',summary:'Resumen ejecutivo',volume:'Volumen',volumeSub:'Reseñas válidas',avg:'Calificación media',avgSub:'Escala de 1 a 5',critical:'Críticas',criticalSub:'Notas 1–3',positive:'Positivas',distribution:'Distribución de calificaciones',compare:'Positivas (4–5 estrellas): {p} ({pp})  •  Críticas (1–3 estrellas): {c} ({cp})',sentiment:'Sentimiento',pos:'Positivo',neu:'Neutro',neg:'Negativo',themes:'Temas principales',ranking:'Ranking de unidades',unit:'Unidad',branch:'Detalles de la unidad',noUnits:'No hay unidades con reseñas en este período.',empty:'No se registraron reseñas válidas en este período.',page:'Página',total:'Total',thisPeriod:'En este período'},
-'fr-FR':{subtitle:'Rapport mensuel de réputation',period:'Période',plan:'Plan',summary:'Résumé exécutif',volume:'Volume',volumeSub:'Avis valides',avg:'Note moyenne',avgSub:'Échelle de 1 à 5',critical:'Critiques',criticalSub:'Notes 1–3',positive:'Positifs',distribution:'Répartition des notes',compare:'Positifs (4–5 étoiles) : {p} ({pp})  •  Critiques (1–3 étoiles) : {c} ({cp})',sentiment:'Sentiment',pos:'Positif',neu:'Neutre',neg:'Négatif',themes:'Thèmes principaux',ranking:'Classement des unités',unit:'Unité',branch:'Détails de l’unité',noUnits:'Aucune unité avec des avis sur cette période.',empty:'Aucun avis valide n’a été enregistré sur cette période.',page:'Page',total:'Total',thisPeriod:'Sur cette période'},
-'de-DE':{subtitle:'Monatlicher Reputationsbericht',period:'Zeitraum',plan:'Plan',summary:'Zusammenfassung',volume:'Volumen',volumeSub:'Gültige Bewertungen',avg:'Durchschnittliche Bewertung',avgSub:'Skala 1 bis 5',critical:'Kritisch',criticalSub:'Bewertungen 1–3',positive:'Positiv',distribution:'Bewertungsverteilung',compare:'Positiv (4–5 Sterne): {p} ({pp})  •  Kritisch (1–3 Sterne): {c} ({cp})',sentiment:'Stimmung',pos:'Positiv',neu:'Neutral',neg:'Negativ',themes:'Wichtigste Themen',ranking:'Einheiten-Ranking',unit:'Einheit',branch:'Einheitsdetails',noUnits:'Keine Einheiten mit Bewertungen in diesem Zeitraum.',empty:'Für diesen Zeitraum wurden keine gültigen Bewertungen erfasst.',page:'Seite',total:'Gesamt',thisPeriod:'In diesem Zeitraum'},
-'it-IT':{subtitle:'Report mensile sulla reputazione',period:'Periodo',plan:'Piano',summary:'Riepilogo',volume:'Volume',volumeSub:'Recensioni valide',avg:'Valutazione media',avgSub:'Scala da 1 a 5',critical:'Critiche',criticalSub:'Valutazioni 1–3',positive:'Positive',distribution:'Distribuzione delle valutazioni',compare:'Positive (4–5 stelle): {p} ({pp})  •  Critiche (1–3 stelle): {c} ({cp})',sentiment:'Sentiment',pos:'Positivo',neu:'Neutro',neg:'Negativo',themes:'Temi principali',ranking:'Classifica unità',unit:'Unità',branch:'Dettagli unità',noUnits:'Nessuna unità con recensioni nel periodo.',empty:'Nessuna recensione valida registrata nel periodo.',page:'Pagina',total:'Totale',thisPeriod:'Nel periodo'},
-'zh-CN':{subtitle:'每月声誉报告',period:'期间',plan:'方案',summary:'执行摘要',volume:'数量',volumeSub:'有效评价',avg:'平均评分',avgSub:'1 至 5 分',critical:'负面',criticalSub:'1–3 分',positive:'正面',distribution:'评分分布',compare:'正面（4–5 星）：{p} ({pp})  •  负面（1–3 星）：{c} ({cp})',sentiment:'情感',pos:'正面',neu:'中性',neg:'负面',themes:'主要主题',ranking:'门店排名',unit:'门店',branch:'门店详情',noUnits:'该期间没有包含评价的门店。',empty:'该期间没有有效评价记录。',page:'页',total:'总计',thisPeriod:'该期间'}};
-const MONTHS:Record<Lang,string[]>={'pt-BR':['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'],'en-US':['January','February','March','April','May','June','July','August','September','October','November','December'],'es-ES':['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],'fr-FR':['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'],'de-DE':['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'],'it-IT':['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno','Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre'],'zh-CN':['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月']};
-function langOf(v?:string|null):Lang{const s=String(v||'pt-BR').trim();return (Object.keys(L) as Lang[]).includes(s as Lang)?s as Lang:'pt-BR';}
-function tx(l:Lang,k:string,v:Record<string,string|number>={}){let s=L[l][k]||L['en-US'][k]||k;for(const[k2,v2]of Object.entries(v))s=s.replace(new RegExp('\\{'+k2+'\\}','g'),String(v2));return s;}
-function period(m:string,l:Lang){const x=/^(\d{4})-(\d{2})$/.exec(m);if(!x)return m;const n=Number(x[2]);return l==='zh-CN'?`${x[1]}年${MONTHS[l][n-1]}`:`${MONTHS[l][n-1]} / ${x[1]}`;}
-export function depthForPlan(plan:string,trial:boolean):PdfDepth{if(trial)return'ultra';const p=String(plan||'').toLowerCase();if(p==='rei')return'rei';if(p==='corporativo'||p==='corporate')return'corp';if(p==='ultra')return'ultra';return'pro';}
-export async function ensureUnidadesSchema(db:Database):Promise<void>{try{await db.exec(`CREATE TABLE IF NOT EXISTS unidades (id TEXT PRIMARY KEY, empresa_id TEXT NOT NULL, nome TEXT NOT NULL, slug TEXT, ativo INTEGER DEFAULT 1, criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP)`);}catch{}}
-function isTest(r:Review){return Number(r.is_test)===1||r.is_test===true;}function dt(r:Review){return r.createdAt??r.createdat??r.created_at??null;}function inMonth(r:Review,m:string){const d=dt(r);if(!d)return true;const s=typeof d==='string'?d:new Date(d).toISOString();return s.slice(0,7)===m;}
-async function reviews(db:Database,id:string,m:string){const qs=[`SELECT * FROM reviews WHERE empresa_id=?`,`SELECT rating,is_test,ai_tags,sentiment,unidade_id,origin FROM reviews WHERE empresa_id=?`];for(const q of qs){try{const rows=await db.all(q,[id]) as any[];return (rows||[]).filter(r=>!isTest(r)&&inMonth(r,m)) as Review[];}catch{}}return[];}
-async function units(db:Database,id:string){try{return (await db.all(`SELECT id,nome,slug FROM unidades WHERE empresa_id=? AND ativo=1 ORDER BY nome`,[id]) as any[]||[]).map(u=>({id:String(u.id),nome:String(u.nome||'Unidade'),slug:u.slug?String(u.slug):null}));}catch{return[];}}
-function avg(r:Review[]){return r.length?r.reduce((s,x)=>s+Number(x.rating||0),0)/r.length:0;}function dist(r:Review[]){const a=[0,0,0,0,0];for(const x of r){const n=Number(x.rating);if(n>=1&&n<=5)a[n-1]++;}return a;}function pct(n:number,t:number){return t?`${Math.round(n/t*100)}%`:'0%';}function topics(r:Review[]){const m=new Map<string,number>();for(const x of r){if(!x.ai_tags)continue;try{const a=JSON.parse(String(x.ai_tags));if(Array.isArray(a))for(const z of a){const k=String(z||'').trim();if(k)m.set(k,(m.get(k)||0)+1)}}catch{}}return [...m.entries()].sort((a,b)=>b[1]-a[1]).slice(0,8);}function sent(r:Review[]){let p=0,n=0,u=0;for(const x of r){const s=String(x.sentiment||'').toLowerCase();if(s.includes('pos'))p++;else if(s.includes('neg'))n++;else if(s.includes('neu'))u++;else{const z=Number(x.rating);if(z>=4)p++;else if(z<=2)n++;else u++;}}return{p,n,u};}
-function w(d:PDFKit.PDFDocument){return d.page.width-M.left-M.right;}function head(d:PDFKit.PDFDocument,plan:string,per:string,depth:PdfDepth){d.rect(0,0,d.page.width,72).fill(C.navy);d.rect(0,72,d.page.width,3).fill(C.indigo);d.fillColor(C.white).font('Helvetica-Bold').fontSize(15).text('Filtra.AI',M.left,18,{lineBreak:false});d.fillColor('#a5b4fc').font('Helvetica').fontSize(8).text(plan,M.left,42,{lineBreak:false});d.fillColor(C.white).font('Helvetica-Bold').fontSize(9).text(depth.toUpperCase(),d.page.width-160,18,{width:112,align:'right',lineBreak:false});d.fillColor('#cbd5e1').font('Helvetica').fontSize(8).text(per,d.page.width-160,38,{width:112,align:'right',lineBreak:false});d.y=M.top;}
-function foot(d:PDFKit.PDFDocument,l:Lang){const y=d.page.height-30;d.strokeColor(C.line).lineWidth(.6).moveTo(M.left,y-5).lineTo(d.page.width-M.right,y-5).stroke();d.fillColor(C.muted).font('Helvetica').fontSize(7).text('Filtra.AI',M.left,y,{lineBreak:false});d.text(`${tx(l,'page')} ${d.page.number}`,d.page.width-M.right-100,y,{width:100,align:'right',lineBreak:false});}
-function title(d:PDFKit.PDFDocument,s:string){d.fillColor(C.navy).font('Helvetica-Bold').fontSize(12).text(s,{width:w(d)});d.moveDown(.35);}function cards(d:PDFKit.PDFDocument,a:{l:string,v:string,s:string,c?:string}[]){const gap=8,W=w(d),bw=(W-gap*3)/4,y=d.y;a.forEach((x,i)=>{const X=M.left+i*(bw+gap);d.roundedRect(X,y,bw,68,6).fillAndStroke(C.pale,C.line);d.rect(X,y,3,68).fill(x.c||C.indigo);d.fillColor(C.muted).font('Helvetica-Bold').fontSize(6.5).text(x.l.toUpperCase(),X+9,y+9,{width:bw-15,lineBreak:false});d.fillColor(C.navy).font('Helvetica-Bold').fontSize(18).text(x.v,X+9,y+25,{width:bw-15,lineBreak:false});d.fillColor(C.muted).font('Helvetica').fontSize(7).text(x.s,X+9,y+49,{width:bw-15,lineBreak:false});});d.y=y+82;}
-function chart(d:PDFKit.PDFDocument,a:number[]){const y=d.y,W=w(d),h=150,g=12,bw=(W-g*6)/5,max=Math.max(...a,1),usable=88;d.roundedRect(M.left,y,W,h,6).fillAndStroke(C.white,C.line);a.forEach((v,i)=>{const bh=v/max*usable,X=M.left+g+i*(bw+g),Y=y+28+usable-bh;d.roundedRect(X,Y,bw,Math.max(2,bh),3).fill(C.star[i]);d.fillColor(C.ink).font('Helvetica-Bold').fontSize(9).text(String(v),X,Y-13,{width:bw,align:'center',lineBreak:false});d.fillColor(C.muted).font('Helvetica').fontSize(8).text(`${i+1}*`,X,y+123,{width:bw,align:'center',lineBreak:false});});d.y=y+h+12;}
-function room(d:PDFKit.PDFDocument,n:number,plan:string,per:string,depth:PdfDepth){if(d.y+n>d.page.height-M.bottom){d.addPage();head(d,plan,per,depth);}}
-export async function gerarRelatorioMensalPDF(db:Database,empresaId:string,mesAno:string,_callGroq?: (system:string,user:string)=>Promise<string>,idioma?:string|null):Promise<Buffer>{
- let e:any;try{e=await db.get('SELECT id,nome_empresa,plan,status,locale,idioma,language FROM empresas WHERE id=?',[empresaId]);}catch{e=await db.get('SELECT id,nome_empresa,plan,status FROM empresas WHERE id=?',[empresaId]);}if(!e)throw new Error('Empresa não encontrada.');
- const plan=String(e.plan||e.status||'trial').trim().toLowerCase(),trial=isTrialPlan(plan)||isTrialPlan(String(e.status||''));if(!empresaTemPdf(e)&&!trial)throw new Error('Plano não elegível para relatório mensal.');
- const lang=langOf(idioma||e.locale||e.idioma||e.language),depth=depthForPlan(plan,trial),rs=await reviews(db,empresaId,mesAno),us=(depth==='corp'||depth==='rei')?await units(db,empresaId):[];const total=rs.length,mean=avg(rs),d=dist(rs),pos=rs.filter(x=>Number(x.rating)>=4).length,crit=rs.filter(x=>Number(x.rating)<=3).length,se=sent(rs),tp=topics(rs),per=period(mesAno,lang),pLabel=trial?'Trial':plan.toUpperCase(),name=String(e.nome_empresa||'Empresa');
- const doc=new PDFDocument({size:'A4',margin:M.left,bufferPages:true,compress:true,info:{Title:`${name} - ${mesAno}`,Author:'Filtra.AI',Subject:`${pLabel} | ${lang} | ${PDF_LAYOUT_VERSION}`}});const chunks:Buffer[]=[];doc.on('data',(c:Buffer)=>chunks.push(c));head(doc,pLabel,per,depth);doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(19).text(name,{width:w(doc)});doc.moveDown(.15);doc.fillColor(C.muted).font('Helvetica').fontSize(9).text(`${tx(lang,'period')}: ${per} | ${tx(lang,'plan')}: ${pLabel}`,{width:w(doc)});doc.moveDown(.7);
- title(doc,tx(lang,'summary'));cards(doc,[{l:tx(lang,'volume'),v:String(total),s:tx(lang,'volumeSub')},{l:tx(lang,'avg'),v:total?mean.toFixed(1):'-',s:tx(lang,'avgSub')},{l:tx(lang,'critical'),v:String(crit),s:tx(lang,'criticalSub'),c:C.red},{l:tx(lang,'positive'),v:String(pos),s:pct(pos,total),c:C.green}]);title(doc,tx(lang,'distribution'));chart(doc,d);doc.fillColor(C.ink).font('Helvetica').fontSize(9).text(tx(lang,'compare',{p:pos,pp:pct(pos,total),c:crit,cp:pct(crit,total)}),{width:w(doc)});doc.moveDown(.7);
- if(depth!=='pro'){room(doc,110,pLabel,per,depth);title(doc,tx(lang,'sentiment'));cards(doc,[{l:tx(lang,'pos'),v:String(se.p),s:pct(se.p,total),c:C.green},{l:tx(lang,'neu'),v:String(se.u),s:pct(se.u,total),c:C.amber},{l:tx(lang,'neg'),v:String(se.n),s:pct(se.n,total),c:C.red},{l:tx(lang,'total'),v:String(total),s:tx(lang,'thisPeriod')}]);if(tp.length){room(doc,35+tp.length*16,pLabel,per,depth);title(doc,tx(lang,'themes'));for(const[k,v]of tp)doc.fillColor(C.ink).font('Helvetica').fontSize(9).text(`- ${k} (${v})`,{width:w(doc)});}}
- if(depth==='corp'||depth==='rei'){const groups=us.map(u=>({u,list:rs.filter(r=>String(r.unidade_id||'')===u.id||(u.slug&&String(r.origin||'')===u.slug))})).filter(g=>g.list.length);if(groups.length){doc.addPage();head(doc,pLabel,per,depth);title(doc,tx(lang,'ranking'));for(const g of groups.sort((a,b)=>avg(b.list)-avg(a.list))){const y=doc.y;doc.roundedRect(M.left,y,w(doc),42,5).fillAndStroke(C.pale,C.line);doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(9).text(g.u.nome,M.left+10,y+8,{width:w(doc)-20,lineBreak:false});doc.fillColor(C.muted).font('Helvetica').fontSize(8).text(`${tx(lang,'volume')}: ${g.list.length} | ${tx(lang,'avg')}: ${avg(g.list).toFixed(1)} | ${tx(lang,'critical')}: ${g.list.filter(r=>Number(r.rating)<=3).length}`,M.left+10,y+23,{width:w(doc)-20,lineBreak:false});doc.y=y+52;}for(const g of groups){doc.addPage();head(doc,pLabel,per,depth);title(doc,`${tx(lang,'branch')}: ${g.u.nome}`);cards(doc,[{l:tx(lang,'volume'),v:String(g.list.length),s:tx(lang,'thisPeriod')},{l:tx(lang,'avg'),v:avg(g.list).toFixed(1),s:tx(lang,'avgSub')},{l:tx(lang,'critical'),v:String(g.list.filter(r=>Number(r.rating)<=3).length),s:tx(lang,'criticalSub'),c:C.red},{l:tx(lang,'positive'),v:String(g.list.filter(r=>Number(r.rating)>=4).length),s:pct(g.list.filter(r=>Number(r.rating)>=4).length,g.list.length),c:C.green}]);title(doc,tx(lang,'distribution'));chart(doc,dist(g.list));if(depth==='rei'){const lt=topics(g.list);if(lt.length){title(doc,tx(lang,'themes'));for(const[k,v]of lt.slice(0,6))doc.fillColor(C.ink).font('Helvetica').fontSize(9).text(`- ${k} (${v})`);}}}}else{room(doc,30,pLabel,per,depth);doc.fillColor(C.amber).font('Helvetica').fontSize(9).text(tx(lang,'noUnits'),{width:w(doc)});}}
- if(total===0){room(doc,25,pLabel,per,depth);doc.fillColor(C.muted).font('Helvetica').fontSize(9).text(tx(lang,'empty'),{width:w(doc)});}
- const range=doc.bufferedPageRange();for(let i=0;i<range.count;i++){doc.switchToPage(range.start+i);foot(doc,lang);}await new Promise<void>((resolve,reject)=>{doc.on('end',resolve);doc.on('error',reject);doc.end();});const buf=Buffer.concat(chunks);if(buf.length<100||buf.subarray(0,4).toString()!=='%PDF')throw new Error('PDF gerado inválido.');return buf;
+type Review = {
+  rating: number;
+  unidade_id?: string | null;
+  origin?: string | null;
+  createdAt?: string | Date;
+  created_at?: string | Date;
+  createdat?: string | Date;
+  is_test?: number | boolean | null;
+  ai_tags?: string | null;
+  sentiment?: string | null;
+};
+
+type UnitRow = {
+  nome: string;
+  total: number;
+  avg: number;
+  critical: number;
+  positive: number;
+};
+
+const THEME: Record<
+  PdfDepth,
+  { accent: string; title: string; includes: string[]; locked: string[] }
+> = {
+  pro: {
+    accent: '#4f46e5',
+    title: 'Relatório Pro',
+    includes: ['Resumo do ciclo', 'Distribuição 1★–5★'],
+    locked: ['Sentimento e temas IA → Ultra+', 'Ranking de filiais → Corporativo+'],
+  },
+  ultra: {
+    accent: '#0d9488',
+    title: 'Relatório Ultra',
+    includes: ['Tudo do Pro', 'Sentimento', 'Temas da IA'],
+    locked: ['Ranking de filiais → Corporativo+', 'Ficha por unidade → Rei'],
+  },
+  corp: {
+    accent: '#1d4ed8',
+    title: 'Relatório Corporativo',
+    includes: ['Tudo do Ultra', 'Ranking de unidades'],
+    locked: ['Ficha detalhada por unidade → Rei'],
+  },
+  rei: {
+    accent: '#b45309',
+    title: 'Relatório Rei',
+    includes: ['Tudo do Corporativo', 'Ficha por unidade', 'Destaques do ciclo'],
+    locked: [],
+  },
+};
+
+function depthFor(plan: string, trial: boolean): PdfDepth {
+  if (trial) return 'ultra';
+  const p = plan.toLowerCase();
+  if (p === 'rei') return 'rei';
+  if (p === 'corporativo' || p === 'corporate') return 'corp';
+  if (p === 'ultra') return 'ultra';
+  return 'pro';
+}
+
+function esc(v: unknown): string {
+  return String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function isTest(r: Review) {
+  return Number(r.is_test) === 1 || r.is_test === true;
+}
+
+function rowDate(r: Review): string | null {
+  const d = r.createdAt ?? r.created_at ?? r.createdat;
+  if (!d) return null;
+  return typeof d === 'string' ? d : new Date(d).toISOString();
+}
+
+function avg(rs: Review[]) {
+  if (!rs.length) return 0;
+  return rs.reduce((s, r) => s + Number(r.rating || 0), 0) / rs.length;
+}
+
+function dist(rs: Review[]) {
+  const a = [0, 0, 0, 0, 0];
+  for (const r of rs) {
+    const n = Number(r.rating);
+    if (n >= 1 && n <= 5) a[n - 1] += 1;
+  }
+  return a;
+}
+
+function pct(n: number, t: number) {
+  return t ? Math.round((n / t) * 100) : 0;
+}
+
+function sentimentBreak(rs: Review[]) {
+  let pos = 0,
+    neu = 0,
+    neg = 0;
+  for (const r of rs) {
+    const s = String(r.sentiment || '').toLowerCase();
+    if (s.includes('pos')) pos++;
+    else if (s.includes('neg')) neg++;
+    else if (s.includes('neu')) neu++;
+    else {
+      const n = Number(r.rating);
+      if (n >= 4) pos++;
+      else if (n <= 2) neg++;
+      else neu++;
+    }
+  }
+  return { pos, neu, neg };
+}
+
+function themes(rs: Review[]) {
+  const m = new Map<string, number>();
+  for (const r of rs) {
+    if (!r.ai_tags) continue;
+    try {
+      const a = JSON.parse(String(r.ai_tags));
+      if (Array.isArray(a)) {
+        for (const t of a) {
+          const k = String(t || '').trim();
+          if (k) m.set(k, (m.get(k) || 0) + 1);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return [...m.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([tag, count]) => ({ tag, count }));
+}
+
+function insight(total: number, mean: number, critical: number, positive: number) {
+  if (!total) return 'Ainda não há avaliações neste ciclo. O relatório preenche sozinho.';
+  if (mean >= 4.5) return `Ciclo forte: média ${mean.toFixed(1)} com ${pct(positive, total)}% positivas.`;
+  if (mean >= 4) return `Bom ciclo (média ${mean.toFixed(1)}). Dá para reduzir as ${critical} críticas.`;
+  if (mean >= 3) return `Ciclo estável (média ${mean.toFixed(1)}). Priorize as ${critical} críticas.`;
+  return `Atenção: média ${mean.toFixed(1)} e ${critical} críticas neste ciclo.`;
+}
+
+async function loadReviews(db: Database, id: string, range: CycleRange): Promise<Review[]> {
+  for (const q of [
+    `SELECT * FROM reviews WHERE empresa_id = ?`,
+    `SELECT rating, is_test, ai_tags, sentiment, unidade_id, origin, created_at FROM reviews WHERE empresa_id = ?`,
+  ]) {
+    try {
+      const rows = (await db.all(q, [id])) as Review[];
+      return (rows || []).filter((r) => !isTest(r) && inCycleRange(rowDate(r), range));
+    } catch {
+      /* next */
+    }
+  }
+  return [];
+}
+
+async function loadUnits(db: Database, id: string) {
+  try {
+    return (await db.all(
+      `SELECT id, nome, slug FROM unidades WHERE empresa_id = ? AND (ativo IS NULL OR ativo = 1 OR ativo = true) ORDER BY nome`,
+      [id]
+    )) as any[];
+  } catch {
+    return [];
+  }
+}
+
+function buildHtml(opts: {
+  empresa: string;
+  planLabel: string;
+  depth: PdfDepth;
+  periodo: string;
+  total: number;
+  mean: number;
+  positive: number;
+  critical: number;
+  dist: number[];
+  sent: { pos: number; neu: number; neg: number };
+  themes: { tag: string; count: number }[];
+  units: UnitRow[];
+}): string {
+  const t = THEME[opts.depth];
+  const maxBar = Math.max(...opts.dist, 1);
+  const bars = opts.dist
+    .map((n, i) => {
+      const colors = ['#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e'];
+      const w = Math.round((n / maxBar) * 100);
+      return `<div class="bar-row"><span>${i + 1}★</span><div class="track"><i style="width:${w}%;background:${colors[i]}"></i></div><b>${n}</b></div>`;
+    })
+    .join('');
+
+  const includes = t.includes.map((x) => `<li>${esc(x)}</li>`).join('');
+  const locked = t.locked.length
+    ? t.locked.map((x) => `<li>${esc(x)}</li>`).join('')
+    : '<li>Relatório completo deste plano</li>';
+
+  let extra = '';
+
+  if (opts.depth !== 'pro') {
+    extra += `
+    <section>
+      <h2>3. Sentimento</h2>
+      <div class="cards3">
+        <div class="card"><span class="ok">Positivo</span><strong>${opts.sent.pos}</strong><small>${pct(opts.sent.pos, opts.total)}%</small></div>
+        <div class="card"><span class="warn">Neutro</span><strong>${opts.sent.neu}</strong><small>${pct(opts.sent.neu, opts.total)}%</small></div>
+        <div class="card"><span class="bad">Negativo</span><strong>${opts.sent.neg}</strong><small>${pct(opts.sent.neg, opts.total)}%</small></div>
+      </div>
+    </section>
+    <section>
+      <h2>4. Temas da IA</h2>
+      ${
+        opts.themes.length
+          ? `<table><thead><tr><th>Tema</th><th>Qtd</th></tr></thead><tbody>${opts.themes
+              .map((x) => `<tr><td>${esc(x.tag)}</td><td>${x.count}</td></tr>`)
+              .join('')}</tbody></table>`
+          : `<p class="muted">Nenhum tema neste ciclo.</p>`
+      }
+    </section>`;
+  } else {
+    extra += `
+    <section>
+      <h2>3. Análise avançada</h2>
+      <p>No <b>Pro</b> você vê volume, nota e distribuição. Sentimento, temas e filiais entram em <b>Ultra</b>, <b>Corporativo</b> e <b>Rei</b>.</p>
+    </section>`;
+  }
+
+  if (opts.depth === 'corp' || opts.depth === 'rei') {
+    extra += `
+    <section class="break">
+      <h2>5. Ranking de unidades</h2>
+      ${
+        opts.units.length
+          ? `<table><thead><tr><th>#</th><th>Unidade</th><th>Volume</th><th>Média</th><th>Críticas</th></tr></thead><tbody>${opts.units
+              .map(
+                (u, i) =>
+                  `<tr><td>${i + 1}</td><td>${esc(u.nome)}</td><td>${u.total}</td><td><b>${u.avg.toFixed(1)}</b></td><td>${u.critical}</td></tr>`
+              )
+              .join('')}</tbody></table>`
+          : `<p class="muted">Nenhuma unidade com avaliações neste ciclo.</p>`
+      }
+    </section>`;
+  }
+
+  if (opts.depth === 'rei' && opts.units.length) {
+    const best = opts.units.reduce((a, b) => (b.avg > a.avg ? b : a));
+    const worst = opts.units.reduce((a, b) => (b.avg < a.avg ? b : a));
+    extra += `
+    <section>
+      <h2>6. Ficha por unidade</h2>
+      ${opts.units
+        .slice(0, 8)
+        .map(
+          (u) => `
+        <div class="unit">
+          <h3>${esc(u.nome)}</h3>
+          <div class="cards4">
+            <div class="card"><span>Volume</span><strong>${u.total}</strong></div>
+            <div class="card"><span>Média</span><strong>${u.avg.toFixed(1)}</strong></div>
+            <div class="card"><span>Críticas</span><strong>${u.critical}</strong></div>
+            <div class="card"><span>Positivas</span><strong>${u.positive}</strong></div>
+          </div>
+        </div>`
+        )
+        .join('')}
+    </section>
+    <section>
+      <h2>7. Destaques</h2>
+      <ul>
+        <li>Melhor média: <b>${esc(best.nome)}</b> (${best.avg.toFixed(1)})</li>
+        <li>Atenção: <b>${esc(worst.nome)}</b> (${worst.avg.toFixed(1)})</li>
+        <li>Críticas no ciclo: <b>${opts.critical}</b></li>
+      </ul>
+    </section>`;
+  }
+
+  return `<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<title>${esc(t.title)} — ${esc(opts.empresa)}</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm 16mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #0f172a; font-size: 10pt; line-height: 1.45; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .accent { color: ${t.accent}; }
+  .bar { height: 4px; width: 48px; background: ${t.accent}; margin: 8px 0 14px; border-radius: 2px; }
+  h1 { font-size: 18pt; margin: 0 0 4px; }
+  h2 { font-size: 12pt; margin: 18px 0 8px; color: #0f172a; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }
+  h3 { font-size: 10.5pt; margin: 0 0 6px; }
+  .brand { font-size: 9pt; color: #64748b; font-weight: 700; letter-spacing: .04em; }
+  .plan { font-size: 16pt; font-weight: 800; color: ${t.accent}; margin: 2px 0; }
+  .meta { color: #64748b; font-size: 9pt; margin-bottom: 10px; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0 14px; }
+  .box { border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; }
+  .box.ok { background: #f0fdf4; border-color: #bbf7d0; }
+  .box.muted { background: #f8fafc; }
+  .box b { display: block; margin-bottom: 4px; font-size: 8.5pt; }
+  .box ul { margin: 0; padding-left: 16px; font-size: 8.5pt; color: #334155; }
+  .insight { background: #f8fafc; border-left: 3px solid ${t.accent}; padding: 8px 12px; margin: 8px 0 14px; font-size: 9.5pt; }
+  .cards4, .cards3 { display: grid; gap: 8px; }
+  .cards4 { grid-template-columns: repeat(4, 1fr); }
+  .cards3 { grid-template-columns: repeat(3, 1fr); }
+  .card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; background: #f8fafc; }
+  .card span { display: block; font-size: 7pt; text-transform: uppercase; color: #64748b; font-weight: 700; }
+  .card strong { display: block; font-size: 16pt; margin-top: 4px; }
+  .card small { color: #64748b; font-size: 8pt; }
+  .ok { color: #15803d !important; }
+  .warn { color: #b45309 !important; }
+  .bad { color: #b91c1c !important; }
+  .bar-row { display: grid; grid-template-columns: 28px 1fr 28px; gap: 8px; align-items: center; margin: 6px 0; font-size: 9pt; }
+  .track { height: 10px; background: #eef2f7; border-radius: 99px; overflow: hidden; }
+  .track i { display: block; height: 100%; border-radius: 99px; }
+  table { width: 100%; border-collapse: collapse; font-size: 9pt; }
+  th { text-align: left; background: ${t.accent}; color: #fff; padding: 7px 8px; }
+  td { padding: 7px 8px; border-bottom: 1px solid #e2e8f0; }
+  .unit { margin: 10px 0 14px; padding: 10px; border: 1px solid #e2e8f0; border-radius: 8px; }
+  .muted { color: #64748b; }
+  .break { page-break-before: always; }
+  footer { margin-top: 20px; font-size: 7.5pt; color: #94a3b8; text-align: center; }
+</style>
+</head>
+<body>
+  <div class="brand">FILTRA.AI</div>
+  <div class="plan">${esc(t.title)}</div>
+  <h1>${esc(opts.empresa)}</h1>
+  <div class="meta">Ciclo · ${esc(opts.periodo)} &nbsp;|&nbsp; Plano <b>${esc(opts.planLabel)}</b></div>
+  <div class="bar"></div>
+
+  <div class="split">
+    <div class="box ok"><b>Inclui neste plano</b><ul>${includes}</ul></div>
+    <div class="box muted"><b>Só em planos superiores</b><ul>${locked}</ul></div>
+  </div>
+
+  <div class="insight"><b>Leitura rápida:</b> ${esc(insight(opts.total, opts.mean, opts.critical, opts.positive))}</div>
+
+  <section>
+    <h2>1. Resumo do ciclo</h2>
+    <div class="cards4">
+      <div class="card"><span>Volume</span><strong>${opts.total}</strong><small>avaliações</small></div>
+      <div class="card"><span>Nota média</span><strong>${opts.total ? opts.mean.toFixed(1) : '—'}</strong><small>1 a 5</small></div>
+      <div class="card"><span>Positivas</span><strong>${opts.positive}</strong><small>${pct(opts.positive, opts.total)}%</small></div>
+      <div class="card"><span>Críticas</span><strong>${opts.critical}</strong><small>${pct(opts.critical, opts.total)}%</small></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Distribuição de notas</h2>
+    ${bars}
+  </section>
+
+  ${extra}
+
+  <footer>Filtra.AI · ${esc(t.title)} · ciclo de assinatura · sem projeção futura</footer>
+</body>
+</html>`;
+}
+
+function chromiumPath(): string {
+  return (
+    process.env.PUPPETEER_EXECUTABLE_PATH ||
+    process.env.CHROMIUM_PATH ||
+    '/usr/bin/chromium'
+  );
+}
+
+async function htmlToPdf(html: string): Promise<Buffer> {
+  const browser = await puppeteer.launch({
+    executablePath: chromiumPath(),
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--font-render-hinting=none',
+    ],
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 45_000 });
+    const pdf = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '14mm', right: '12mm', bottom: '14mm', left: '12mm' },
+    });
+    return Buffer.from(pdf);
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+}
+
+export async function ensureUnidadesSchema(db: Database): Promise<void> {
+  try {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS unidades (
+        id TEXT PRIMARY KEY,
+        empresa_id TEXT NOT NULL,
+        nome TEXT NOT NULL,
+        slug TEXT,
+        ativo INTEGER DEFAULT 1,
+        criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+  } catch {
+    /* ok */
+  }
+}
+
+export async function gerarRelatorioMensalPDF(
+  db: Database,
+  empresaId: string,
+  mesAno: string,
+  _unused?: unknown,
+  _lang?: string | null
+): Promise<Buffer> {
+  const empresa = await db.get('SELECT * FROM empresas WHERE id = ?', [empresaId]);
+  if (!empresa) throw new Error('Empresa não encontrada.');
+  if (!empresaTemPdf(empresa)) throw new Error('Relatório PDF não disponível neste plano.');
+
+  const plan = String(empresa.plan || empresa.status || 'trial').toLowerCase();
+  const trial = isTrialPlan(plan) || isTrialPlan(String(empresa.status || ''));
+  const depth = depthFor(plan, trial);
+  const anchor = subscriptionAnchorDay(empresa as any);
+  const range = cycleRangeForMonth(mesAno, anchor);
+
+  const reviews = await loadReviews(db, empresaId, range);
+  const unitsRaw = depth === 'corp' || depth === 'rei' ? await loadUnits(db, empresaId) : [];
+
+  const total = reviews.length;
+  const mean = avg(reviews);
+  const positive = reviews.filter((r) => Number(r.rating) >= 4).length;
+  const critical = reviews.filter((r) => Number(r.rating) <= 3).length;
+  const se = sentimentBreak(reviews);
+  const th = themes(reviews);
+
+  const units: UnitRow[] = unitsRaw
+    .map((u) => {
+      const list = reviews.filter(
+        (r) =>
+          String(r.unidade_id || '') === String(u.id) ||
+          (u.slug && String(r.origin || '') === String(u.slug))
+      );
+      return {
+        nome: String(u.nome || 'Unidade'),
+        total: list.length,
+        avg: avg(list),
+        critical: list.filter((r) => Number(r.rating) <= 3).length,
+        positive: list.filter((r) => Number(r.rating) >= 4).length,
+      };
+    })
+    .filter((u) => u.total > 0)
+    .sort((a, b) => b.avg - a.avg || b.total - a.total);
+
+  const html = buildHtml({
+    empresa: String(empresa.nome_empresa || 'Empresa'),
+    planLabel: trial ? 'Trial' : planLabel(plan),
+    depth,
+    periodo: range.label,
+    total,
+    mean,
+    positive,
+    critical,
+    dist: dist(reviews),
+    sent: se,
+    themes: th,
+    units,
+  });
+
+  const pdf = await htmlToPdf(html);
+  if (pdf.length < 100 || pdf.subarray(0, 4).toString() !== '%PDF') {
+    throw new Error('Puppeteer gerou PDF inválido.');
+  }
+  return pdf;
 }

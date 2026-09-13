@@ -1,6 +1,6 @@
 {
   "name": "backend",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "API Filtra.IA",
   "main": "server.ts",
   "type": "module",
@@ -27,8 +27,8 @@
     "express-rate-limit": "^7.5.0",
     "jsonwebtoken": "^9.0.2",
     "nodemailer": "^10.0.1",
-    "pdfkit": "^0.16.0",
     "pg": "^8.13.3",
+    "puppeteer-core": "^24.2.0",
     "tsx": "^4.19.3",
     "web-push": "^3.6.7"
   },
@@ -40,7 +40,6 @@
     "@types/jsonwebtoken": "^9.0.9",
     "@types/node": "^20.17.0",
     "@types/nodemailer": "^6.4.17",
-    "@types/pdfkit": "^0.13.9",
     "@types/pg": "^8.11.11",
     "@types/web-push": "^3.6.4",
     "typescript": "^5.8.2"

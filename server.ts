@@ -73,8 +73,8 @@ assertEnvOrExit();
 const JWT_SECRET = requireJwtSecret();
 
 const BUILD = {
-  version: '1.1.7',
-  marker: 'reportlab-pdf-v1',
+  version: '1.2.0',
+  marker: 'puppeteer-pdf-v1',
   started_at: new Date().toISOString(),
 };
 
@@ -140,6 +140,7 @@ app.get('/api/health', async (_req, res) => {
     push: pushConfigured(),
     smtp: smtpConfigured(),
     n8n: n8nConfigured(),
+    pdf_engine: 'puppeteer',
     ai_latency: {
       groq: ai.stats.groq.latency,
       gemini: ai.stats.gemini.latency,
@@ -314,6 +315,7 @@ async function main() {
   );
   console.log(`📧 SMTP: ${smtpConfigured() ? 'configurado' : 'OFF'}`);
   console.log(`🔗 n8n: ${n8nConfigured() ? 'webhook ON' : 'OFF'}`);
+  console.log('📄 PDF: puppeteer');
   if (!wechatConfigured()) {
     console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
   }
