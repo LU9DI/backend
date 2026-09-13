@@ -72,10 +72,9 @@ import {
 assertEnvOrExit();
 const JWT_SECRET = requireJwtSecret();
 
-/** Se /api/live não mostrar 1.1.6, o Render NÃO deployou este commit. */
 const BUILD = {
-  version: '1.1.6',
-  marker: 'DEPLOY-PROOF-2026-09-12',
+  version: '1.1.7',
+  marker: 'reportlab-pdf-v1',
   started_at: new Date().toISOString(),
 };
 
