@@ -47,10 +47,9 @@ test('cada plano gera conteúdo do seu nível', async () => {
   const period = buildReportPeriod('semana', '2026-09-07', '2026-09-13');
 
   const pro = await getOrGenerateWhatsAppReport(db, 'empresa-1', period, 'pro');
-  assert.match(pro.text, /Plano:\* Pro/);
+  assert.match(pro.text, /Plano:\* Pro|\*Plano:\* Pro/);
   assert.doesNotMatch(pro.text, /Distribuição das avaliações/);
 
-  // upgrade: cache do Pro não serve para Ultra
   const ultra = await getOrGenerateWhatsAppReport(db, 'empresa-1', period, 'ultra');
   assert.equal(ultra.cached, false);
   assert.match(ultra.text, /Distribuição das avaliações/);
@@ -63,7 +62,6 @@ test('cada plano gera conteúdo do seu nível', async () => {
   assert.equal(rei.cached, false);
   assert.match(rei.text, /Principais temas identificados no painel/);
 
-  // mesmo plano de novo → cache hit
   const rei2 = await getOrGenerateWhatsAppReport(db, 'empresa-1', period, 'rei');
   assert.equal(rei2.cached, true);
   assert.equal(rei2.text, rei.text);
@@ -81,11 +79,9 @@ test('dois claims concorrentes: só um gera', async () => {
     getOrGenerateWhatsAppReport(db, 'empresa-1', period, 'pro'),
   ]);
 
-  // um gerou, o outro pegou cache (ou ambos coerentes no mesmo texto)
   assert.equal(a.text, b.text);
   assert.equal(a.model, 'none');
   assert.equal(b.model, 'none');
-  assert.ok(a.cached || b.cached || (!a.cached && !b.cached)); // pelo menos consistentes
 
   const rows = await db.all(
     `SELECT status FROM relatorios_cache WHERE cliente_id=? AND periodo_inicio=? AND periodo_fim=?`,
