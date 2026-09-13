@@ -57,6 +57,7 @@ import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
 import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
+import { mountN8nEmailRoutes } from './routes/n8nEmailRoutes.js';
 import {
   anonymizeOldClientWhatsapp,
   ensureReviewTreatmentColumns,
@@ -264,6 +265,7 @@ async function main() {
   mountExportRoutes(app);
   mountPublicPlanosRoutes(app);
   mountAuditRoutes(app);
+  mountN8nEmailRoutes(app);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
