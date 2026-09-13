@@ -1,12 +1,13 @@
 /**
  * Preços públicos dos planos (mesmos valores editados no admin).
- * GET /api/planos — sem auth, para a landing em localhost:3000.
+ * GET /api/planos — sem auth, para a landing.
  */
 import type { Express, Request, Response } from 'express';
 import { getDb } from '../lib/db.js';
 import { listPlanPrices, ensurePlanPricingSchema } from '../lib/planPricing.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { listPlanosPublicos, refreshPlanPricesFromDb } from '../stripeBilling.js';
+import { planoTemRelatorioWhatsApp } from '../lib/plans.js';
 
 const LABELS: Record<string, string> = {
   inicial: 'Inicial',
@@ -16,24 +17,49 @@ const LABELS: Record<string, string> = {
   rei: 'REI',
 };
 
-const FEATURES: Record<string, { features: string[]; missingFeatures?: string[]; highlight?: boolean }> = {
+const FEATURES: Record<
+  string,
+  { features: string[]; missingFeatures?: string[]; highlight?: boolean }
+> = {
   inicial: {
     features: ['100 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos'],
-    missingFeatures: ['Integrado com IA', 'Relatório inteligente via WhatsApp'],
+    missingFeatures: ['Integrado com IA', 'Relatório inteligente'],
   },
   pro: {
-    features: ['300 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos'],
-    missingFeatures: ['Integrado com IA', 'Relatório inteligente via WhatsApp'],
+    features: ['300 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos', 'Relatório inteligente'],
+    missingFeatures: ['Integrado com IA'],
   },
   ultra: {
-    features: ['800 feedbacks/mês', 'WPP Integrado', 'IA Ativa', 'Relatório inteligente via WhatsApp', 'Dashboard com análises'],
+    features: [
+      '800 feedbacks/mês',
+      'WPP Integrado',
+      'IA Ativa',
+      'Relatório inteligente',
+      'Dashboard com análises',
+    ],
     highlight: true,
   },
   corporativo: {
-    features: ['2.500 feedbacks/mês', 'WPP Integrado', 'IA Ativa', 'Relatório inteligente via WhatsApp', 'Dashboard Multi-unidades', 'Suporte Prioritário', 'Acesso antecipado a novas funções'],
+    features: [
+      '2.500 feedbacks/mês',
+      'WPP Integrado',
+      'IA Ativa',
+      'Relatório inteligente',
+      'Dashboard Multi-unidades',
+      'Suporte Prioritário',
+      'Acesso antecipado a novas funções',
+    ],
   },
   rei: {
-    features: ['8.000 feedbacks/mês', 'WPP Integrado', 'IA Ativa', 'Relatório inteligente via WhatsApp', 'Dashboard Multi-unidades', 'Suporte Prioritário', 'Acesso antecipado a novas funções'],
+    features: [
+      '8.000 feedbacks/mês',
+      'WPP Integrado',
+      'IA Ativa',
+      'Relatório inteligente',
+      'Dashboard Multi-unidades',
+      'Suporte Prioritário',
+      'Acesso antecipado a novas funções',
+    ],
   },
 };
 
@@ -76,7 +102,8 @@ export function mountPublicPlanosRoutes(app: Express) {
           features,
           missingFeatures: feat.missingFeatures || [],
           highlight: Boolean(feat.highlight),
-          relatorio_whatsapp_disponivel: ['ultra', 'corporativo', 'rei'].includes(plan),
+          relatorio_inteligente_disponivel: planoTemRelatorioWhatsApp(plan),
+          // legado: front antigo lia pdf_disponivel — mantém false
           pdf_disponivel: false,
         };
       });
