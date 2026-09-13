@@ -2,12 +2,12 @@
  * Middleware de validação de body — sem dependências externas.
  */
 import type { Request, Response, NextFunction } from 'express';
-import { normalizarCnpj, cnpjValido } from '../lib/cnpj.js';
+import { normalizarCnpj, cnpjValido, normalizarTaxId, taxIdValido } from '../lib/cnpj.js';
 import { validarSenhaEmpresa } from '../lib/passwordPolicy.js';
 
 export type FieldRule = {
   required?: boolean;
-  type?: 'string' | 'number' | 'boolean' | 'email' | 'cnpj' | 'url' | 'password_empresa';
+  type?: 'string' | 'number' | 'boolean' | 'email' | 'cnpj' | 'tax_id' | 'url' | 'password_empresa';
   min?: number;
   max?: number;
   integer?: boolean;
@@ -75,6 +75,18 @@ function applyRule(
     case 'cnpj': {
       const s = normalizarCnpj(String(value));
       if (!cnpjValido(s)) return { error: rule.message || 'CNPJ inválido.' };
+      value = s;
+      break;
+    }
+    case 'tax_id': {
+      const s = normalizarTaxId(String(value));
+      if (!taxIdValido(s)) {
+        return {
+          error:
+            rule.message ||
+            'Identificação fiscal inválida. Use CNPJ (Brasil) ou Tax ID do seu país (mín. 5 caracteres).',
+        };
+      }
       value = s;
       break;
     }
@@ -165,8 +177,15 @@ export function validateBody(schema: Schema) {
   };
 }
 
+/** Trial: e-mail + senha obrigatórios; CNPJ/Tax ID opcional (estrangeiros). */
 export const schemaTrialAtivar: Schema = {
-  cnpj: { required: true, type: 'cnpj' },
+  cnpj: {
+    required: false,
+    type: 'tax_id',
+    message:
+      'Identificação fiscal inválida. Use CNPJ (Brasil) ou Tax ID do seu país (mín. 5 caracteres), ou deixe em branco.',
+  },
+  tax_id: { required: false, type: 'tax_id' },
   nome_empresa: {
     required: true,
     type: 'string',
@@ -178,20 +197,27 @@ export const schemaTrialAtivar: Schema = {
   senha: { required: true, type: 'password_empresa' },
   google_review_url: { required: false, type: 'url', max: 500 },
   whatsapp: { required: false, type: 'string', max: 20 },
+  locale: { required: false, type: 'string', max: 8 },
 };
 
+/** Login: e-mail OU Tax ID/CNPJ + senha. */
 export const schemaLoginEmpresa: Schema = {
+  email: { required: false, type: 'email' },
   cnpj: {
-    required: true,
+    required: false,
     type: 'string',
-    transform: (v) => normalizarCnpj(String(v ?? '')),
-    custom: (v) => (String(v).length === 14 ? null : 'CNPJ inválido.'),
+    transform: (v) => normalizarTaxId(String(v ?? '')),
+  },
+  tax_id: {
+    required: false,
+    type: 'string',
+    transform: (v) => normalizarTaxId(String(v ?? '')),
   },
   senha: {
     required: true,
     type: 'string',
     min: 1,
-    message: 'CNPJ e senha são obrigatórios.',
+    message: 'Senha é obrigatória.',
   },
 };
 
