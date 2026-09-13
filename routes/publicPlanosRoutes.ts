@@ -16,53 +16,27 @@ const LABELS: Record<string, string> = {
   rei: 'REI',
 };
 
-const FEATURES: Record<
-  string,
-  { features: string[]; missingFeatures?: string[]; highlight?: boolean }
-> = {
+const FEATURES: Record<string, { features: string[]; missingFeatures?: string[]; highlight?: boolean }> = {
   inicial: {
     features: ['100 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos'],
-    missingFeatures: ['Integrado com IA'],
+    missingFeatures: ['Integrado com IA', 'Relatório inteligente via WhatsApp'],
   },
   pro: {
-    features: ['300 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos', '1 Relatório PDF/mês'],
-    missingFeatures: ['Integrado com IA'],
+    features: ['300 feedbacks/mês', 'WPP Integrado', 'Gráficos básicos'],
+    missingFeatures: ['Integrado com IA', 'Relatório inteligente via WhatsApp'],
   },
   ultra: {
-    features: [
-      '800 feedbacks/mês',
-      'WPP Integrado',
-      'IA Ativa',
-      '1 Relatório PDF/mês',
-      'Dashboard com análises',
-    ],
+    features: ['800 feedbacks/mês', 'WPP Integrado', 'IA Ativa', 'Relatório inteligente via WhatsApp', 'Dashboard com análises'],
     highlight: true,
   },
   corporativo: {
-    features: [
-      '2.500 feedbacks/mês',
-      'WPP Integrado',
-      'IA Ativa',
-      '1 Relatório PDF/mês',
-      'Dashboard Multi-unidades',
-      'Suporte Prioritário',
-      'Acesso antecipado a novas funções',
-    ],
+    features: ['2.500 feedbacks/mês', 'WPP Integrado', 'IA Ativa', 'Relatório inteligente via WhatsApp', 'Dashboard Multi-unidades', 'Suporte Prioritário', 'Acesso antecipado a novas funções'],
   },
   rei: {
-    features: [
-      '8.000 feedbacks/mês',
-      'WPP Integrado',
-      'IA Ativa',
-      '1 Relatório PDF/mês',
-      'Dashboard Multi-unidades',
-      'Suporte Prioritário',
-      'Acesso antecipado a novas funções',
-    ],
+    features: ['8.000 feedbacks/mês', 'WPP Integrado', 'IA Ativa', 'Relatório inteligente via WhatsApp', 'Dashboard Multi-unidades', 'Suporte Prioritário', 'Acesso antecipado a novas funções'],
   },
 };
 
-/** Espaço não-quebrável entre R$ e o valor (evita R$ em uma linha e 499,90 embaixo). */
 function fmtBrl(n: number): string {
   const num = Number(n).toFixed(2).replace('.', ',');
   return `R$\u00a0${num}`;
@@ -81,17 +55,13 @@ export function mountPublicPlanosRoutes(app: Express) {
       }
 
       const { planos, annual_discount_pct } = await listPlanPrices(db);
-
       const cards = planos.map((p: any) => {
         const plan = String(p.plan);
         const limit = Number(p.review_limit) || 0;
         const feat = FEATURES[plan] || { features: [] };
         const features = (feat.features || []).map((f) =>
-          /feedbacks\/mês/i.test(f)
-            ? `${limit.toLocaleString('pt-BR')} feedbacks/mês`
-            : f
+          /feedbacks\/mês/i.test(f) ? `${limit.toLocaleString('pt-BR')} feedbacks/mês` : f
         );
-
         return {
           plan,
           keyMensal: plan,
@@ -106,12 +76,13 @@ export function mountPublicPlanosRoutes(app: Express) {
           features,
           missingFeatures: feat.missingFeatures || [],
           highlight: Boolean(feat.highlight),
+          relatorio_whatsapp_disponivel: ['ultra', 'corporativo', 'rei'].includes(plan),
+          pdf_disponivel: false,
         };
       });
 
       const order = ['inicial', 'pro', 'ultra', 'corporativo', 'rei'];
       cards.sort((a, b) => order.indexOf(a.plan) - order.indexOf(b.plan));
-
       res.setHeader('Cache-Control', 'public, max-age=30');
       res.json({
         planos: cards,
