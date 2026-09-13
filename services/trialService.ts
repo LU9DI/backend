@@ -1,5 +1,6 @@
 /**
  * Trial 7 dias — SQLite + Postgres.
+ * CNPJ/Tax ID opcional: estrangeiros entram só com e-mail + nome + senha.
  */
 import crypto from 'crypto';
 import type { Database } from 'sqlite';
@@ -9,7 +10,7 @@ import { createUsuarioForEmpresa } from '../passwordResetRoutes.js';
 import { normalizarWhatsapp } from '../lib/whatsapp.js';
 import { notificarTrialAtivado } from '../lib/notifications.js';
 import { setAuthCookie, signAccessToken } from '../lib/auth.js';
-import { normalizarCnpj } from '../lib/cnpj.js';
+import { normalizarTaxId, taxIdValido } from '../lib/cnpj.js';
 
 const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(
   /\/$/,
@@ -17,7 +18,8 @@ const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://loca
 );
 
 export type TrialInput = {
-  cnpj: string;
+  cnpj?: string;
+  tax_id?: string;
   nome_empresa: string;
   email: string;
   senha: string;
@@ -43,7 +45,7 @@ export type TrialResult = {
 
 export class TrialConflictError extends Error {
   status = 409;
-  constructor(message = 'Este CNPJ já ativou o período de testes.') {
+  constructor(message = 'Já existe uma conta com estes dados.') {
     super(message);
     this.name = 'TrialConflictError';
   }
@@ -67,21 +69,31 @@ function isUniqueViolation(e: any): boolean {
   );
 }
 
+/** Gera identificador interno quando o cliente não informa Tax ID/CNPJ. */
+function syntheticTaxId(): string {
+  return `INTL${crypto.randomUUID().replace(/-/g, '').slice(0, 12).toUpperCase()}`;
+}
+
 export async function ativarTrial(
   input: TrialInput,
   db: Database = getDb(),
   res?: Response
 ): Promise<TrialResult> {
-  const cnpj = normalizarCnpj(String(input.cnpj));
+  const rawTax = String(input.tax_id || input.cnpj || '').trim();
+  let taxId = normalizarTaxId(rawTax);
+  if (rawTax && !taxIdValido(taxId)) {
+    throw new TrialValidationError(
+      'Identificação fiscal inválida. Use CNPJ (Brasil) ou Tax ID do seu país, ou deixe em branco.'
+    );
+  }
+  if (!taxId) taxId = syntheticTaxId();
+
   const nome = String(input.nome_empresa).trim();
   const email = String(input.email).trim().toLowerCase();
   const senha = String(input.senha);
   const googleReviewUrl = input.google_review_url ? String(input.google_review_url) : '';
   const wpp = normalizarWhatsapp(input.whatsapp || null);
 
-  if (!cnpj || cnpj.length !== 14) {
-    throw new TrialValidationError('CNPJ inválido.');
-  }
   if (!nome || nome.length < 2) {
     throw new TrialValidationError('Nome da empresa inválido.');
   }
@@ -95,9 +107,17 @@ export async function ativarTrial(
     );
   }
 
-  const existente = await db.get(`SELECT id FROM empresas WHERE cnpj = ?`, [cnpj]);
-  if (existente) {
-    throw new TrialConflictError();
+  // Unicidade: e-mail (principal) e Tax ID quando informado pelo usuário
+  const emailExistente = await db.get(`SELECT id FROM usuarios WHERE email = ?`, [email]);
+  if (emailExistente) {
+    throw new TrialConflictError('Este e-mail já está cadastrado.');
+  }
+
+  if (rawTax) {
+    const existente = await db.get(`SELECT id FROM empresas WHERE cnpj = ?`, [taxId]);
+    if (existente) {
+      throw new TrialConflictError('Esta identificação fiscal já ativou o período de testes.');
+    }
   }
 
   const id = crypto.randomUUID();
@@ -111,17 +131,16 @@ export async function ativarTrial(
          id, cnpj, nome_empresa, slug, google_review_url, whatsapp_suporte,
          status, plan, criado_em, expira_em
        ) VALUES (?, ?, ?, ?, ?, ?, 'trial', 'trial', ?, ?)`,
-      [id, cnpj, nome, slug, googleReviewUrl || null, wpp, criadoEm, expiraEm]
+      [id, taxId, nome, slug, googleReviewUrl || null, wpp, criadoEm, expiraEm]
     );
   } catch (e: any) {
     console.error('[trial] insert empresa:', e?.code, e?.message || e);
     if (isUniqueViolation(e)) throw new TrialConflictError();
-    // fallback sem colunas opcionais (schema legado)
     try {
       await db.run(
         `INSERT INTO empresas (id, cnpj, nome_empresa, status, plan, criado_em, expira_em)
          VALUES (?, ?, ?, 'trial', 'trial', ?, ?)`,
-        [id, cnpj, nome, criadoEm, expiraEm]
+        [id, taxId, nome, criadoEm, expiraEm]
       );
       try {
         await db.run(`UPDATE empresas SET slug = ? WHERE id = ?`, [slug, id]);
@@ -140,7 +159,7 @@ export async function ativarTrial(
   try {
     const u = await createUsuarioForEmpresa(db, {
       empresaId: id,
-      cnpj,
+      cnpj: taxId,
       nome,
       email,
       senha,
@@ -153,10 +172,12 @@ export async function ativarTrial(
     } catch {
       /* */
     }
+    if (/e-mail já está em uso|email already/i.test(String(e?.message || ''))) {
+      throw new TrialConflictError('Este e-mail já está cadastrado.');
+    }
     throw new TrialValidationError(e?.message || 'Falha ao criar usuário.');
   }
 
-  // Postgres NÃO tem rowid — era a causa do 500 "Erro ao processar a solicitação"
   const usuario =
     (await db.get(
       `SELECT id, nome_funcionario, empresa_id FROM usuarios WHERE email = ? LIMIT 1`,

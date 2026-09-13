@@ -19,9 +19,20 @@ export function mountAuthRoutes(app: Express) {
     loginLimiter,
     validateBody(schemaLoginEmpresa),
     asyncHandler(async (req: Request, res: Response) => {
+      const email = req.body.email ? String(req.body.email) : undefined;
+      const cnpj = req.body.cnpj ? String(req.body.cnpj) : undefined;
+      const tax_id = req.body.tax_id ? String(req.body.tax_id) : undefined;
+      const senha = String(req.body.senha || '');
+
+      if (!email && !cnpj && !tax_id) {
+        return res.status(400).json({
+          error: 'Informe e-mail ou identificação fiscal (CNPJ / Tax ID).',
+        });
+      }
+
       try {
         const result = await loginEmpresa(
-          { cnpj: String(req.body.cnpj), senha: String(req.body.senha) },
+          { email, cnpj, tax_id, senha },
           res,
           getDb(),
           req

@@ -23,7 +23,8 @@ export function mountTrialRoutes(app: Express) {
       try {
         const result = await ativarTrial(
           {
-            cnpj: String(req.body.cnpj),
+            cnpj: req.body.cnpj ? String(req.body.cnpj) : undefined,
+            tax_id: req.body.tax_id ? String(req.body.tax_id) : undefined,
             nome_empresa: String(req.body.nome_empresa),
             email: String(req.body.email),
             senha: String(req.body.senha),
@@ -39,7 +40,7 @@ export function mountTrialRoutes(app: Express) {
         return res.status(201).json(result);
       } catch (e: any) {
         if (e instanceof TrialConflictError || e?.name === 'TrialConflictError') {
-          return res.status(409).json({ error: e.message || 'CNPJ já cadastrado.' });
+          return res.status(409).json({ error: e.message || 'Já existe uma conta com estes dados.' });
         }
         if (e instanceof TrialValidationError || e?.name === 'TrialValidationError') {
           return res.status(400).json({ error: e.message });

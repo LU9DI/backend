@@ -15,15 +15,12 @@ import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
 import { enviarEmail, smtpConfigured } from './mailer.js';
 import { validarSenhaEmpresa } from './passwordPolicy.js';
+import { normalizarTaxId } from './lib/cnpj.js';
 
 const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(
   /\/$/,
   ''
 );
-
-function normalizarCnpj(cnpj: string): string {
-  return String(cnpj || '').replace(/\D/g, '');
-}
 
 function emailValido(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -61,7 +58,6 @@ export async function ensureAuthColumns(db: Database) {
     /* ok */
   }
 
-  // TIMESTAMPTZ = Postgres; SQLite aceita como afinidade numérica/texto e ainda funciona com ISO strings
   await db.exec(`
     CREATE TABLE IF NOT EXISTS password_resets (
       id TEXT PRIMARY KEY,
@@ -104,10 +100,11 @@ export async function createUsuarioForEmpresa(
 
   const id = crypto.randomUUID();
   const hash = await bcrypt.hash(opts.senha, 12);
+  const taxId = normalizarTaxId(opts.cnpj) || opts.cnpj;
   await db.run(
     `INSERT INTO usuarios (id, cnpj, nome_funcionario, empresa_id, senha_hash, email)
      VALUES (?, ?, ?, ?, ?, ?)`,
-    [id, normalizarCnpj(opts.cnpj), opts.nome.slice(0, 120), opts.empresaId, hash, email]
+    [id, taxId, opts.nome.slice(0, 120), opts.empresaId, hash, email]
   );
   return { id };
 }
@@ -130,7 +127,7 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
       const db = getDb();
       await ensureAuthColumns(db);
 
-      const cnpj = normalizarCnpj(req.body.cnpj || '');
+      const taxId = normalizarTaxId(req.body.cnpj || req.body.tax_id || '');
       const email = String(req.body.email || '')
         .trim()
         .toLowerCase();
@@ -141,8 +138,8 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
       let usuario: any = null;
       if (email && emailValido(email)) {
         usuario = await db.get('SELECT * FROM usuarios WHERE email = ?', [email]);
-      } else if (cnpj.length === 14) {
-        usuario = await db.get('SELECT * FROM usuarios WHERE cnpj = ?', [cnpj]);
+      } else if (taxId.length >= 5) {
+        usuario = await db.get('SELECT * FROM usuarios WHERE cnpj = ?', [taxId]);
       } else {
         return res.status(400).json({ error: 'Informe o e-mail cadastrado.' });
       }

@@ -1,5 +1,6 @@
 /**
- * Regras de autenticação de clientes (empresa).
+ * Autenticação de clientes (empresa).
+ * Login preferencial por e-mail; Tax ID/CNPJ continua aceito.
  */
 import bcrypt from 'bcrypt';
 import type { Database } from 'sqlite';
@@ -7,9 +8,12 @@ import type { Response, Request } from 'express';
 import { getDb } from '../lib/db.js';
 import { setAuthCookie, signAccessToken } from '../lib/auth.js';
 import { writeAudit, clientIp } from '../lib/auditLog.js';
+import { normalizarTaxId } from '../lib/cnpj.js';
 
 export type LoginInput = {
-  cnpj: string;
+  email?: string;
+  cnpj?: string;
+  tax_id?: string;
   senha: string;
 };
 
@@ -31,24 +35,36 @@ export class AuthUnauthorizedError extends Error {
   }
 }
 
+function isEmail(v: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
+}
+
 export async function loginEmpresa(
   input: LoginInput,
   res: Response,
   db: Database = getDb(),
   req?: Request
 ): Promise<LoginResult> {
-  const cnpj = String(input.cnpj || '').replace(/\D/g, '');
   const senha = String(input.senha || '');
+  const email = String(input.email || '')
+    .trim()
+    .toLowerCase();
+  const taxId = normalizarTaxId(String(input.tax_id || input.cnpj || ''));
   const ip = req ? clientIp(req) : null;
   const ua = req ? String(req.headers['user-agent'] || '').slice(0, 200) : null;
 
-  if (cnpj.length !== 14 || !senha) {
+  if (!senha || (!email && !taxId)) {
     throw new AuthUnauthorizedError();
   }
 
   let usuario: any;
   try {
-    usuario = await db.get('SELECT * FROM usuarios WHERE cnpj = ?', [cnpj]);
+    if (email && isEmail(email)) {
+      usuario = await db.get('SELECT * FROM usuarios WHERE email = ?', [email]);
+    }
+    if (!usuario && taxId) {
+      usuario = await db.get('SELECT * FROM usuarios WHERE cnpj = ?', [taxId]);
+    }
   } catch (e: any) {
     console.error('[auth] select usuario:', e?.message || e);
     throw e;
@@ -58,7 +74,7 @@ export async function loginEmpresa(
     await writeAudit(db, {
       action: 'auth.login_failed',
       result: 'denied',
-      target: cnpj.slice(0, 14),
+      target: (email || taxId || '').slice(0, 40),
       ip,
       user_agent: ua,
       detail: 'usuário não encontrado',
@@ -73,7 +89,7 @@ export async function loginEmpresa(
       actor_user_id: usuario.id,
       empresa_id: usuario.empresa_id,
       result: 'denied',
-      target: cnpj.slice(0, 14),
+      target: (email || taxId || '').slice(0, 40),
       ip,
       user_agent: ua,
       detail: 'senha inválida',
