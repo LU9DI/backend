@@ -65,14 +65,7 @@ export function mountReportJobRoutes(app: Express) {
          ORDER BY e.report_next_due_at ASC LIMIT 100`,
         [nowIso]
       );
-      const stats = {
-        candidatos: rows.length,
-        enviados: 0,
-        sem_destinatarios: 0,
-        sem_n8n: 0,
-        erros: 0,
-        pulados: 0,
-      };
+      const stats = { candidatos: rows.length, enviados: 0, sem_destinatarios: 0, sem_n8n: 0, erros: 0, pulados: 0 };
       const n8nConfigured = Boolean(process.env.N8N_WHATSAPP_REPORT_URL?.trim());
 
       for (const empresa of rows) {
@@ -98,24 +91,15 @@ export function mountReportJobRoutes(app: Express) {
 
         const period = buildReportPeriod('mes', previousMonthSameDay(dueIso), previousDay(dateOnly(dueIso)));
         try {
-          // O relatório é gerado uma única vez. O n8n distribui o mesmo texto para todos os canais.
-          const report = await getOrGenerateWhatsAppReport(
-            db,
-            String(empresa.id),
-            period,
-            String(empresa.plan || 'inicial')
-          );
-          const accepted = await sendToN8n({
+          // O relatório é gerado uma única vez. O mesmo payload segue para o n8n,
+          // que deve processar cada destinatário de forma independente.
+          const report = await getOrGenerateWhatsAppReport(db, String(empresa.id), period, String(empresa.plan || 'inicial'));
+          const payload = {
             tipo: 'relatorio_reputacao_mensal',
             cliente_id: String(empresa.id),
             nome_empresa: empresa.nome_empresa,
             plano: String(empresa.plan || 'inicial'),
-            destinatarios: destinatarios.map((d: any) => ({
-              id: String(d.id),
-              canal: String(d.canal),
-              destino: String(d.destino),
-              nome: d.nome || null,
-            })),
+            destinatarios: destinatarios.map((d: any) => ({ id: String(d.id), canal: String(d.canal), destino: String(d.destino), nome: d.nome || null })),
             periodo: { inicio: period.inicio, fim: period.fim },
             texto: report.text,
             cached: report.cached,
@@ -123,26 +107,19 @@ export function mountReportJobRoutes(app: Express) {
             modelo: 'none',
             automatico: true,
             vencimento_agendado: dueIso,
-          });
+          };
+          const accepted = await sendToN8n(payload);
           if (!accepted) {
-            await db.run(
-              `UPDATE empresas SET report_next_due_at=? WHERE id=? AND report_next_due_at=?`,
-              [dueIso, empresa.id, nextDue]
-            );
-            console.error(`[REPORT] send_failed cliente=${empresa.id}`);
+            await db.run(`UPDATE empresas SET report_next_due_at=? WHERE id=? AND report_next_due_at=?`, [dueIso, empresa.id, nextDue]);
+            console.error(`[REPORT] dispatch_failed cliente=${empresa.id}`);
             stats.erros++;
             continue;
           }
           await db.run(`UPDATE empresas SET report_last_sent_at=? WHERE id=?`, [nowIso, empresa.id]);
-          console.log(
-            `[REPORT] cliente=${empresa.id} plano=${empresa.plan} periodo=${period.chave} automatico=1 cached=${report.cached} tokens=0 destinatarios=${destinatarios.length}`
-          );
+          console.log(`[REPORT] cliente=${empresa.id} periodo=${period.chave} generated_once=1 cached=${report.cached} tokens=0 recipients=${destinatarios.length}`);
           stats.enviados++;
         } catch (error: any) {
-          await db.run(
-            `UPDATE empresas SET report_next_due_at=? WHERE id=? AND report_next_due_at=?`,
-            [dueIso, empresa.id, nextDue]
-          );
+          await db.run(`UPDATE empresas SET report_next_due_at=? WHERE id=? AND report_next_due_at=?`, [dueIso, empresa.id, nextDue]);
           console.error(`[REPORT] generation_failed cliente=${empresa.id}:`, error?.message || error);
           stats.erros++;
         }
