@@ -61,6 +61,7 @@ import {
   anonymizeOldClientWhatsapp,
   ensureReviewTreatmentColumns,
 } from './lib/lgpd.js';
+import { ensureRuntimeSchema } from './lib/schemaEnsure.js';
 import {
   backfillSentiment,
   countMissingSentiment,
@@ -190,6 +191,11 @@ function gracefulShutdown(signal: string) {
 
 async function main() {
   await initDB();
+  try {
+    await ensureRuntimeSchema(getDb());
+  } catch (e) {
+    console.warn('ensureRuntimeSchema:', e);
+  }
   try {
     await ensureUnidadesSchema(getDb());
   } catch (e) {
