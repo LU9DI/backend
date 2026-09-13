@@ -78,7 +78,6 @@ export async function generateMonthlyReport(
     };
   }
 
-  // Garante colunas que podem ter sido adicionadas por migrações antigas.
   const cols = (await db.all(`PRAGMA table_info(reviews)`)).map((c: any) => c.name);
   if (!cols.includes('is_test')) await db.exec(`ALTER TABLE reviews ADD COLUMN is_test INTEGER DEFAULT 0`);
   if (!cols.includes('sentiment')) await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment TEXT`);
@@ -139,8 +138,6 @@ export async function generateMonthlyReport(
     }
   }
 
-  // Se o campo sentiment ainda não foi preenchido, não inventamos IA:
-  // o relatório continua válido e a seção só aparece quando há dados.
   const sentimentTotal = sentimentCounts.positive + sentimentCounts.neutral + sentimentCounts.negative;
   const sentiment = sentimentTotal
     ? {
@@ -222,6 +219,7 @@ export async function generateMonthlyReport(
     status: 'generated',
     fileName,
     bytes: pdf.length,
+    pdfData: pdf,
   });
 
   return { pdf, cycleKey: cycle.key, fileName, alreadyExists: false };
