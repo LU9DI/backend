@@ -9,6 +9,8 @@ import {
   notificarAcessoExpirado,
 } from '../lib/notifications.js';
 
+const REPORT_TIME_ZONE = 'America/Sao_Paulo';
+
 function normalizePlanDb(planDb: string): string {
   const p = String(planDb || '').toLowerCase();
   if (p === 'corporativo' || p === 'corporate') return 'corporativo';
@@ -20,13 +22,41 @@ function normalizePlanDb(planDb: string): string {
   return resolved?.planDb || 'pro';
 }
 
+/**
+ * Calcula o próximo aniversário usando a data/hora local do Brasil.
+ * A data persistida continua em ISO/UTC, mas o dia do mês é definido em
+ * America/Sao_Paulo. Assim, uma ativação em 12/09 no Brasil vence o relatório
+ * em 12/10 no Brasil, independentemente do fuso do servidor Render.
+ *
+ * O cálculo usa Intl em vez de dependências externas de timezone.
+ */
 function proximoRelatorioMensal(from: Date): string {
-  const d = new Date(from);
-  const day = d.getUTCDate();
-  d.setUTCMonth(d.getUTCMonth() + 1, 1);
-  const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
-  d.setUTCDate(Math.min(day, lastDay));
-  return d.toISOString();
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: REPORT_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(from);
+  const get = (type: string) => Number(parts.find(p => p.type === type)?.value);
+  const year = get('year');
+  const month = get('month');
+  const day = get('day');
+  const hour = get('hour');
+  const minute = get('minute');
+  const second = get('second');
+
+  const nextMonthIndex = month; // month 1-12; Date.UTC expects 0-based month.
+  const lastDay = new Date(Date.UTC(year, nextMonthIndex + 1, 0)).getUTCDate();
+  const targetDay = Math.min(day, lastDay);
+
+  // Brasil não observa horário de verão atualmente. O offset de São Paulo é
+  // -03:00, portanto a data local alvo pode ser persistida diretamente como UTC+03.
+  const targetUtc = Date.UTC(year, nextMonthIndex, targetDay, hour, minute, second);
+  return new Date(targetUtc + 3 * 60 * 60 * 1000).toISOString();
 }
 
 async function emailDaEmpresa(db: Database, empresaId: string): Promise<string | null> {
