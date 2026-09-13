@@ -1,5 +1,5 @@
 /**
- * Filtra.AI — bootstrap da API (produção-ready)
+ * Filtra.AI — bootstrap da API
  */
 import express from 'express';
 import cors from 'cors';
@@ -84,7 +84,6 @@ app.use((req, res, next) => {
 });
 app.use(cors(buildCorsOptions()));
 
-/** Health com ping real no banco — Render usa para saber se o serviço está vivo. */
 app.get('/api/health', async (_req, res) => {
   const ai = getAiLoadStats();
   let dbPing: { ok: boolean; engine: string; error?: string } = {
@@ -97,7 +96,7 @@ app.get('/api/health', async (_req, res) => {
     dbPing = { ok: false, engine: 'unknown', error: String(e?.message || e) };
   }
 
-  const body = {
+  res.status(dbPing.ok ? 200 : 503).json({
     ok: dbPing.ok,
     db: dbPing.engine || (typeof dbEngine === 'function' ? dbEngine() : 'sqlite'),
     db_ok: dbPing.ok,
@@ -109,35 +108,25 @@ app.get('/api/health', async (_req, res) => {
     ai_providers: listAiProviders(),
     plan_switch: allowPlanSwitch(),
     n8n: n8nConfigured(),
+    legacy_pdf: process.env.ENABLE_LEGACY_PDF === '1',
     jwt: jwtRotationStatus(),
     webauthn: webauthnConfig(),
     push: pushConfigured(),
     smtp: smtpConfigured(),
-    ai_latency: {
-      groq: ai.stats.groq.latency,
-      gemini: ai.stats.gemini.latency,
-    },
+    ai_latency: { groq: ai.stats.groq.latency, gemini: ai.stats.gemini.latency },
     http_latency: getHttpMetrics().global,
     env: process.env.NODE_ENV || 'development',
     time: new Date().toISOString(),
-  };
-
-  res.status(dbPing.ok ? 200 : 503).json(body);
+  });
 });
 
 app.get('/api/metrics', (req, res) => {
   const secret = process.env.JOBS_SECRET?.trim();
   if (process.env.NODE_ENV === 'production' && secret) {
     const got = String(req.headers['x-jobs-secret'] || '');
-    if (got !== secret) {
-      return res.status(401).json({ error: 'Não autorizado.' });
-    }
+    if (got !== secret) return res.status(401).json({ error: 'Não autorizado.' });
   }
-  res.json({
-    time: new Date().toISOString(),
-    http: getHttpMetrics(),
-    ai: getAiLoadStats(),
-  });
+  res.json({ time: new Date().toISOString(), http: getHttpMetrics(), ai: getAiLoadStats() });
 });
 
 const PORT = Number(process.env.PORT || 5000);
@@ -181,67 +170,39 @@ function gracefulShutdown(signal: string) {
     process.exit(1);
   }, 10_000);
   force.unref();
-
   if (server) {
     server.close(() => {
       console.log('HTTP fechado.');
       process.exit(0);
     });
-  } else {
-    process.exit(0);
-  }
+  } else process.exit(0);
 }
 
 async function main() {
   await initDB();
-  try {
-    await ensureUnidadesSchema(getDb());
-  } catch (e) {
-    console.warn('ensureUnidadesSchema:', e);
-  }
-  try {
-    await ensureWebAuthnSchema(getDb());
-  } catch (e) {
-    console.warn('ensureWebAuthnSchema:', e);
-  }
-  try {
-    await ensurePushSchema(getDb());
-    initWebPush();
-  } catch (e) {
-    console.warn('ensurePushSchema:', e);
-  }
-  try {
-    await ensureAiUsageSchema(getDb());
-  } catch (e) {
-    console.warn('ensureAiUsageSchema:', e);
-  }
-  try {
-    await ensureOpsTables(getDb());
-  } catch (e) {
-    console.warn('ensureOpsTables:', e);
-  }
-  try {
-    await ensureAuditSchema(getDb());
-  } catch (e) {
-    console.warn('ensureAuditSchema:', e);
-  }
-  try {
-    await ensurePlanPricingSchema(getDb());
-    await refreshPlanPricesFromDb(getDb());
-  } catch (e) {
-    console.warn('plan pricing:', e);
-  }
-  try {
-    await ensureRetryQueue(getDb());
-    registerAllRetryHandlers();
-    startRetryWorker();
-  } catch (e) {
-    console.warn('retry queue:', e);
-  }
-  try {
-    await ensureReviewTreatmentColumns(getDb());
-  } catch (e) {
-    console.warn('treatment columns:', e);
+  for (const [name, fn] of [
+    ['unidades', () => ensureUnidadesSchema(getDb())],
+    ['webauthn', () => ensureWebAuthnSchema(getDb())],
+    ['push', async () => { await ensurePushSchema(getDb()); initWebPush(); }],
+    ['aiUsage', () => ensureAiUsageSchema(getDb())],
+    ['ops', () => ensureOpsTables(getDb())],
+    ['audit', () => ensureAuditSchema(getDb())],
+    ['pricing', async () => {
+      await ensurePlanPricingSchema(getDb());
+      await refreshPlanPricesFromDb(getDb());
+    }],
+    ['retry', async () => {
+      await ensureRetryQueue(getDb());
+      registerAllRetryHandlers();
+      startRetryWorker();
+    }],
+    ['treatment', () => ensureReviewTreatmentColumns(getDb())],
+  ] as const) {
+    try {
+      await fn();
+    } catch (e) {
+      console.warn(`${name}:`, e);
+    }
   }
 
   await runSentimentBackfillOnBoot();
@@ -255,8 +216,11 @@ async function main() {
   mountAdminTecnicoRoutes(app);
   mountAdminNegocioRoutes(app);
   mountTokenMetricsRoutes(app);
-  mountRelatorioRoutes(app);
   mountRelatorioInteligenteRoutes(app);
+  if (process.env.ENABLE_LEGACY_PDF === '1') {
+    mountRelatorioRoutes(app);
+    console.log('📄 PDF legado habilitado (ENABLE_LEGACY_PDF=1)');
+  }
   mountPlanSwitchRoutes(app);
   mountWebAuthnRoutes(app);
   mountPushRoutes(app);
@@ -283,9 +247,6 @@ async function main() {
   console.log(
     `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | WeChat: ${wechatConfigured() ? 'ok' : 'OFF'} | n8n: ${n8nConfigured() ? 'ok' : 'OFF'}`
   );
-  if (!wechatConfigured()) {
-    console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
-  }
 
   server = app.listen(PORT, () => {
     console.log(`🚀 API Filtra.AI em http://localhost:${PORT}`);
