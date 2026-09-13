@@ -14,7 +14,6 @@ function normalizePlanDb(planDb: string): string {
   if (p === 'corporativo' || p === 'corporate') return 'corporativo';
   if (p === 'rei' || p === 'rei-anual') return 'rei';
   if (p === 'ultra' || p === 'ultra-anual') return 'ultra';
-  if (p === 'ultra' || p === 'ultra-anual') return 'ultra';
   if (p === 'inicial' || p === 'inicial-anual') return 'inicial';
   if (p === 'pro' || p === 'pro-anual') return 'pro';
   const resolved = resolvePlano(p);
@@ -31,71 +30,35 @@ function proximoRelatorioMensal(from: Date): string {
 }
 
 async function emailDaEmpresa(db: Database, empresaId: string): Promise<string | null> {
-  const user = await db.get(
-    'SELECT email FROM usuarios WHERE empresa_id = ? AND email IS NOT NULL LIMIT 1',
-    [empresaId]
-  );
+  const user = await db.get('SELECT email FROM usuarios WHERE empresa_id = ? AND email IS NOT NULL LIMIT 1', [empresaId]);
   return user?.email || null;
 }
 
-export async function activatePlan(
-  db: Database,
-  empresaId: string,
-  planDb: string,
-  customerId?: string | null,
-  subscriptionId?: string | null,
-  periodEndIso?: string | null
-) {
+export async function activatePlan(db: Database, empresaId: string, planDb: string, customerId?: string | null, subscriptionId?: string | null, periodEndIso?: string | null) {
   const normalized = normalizePlanDb(planDb);
   const agora = new Date();
   const expira = periodEndIso || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   const reportNextDue = proximoRelatorioMensal(agora);
 
-  await db.run(
-    `UPDATE empresas SET status = 'ativo', plan = ?, expira_em = ?, cancel_at_period_end = 0,
-       report_next_due_at = ?, report_last_sent_at = NULL WHERE id = ?`,
-    [normalized, expira, reportNextDue, empresaId]
-  );
+  await db.run(`UPDATE empresas SET status = 'ativo', plan = ?, expira_em = ?, cancel_at_period_end = 0, report_next_due_at = ?, report_last_sent_at = NULL WHERE id = ?`, [normalized, expira, reportNextDue, empresaId]);
   if (customerId) await db.run(`UPDATE empresas SET stripe_customer_id = ? WHERE id = ?`, [customerId, empresaId]);
-  if (subscriptionId) {
-    await db.run(`UPDATE empresas SET stripe_subscription_id = ? WHERE id = ?`, [subscriptionId, empresaId]);
-  }
+  if (subscriptionId) await db.run(`UPDATE empresas SET stripe_subscription_id = ? WHERE id = ?`, [subscriptionId, empresaId]);
 
   try {
     const emp = await db.get('SELECT nome_empresa, slug FROM empresas WHERE id = ?', [empresaId]);
     const email = await emailDaEmpresa(db, empresaId);
-    if (email) {
-      await notificarPagamentoConfirmado({
-        email,
-        nomeEmpresa: emp?.nome_empresa || 'Empresa',
-        plano: normalized,
-        expiraEm: expira,
-        slug: emp?.slug,
-        empresaId,
-      });
-    }
-  } catch (e: any) {
-    console.warn('[billing] e-mail ativação falhou:', e?.message || e);
-  }
-
+    if (email) await notificarPagamentoConfirmado({ email, nomeEmpresa: emp?.nome_empresa || 'Empresa', plano: normalized, expiraEm: expira, slug: emp?.slug, empresaId });
+  } catch (e: any) { console.warn('[billing] e-mail ativação falhou:', e?.message || e); }
   console.log(`[billing] plano ativado empresa=${empresaId} plan=${normalized} report_next=${reportNextDue}`);
 }
 
 export async function markCancelAtPeriodEnd(db: Database, empresaId: string, periodEndIso: string | null) {
-  if (periodEndIso) {
-    await db.run(`UPDATE empresas SET cancel_at_period_end = 1, expira_em = ?, status = 'ativo' WHERE id = ?`, [periodEndIso, empresaId]);
-  } else {
-    await db.run(`UPDATE empresas SET cancel_at_period_end = 1, status = 'ativo' WHERE id = ?`, [empresaId]);
-  }
+  if (periodEndIso) await db.run(`UPDATE empresas SET cancel_at_period_end = 1, expira_em = ?, status = 'ativo' WHERE id = ?`, [periodEndIso, empresaId]);
+  else await db.run(`UPDATE empresas SET cancel_at_period_end = 1, status = 'ativo' WHERE id = ?`, [empresaId]);
   try {
     const emp = await db.get('SELECT nome_empresa, slug, plan, expira_em FROM empresas WHERE id = ?', [empresaId]);
     const email = await emailDaEmpresa(db, empresaId);
-    if (email) {
-      await notificarCancelamentoAgendado({
-        email, nomeEmpresa: emp?.nome_empresa || 'Empresa', plano: emp?.plan,
-        expiraEm: periodEndIso || emp?.expira_em || null, slug: emp?.slug, empresaId,
-      });
-    }
+    if (email) await notificarCancelamentoAgendado({ email, nomeEmpresa: emp?.nome_empresa || 'Empresa', plano: emp?.plan, expiraEm: periodEndIso || emp?.expira_em || null, slug: emp?.slug, empresaId });
   } catch (e: any) { console.warn('[billing] e-mail cancelamento falhou:', e?.message || e); }
   console.log(`[billing] cancel_at_period_end empresa=${empresaId}`);
 }
