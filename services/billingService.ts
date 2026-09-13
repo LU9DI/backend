@@ -1,5 +1,11 @@
 /**
- * Ativação / bloqueio de planos via Stripe (regra de negócio).
+ * Ativação / bloqueio de planos (regra de negócio).
+ *
+ * Aniversário do relatório (report_next_due_at):
+ * - Definido na PRIMEIRA ativação (ou reativação após bloqueio/trial).
+ * - NÃO é recalculado em webhook/retry da mesma assinatura.
+ * - NÃO é recalculado em renovação enquanto a empresa já está ativa com due setado.
+ * - Só recalcula com forceNewReportCycle=true ou se ainda não existir due.
  */
 import type { Database } from 'sqlite';
 import { resolvePlano } from '../stripeBilling.js';
@@ -23,14 +29,11 @@ function normalizePlanDb(planDb: string): string {
 }
 
 /**
- * Calcula o próximo aniversário usando a data/hora local do Brasil.
- * A data persistida continua em ISO/UTC, mas o dia do mês é definido em
- * America/Sao_Paulo. Assim, uma ativação em 12/09 no Brasil vence o relatório
- * em 12/10 no Brasil, independentemente do fuso do servidor Render.
- *
- * O cálculo usa Intl em vez de dependências externas de timezone.
+ * Próximo aniversário no fuso America/Sao_Paulo.
+ * Persistido em ISO/UTC; o “dia do mês” é o do Brasil.
+ * Meses curtos: min(dia, último dia do mês).
  */
-function proximoRelatorioMensal(from: Date): string {
+export function proximoRelatorioMensal(from: Date = new Date()): string {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: REPORT_TIME_ZONE,
     year: 'numeric',
@@ -41,7 +44,7 @@ function proximoRelatorioMensal(from: Date): string {
     second: '2-digit',
     hourCycle: 'h23',
   }).formatToParts(from);
-  const get = (type: string) => Number(parts.find(p => p.type === type)?.value);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
   const year = get('year');
   const month = get('month');
   const day = get('day');
@@ -49,14 +52,19 @@ function proximoRelatorioMensal(from: Date): string {
   const minute = get('minute');
   const second = get('second');
 
-  const nextMonthIndex = month; // month 1-12; Date.UTC expects 0-based month.
+  // month 1–12; próximo mês no calendário civil BR
+  const nextMonthIndex = month; // Date.UTC month 0-based = calendar month number for “next”
   const lastDay = new Date(Date.UTC(year, nextMonthIndex + 1, 0)).getUTCDate();
   const targetDay = Math.min(day, lastDay);
 
-  // Brasil não observa horário de verão atualmente. O offset de São Paulo é
-  // -03:00, portanto a data local alvo pode ser persistida diretamente como UTC+03.
+  // São Paulo fixo UTC−3 (sem DST atualmente)
   const targetUtc = Date.UTC(year, nextMonthIndex, targetDay, hour, minute, second);
   return new Date(targetUtc + 3 * 60 * 60 * 1000).toISOString();
+}
+
+function sameId(a: unknown, b: unknown): boolean {
+  if (a == null || b == null || a === '' || b === '') return false;
+  return String(a) === String(b);
 }
 
 async function emailDaEmpresa(db: Database, empresaId: string): Promise<string | null> {
@@ -67,27 +75,114 @@ async function emailDaEmpresa(db: Database, empresaId: string): Promise<string |
   return user?.email || null;
 }
 
+export type ActivatePlanOpts = {
+  /**
+   * Força novo ciclo de relatório (novo aniversário a partir de agora).
+   * Use só em nova assinatura real / reativação após longo bloqueio, nunca em retry de webhook.
+   */
+  forceNewReportCycle?: boolean;
+  /** Se true, não envia e-mail/notificação (útil em retries internos). */
+  silent?: boolean;
+};
+
+/**
+ * Decide se devemos preservar report_next_due_at existente.
+ *
+ * PRESERVA quando:
+ * - Já existe report_next_due_at E a empresa está ativa (renovação / webhook repetido / upgrade de plano)
+ * - Ou o subscription_id recebido é o mesmo já gravado (retry Stripe/MP)
+ *
+ * RECALCULA quando:
+ * - forceNewReportCycle
+ * - Ainda não tem report_next_due_at
+ * - Empresa não está ativa (trial / bloqueado) → primeira ativação “de verdade” do ciclo pago
+ */
+function shouldPreserveReportAnniversary(opts: {
+  forceNewReportCycle?: boolean;
+  status?: string | null;
+  reportNextDueAt?: string | null;
+  existingSubId?: string | null;
+  incomingSubId?: string | null;
+}): boolean {
+  if (opts.forceNewReportCycle) return false;
+  if (!opts.reportNextDueAt) return false;
+
+  const status = String(opts.status || '').toLowerCase();
+  const activeLike = status === 'ativo' || status === 'active';
+
+  // Mesma assinatura = retry / invoice.paid repetido
+  if (sameId(opts.existingSubId, opts.incomingSubId)) return true;
+
+  // Já ativa com aniversário definido = renovação ou upgrade sem mudar o ciclo
+  if (activeLike) return true;
+
+  return false;
+}
+
 export async function activatePlan(
   db: Database,
   empresaId: string,
   planDb: string,
   customerId?: string | null,
   subscriptionId?: string | null,
-  periodEndIso?: string | null
+  periodEndIso?: string | null,
+  opts?: ActivatePlanOpts
 ) {
   const normalized = normalizePlanDb(planDb);
   const agora = new Date();
   const expira =
     periodEndIso || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-  const reportNextDue = proximoRelatorioMensal(agora);
 
-  await db.run(
-    `UPDATE empresas SET status = 'ativo', plan = ?, expira_em = ?, cancel_at_period_end = 0,
-       report_next_due_at = ?, report_last_sent_at = NULL WHERE id = ?`,
-    [normalized, expira, reportNextDue, empresaId]
+  const existing = await db.get(
+    `SELECT id, status, plan, report_next_due_at, report_last_sent_at,
+            stripe_subscription_id, stripe_customer_id
+     FROM empresas WHERE id = ?`,
+    [empresaId]
   );
+
+  const preserve = shouldPreserveReportAnniversary({
+    forceNewReportCycle: opts?.forceNewReportCycle,
+    status: existing?.status,
+    reportNextDueAt: existing?.report_next_due_at,
+    existingSubId: existing?.stripe_subscription_id,
+    incomingSubId: subscriptionId,
+  });
+
+  const reportNextDue = preserve
+    ? String(existing.report_next_due_at)
+    : proximoRelatorioMensal(agora);
+
+  // report_last_sent_at: só zera em ciclo NOVO (não em retry)
+  if (preserve) {
+    await db.run(
+      `UPDATE empresas
+       SET status = 'ativo',
+           plan = ?,
+           expira_em = ?,
+           cancel_at_period_end = 0,
+           report_next_due_at = ?
+       WHERE id = ?`,
+      [normalized, expira, reportNextDue, empresaId]
+    );
+  } else {
+    await db.run(
+      `UPDATE empresas
+       SET status = 'ativo',
+           plan = ?,
+           expira_em = ?,
+           cancel_at_period_end = 0,
+           report_next_due_at = ?,
+           report_last_sent_at = NULL
+       WHERE id = ?`,
+      [normalized, expira, reportNextDue, empresaId]
+    );
+  }
+
   if (customerId) {
-    await db.run(`UPDATE empresas SET stripe_customer_id = ? WHERE id = ?`, [customerId, empresaId]);
+    await db.run(`UPDATE empresas SET stripe_customer_id = ? WHERE id = ?`, [
+      customerId,
+      empresaId,
+    ]);
   }
   if (subscriptionId) {
     await db.run(`UPDATE empresas SET stripe_subscription_id = ? WHERE id = ?`, [
@@ -96,24 +191,37 @@ export async function activatePlan(
     ]);
   }
 
-  try {
-    const emp = await db.get('SELECT nome_empresa, slug FROM empresas WHERE id = ?', [empresaId]);
-    const email = await emailDaEmpresa(db, empresaId);
-    if (email) {
-      await notificarPagamentoConfirmado({
-        email,
-        nomeEmpresa: emp?.nome_empresa || 'Empresa',
-        plano: normalized,
-        expiraEm: expira,
-        slug: emp?.slug,
+  if (!opts?.silent) {
+    try {
+      const emp = await db.get('SELECT nome_empresa, slug FROM empresas WHERE id = ?', [
         empresaId,
-      });
+      ]);
+      const email = await emailDaEmpresa(db, empresaId);
+      if (email) {
+        await notificarPagamentoConfirmado({
+          email,
+          nomeEmpresa: emp?.nome_empresa || 'Empresa',
+          plano: normalized,
+          expiraEm: expira,
+          slug: emp?.slug,
+          empresaId,
+        });
+      }
+    } catch (e: any) {
+      console.warn('[billing] e-mail ativação falhou:', e?.message || e);
     }
-  } catch (e: any) {
-    console.warn('[billing] e-mail ativação falhou:', e?.message || e);
   }
 
-  console.log(`[billing] plano ativado empresa=${empresaId} plan=${normalized}`);
+  console.log(
+    `[billing] plano ativado empresa=${empresaId} plan=${normalized} report_due=${reportNextDue} anniversary=${preserve ? 'preserved' : 'reset'}`
+  );
+
+  return {
+    plan: normalized,
+    expira_em: expira,
+    report_next_due_at: reportNextDue,
+    anniversary_preserved: preserve,
+  };
 }
 
 export async function markCancelAtPeriodEnd(
