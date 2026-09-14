@@ -1,6 +1,3 @@
-/**
- * Filtra.IA — bootstrap da API (produção-ready)
- */
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -28,6 +25,7 @@ import { mountPlanSwitchRoutes } from './routes/planSwitchRoutes.js';
 import { mountWebAuthnRoutes } from './routes/webauthnRoutes.js';
 import { mountPushRoutes } from './routes/pushRoutes.js';
 import { mountJobsRoutes } from './routes/jobsRoutes.js';
+import { mountMonthlyReportJobRoutes } from './routes/monthlyReportJobRoutes.js';
 import { mountPayPalRoutes } from './routes/paypalRoutes.js';
 import { mountPixRoutes } from './routes/pixRoutes.js';
 import { mountWechatRoutes } from './routes/wechatRoutes.js';
@@ -257,6 +255,7 @@ async function main() {
   mountWebAuthnRoutes(app);
   mountPushRoutes(app);
   mountJobsRoutes(app);
+  mountMonthlyReportJobRoutes(app);
   mountPayPalRoutes(app);
   mountPixRoutes(app);
   mountWechatRoutes(app);
