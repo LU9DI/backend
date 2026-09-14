@@ -109,6 +109,8 @@ app.get('/api/health', async (_req, res) => {
     plan_switch: allowPlanSwitch(),
     n8n: n8nConfigured(),
     legacy_pdf: process.env.ENABLE_LEGACY_PDF === '1',
+    lgpd_sweep: process.env.LGPD_SWEEP === '1',
+    build: 'lgpd-safe-v3',
     jwt: jwtRotationStatus(),
     webauthn: webauthnConfig(),
     push: pushConfigured(),
@@ -150,14 +152,22 @@ async function runSentimentBackfillOnBoot() {
   }
 }
 
+/**
+ * LGPD no boot: só roda se LGPD_SWEEP=1 (opt-in).
+ * Evita o erro histórico timestamptz(unknown, unknown) em deploys legados.
+ */
 async function runLgpdSweepOnBoot() {
-  if (process.env.LGPD_SWEEP === '0') return;
+  if (process.env.LGPD_SWEEP !== '1') {
+    console.log('🔒 LGPD sweep: off (defina LGPD_SWEEP=1 para ativar)');
+    return;
+  }
   try {
     const db = getDb();
-    await ensureReviewTreatmentColumns(db);
-    await anonymizeOldClientWhatsapp(db, { limit: 1000 });
+    const r = await anonymizeOldClientWhatsapp(db, { limit: 500 });
+    console.log(`🔒 LGPD sweep done anonymized=${r.anonymized}`);
   } catch (e: any) {
-    console.warn('LGPD sweep:', e?.message || e);
+    // Nunca derruba o boot
+    console.warn('LGPD sweep (ignored):', e?.message || e);
   }
 }
 
@@ -249,7 +259,7 @@ async function main() {
   );
 
   server = app.listen(PORT, () => {
-    console.log(`🚀 API Filtra.AI em http://localhost:${PORT}`);
+    console.log(`🚀 API Filtra.AI em http://localhost:${PORT} (build=lgpd-safe-v3)`);
   });
 
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
