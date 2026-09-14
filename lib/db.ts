@@ -9,8 +9,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
-import sqlite3 from 'sqlite3';
-import { open, type Database } from 'sqlite';
+import type { Database } from 'sqlite';
 import { fileURLToPath } from 'url';
 import { ensureAuthColumns } from '../passwordResetRoutes.js';
 import { ensureMfaColumns } from '../mfa.js';
@@ -44,6 +43,11 @@ export async function pingDb(): Promise<{ ok: boolean; engine: string; error?: s
 }
 
 async function initSqlite(): Promise<Database> {
+  // SQLite fica restrito a desenvolvimento/testes. Os imports são dinâmicos para
+  // que sqlite/sqlite3 não entrem no bundle/runtime de produção (Postgres).
+  const [{ open }, sqlite3Module] = await Promise.all([import('sqlite'), import('sqlite3')]);
+  const sqlite3 = sqlite3Module.default ?? sqlite3Module;
+
   const dbPath =
     process.env.SQLITE_DB_PATH ||
     (isProd
