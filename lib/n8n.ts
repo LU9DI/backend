@@ -3,7 +3,7 @@
  *
  * Env:
  *   N8N_WEBHOOK_URL=https://seu-n8n.../webhook/filtra
- *   N8N_WEBHOOK_SECRET=opcional (header X-Filtra-Secret)
+ *   N8N_WEBHOOK_SECRET=segredo compartilhado
  *   N8N_TIMEOUT_MS=8000
  */
 
@@ -13,6 +13,7 @@ export type N8nEvent =
   | 'review.created'
   | 'payment.activated'
   | 'lead.captured'
+  | 'report.generated'
   | 'ping';
 
 export function n8nConfigured(): boolean {
@@ -34,9 +35,7 @@ function timeoutMs(): number {
   return Math.max(2000, Number(process.env.N8N_TIMEOUT_MS || 8000));
 }
 
-/**
- * Dispara evento para o n8n. Nunca lança — falhas só logam.
- */
+/** Dispara evento para o n8n sem bloquear a operação principal. */
 export async function notifyN8n(
   event: N8nEvent | string,
   payload: Record<string, unknown> = {}
@@ -56,7 +55,11 @@ export async function notifyN8n(
     'User-Agent': 'Filtra.AI/1.0',
   };
   const secret = process.env.N8N_WEBHOOK_SECRET?.trim();
-  if (secret) headers['X-Filtra-Secret'] = secret;
+  if (secret) {
+    // Mantém os dois nomes para compatibilidade com o workflow já testado.
+    headers['X-Filtra-Secret'] = secret;
+    headers['x-filtra-report-token'] = secret;
+  }
 
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs());
