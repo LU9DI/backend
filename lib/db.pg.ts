@@ -1,12 +1,11 @@
 /**
- * Adapter Postgres com API compatível com sqlite (get/run/all/exec).
- * Ativado quando DATABASE_URL começa com postgres.
+ * Adapter Postgres — API compatível sqlite (get/run/all/exec).
+ * CRÍTICO: nunca transformar datetime(?,?) em timestamptz(?,?).
  */
 import pg from 'pg';
 import type { Database } from 'sqlite';
 
 const { Pool } = pg;
-
 let pool: pg.Pool | null = null;
 
 function convertPlaceholders(sql: string): string {
@@ -14,10 +13,6 @@ function convertPlaceholders(sql: string): string {
   return sql.replace(/\?/g, () => `$${++n}`);
 }
 
-/**
- * Traduções SQLite → Postgres.
- * Ordem importa: funções date/datetime ANTES de tipos DATETIME.
- */
 function adaptSql(sql: string): string {
   let s = sql;
 
@@ -28,44 +23,31 @@ function adaptSql(sql: string): string {
     }
   }
 
-  // date('now', 'start of month') → início do mês
+  // Funções SQLite de data ANTES de mexer na palavra DATETIME como tipo
   s = s.replace(
     /date\s*\(\s*'now'\s*,\s*'start of month'\s*\)/gi,
     "date_trunc('month', CURRENT_TIMESTAMP)"
   );
   s = s.replace(
-    /date\s*\(\s*"now"\s*,\s*"start of month"\s*\)/gi,
-    "date_trunc('month', CURRENT_TIMESTAMP)"
-  );
-
-  // datetime('now', '-N days') / date('now', '-N days')
-  s = s.replace(
     /(?:date|datetime)\s*\(\s*'now'\s*,\s*'-(\d+)\s*days?'\s*\)/gi,
     "(NOW() - INTERVAL '$1 days')"
   );
-  s = s.replace(
-    /(?:date|datetime)\s*\(\s*'now'\s*,\s*"-(\d+)\s*days?"\s*\)/gi,
-    "(NOW() - INTERVAL '$1 days')"
-  );
-
-  // datetime('now', '-' || ? || ' days') — não dá para traduzir com param; deixa e preferimos SQL nativo nas rotas
-  // datetime('now') / date('now')
   s = s.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'NOW()');
-  s = s.replace(/datetime\s*\(\s*"now"\s*\)/gi, 'NOW()');
   s = s.replace(/date\s*\(\s*'now'\s*\)/gi, 'CURRENT_DATE');
-  s = s.replace(/date\s*\(\s*"now"\s*\)/gi, 'CURRENT_DATE');
 
-  // datetime(coluna) → cast seguro (1 arg)
-  s = s.replace(/datetime\s*\(\s*([a-zA-Z_][\w.]*)\s*\)/gi, '($1::timestamptz)');
+  // Qualquer datetime(x,y) residual → NOW() (NUNCA timestamptz)
+  s = s.replace(/\bdatetime\s*\([^)]*,[^)]*\)/gi, 'NOW()');
+  s = s.replace(/\bdate\s*\([^)]*,[^)]*\)/gi, 'CURRENT_DATE');
+  // Proíbe timestamptz(x,y) se algo gerou isso
+  s = s.replace(/\btimestamptz\s*\([^)]*,[^)]*\)/gi, 'NOW()');
 
-  s = s.replace(/CURRENT_TIMESTAMP/gi, 'NOW()');
   s = s.replace(/IFNULL\s*\(/gi, 'COALESCE(');
-
-  // Tipos SQLite → Postgres
-  s = s.replace(/\bDATETIME\b/gi, 'TIMESTAMPTZ');
-  s = s.replace(/\bREAL\b/gi, 'DOUBLE PRECISION');
   s = s.replace(/INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT/gi, 'SERIAL PRIMARY KEY');
-  s = s.replace(/AUTOINCREMENT/gi, '');
+  s = s.replace(/\bAUTOINCREMENT\b/gi, '');
+
+  // Tipo de coluna: DATETIME só se NÃO for função (sem parêntese depois)
+  s = s.replace(/\bDATETIME\b(?!\s*\()/gi, 'TIMESTAMPTZ');
+  s = s.replace(/\bREAL\b/gi, 'DOUBLE PRECISION');
 
   return s;
 }
@@ -73,21 +55,14 @@ function adaptSql(sql: string): string {
 async function handlePragma(client: pg.PoolClient, sql: string): Promise<any[]> {
   const m = sql.match(/PRAGMA\s+table_info\s*\(\s*['"]?(\w+)['"]?\s*\)/i);
   if (!m) return [];
-  const table = m[1];
+  const table = m[1].toLowerCase();
   const r = await client.query(
     `SELECT column_name as name, data_type as type,
             CASE WHEN is_nullable = 'NO' THEN 1 ELSE 0 END as notnull,
             column_default as dflt_value,
-            CASE WHEN column_name IN (
-              SELECT kcu.column_name FROM information_schema.table_constraints tc
-              JOIN information_schema.key_column_usage kcu
-                ON tc.constraint_name = kcu.constraint_name
-               AND tc.table_schema = kcu.table_schema
-              WHERE tc.table_name = $1 AND tc.table_schema = 'public'
-                AND tc.constraint_type = 'PRIMARY KEY'
-            ) THEN 1 ELSE 0 END as pk
+            0 as pk
      FROM information_schema.columns
-     WHERE table_schema = 'public' AND table_name = $1
+     WHERE table_schema = 'public' AND lower(table_name) = $1
      ORDER BY ordinal_position`,
     [table]
   );
@@ -108,7 +83,7 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
     ssl:
       process.env.PGSSL === '0'
         ? false
-        : databaseUrl.includes('localhost')
+        : /localhost|127\.0\.0\.1/.test(databaseUrl)
           ? false
           : { rejectUnauthorized: false },
     max: Number(process.env.PG_POOL_MAX || 10),
@@ -136,15 +111,10 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
             await c.query(st);
           } catch (e: any) {
             const msg = String(e?.message || e);
-            if (
-              /already exists/i.test(msg) ||
-              e?.code === '42P07' ||
-              e?.code === '42701'
-            ) {
+            if (/already exists/i.test(msg) || e?.code === '42P07' || e?.code === '42701') {
               continue;
             }
             console.error('pg.exec falhou:', msg);
-            console.error('SQL:', st.slice(0, 500));
             throw e;
           }
         }
@@ -156,11 +126,8 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
     async run(sql: string, params: any[] = []) {
       const c = await pool!.connect();
       try {
-        if (/^PRAGMA/i.test(sql.trim())) {
-          return { changes: 0 };
-        }
-        const adapted = adaptSql(sql);
-        const q = convertPlaceholders(adapted);
+        if (/^PRAGMA/i.test(sql.trim())) return { changes: 0 };
+        const q = convertPlaceholders(adaptSql(sql));
         const r = await c.query(q, params);
         return { changes: r.rowCount || 0, lastID: undefined };
       } finally {
@@ -175,8 +142,7 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
           const rows = await handlePragma(c, sql);
           return rows[0] as T;
         }
-        const adapted = adaptSql(sql);
-        const q = convertPlaceholders(adapted);
+        const q = convertPlaceholders(adaptSql(sql));
         const r = await c.query(q, params);
         return r.rows[0] as T | undefined;
       } finally {
@@ -190,8 +156,7 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
         if (/PRAGMA\s+table_info/i.test(sql)) {
           return (await handlePragma(c, sql)) as T[];
         }
-        const adapted = adaptSql(sql);
-        const q = convertPlaceholders(adapted);
+        const q = convertPlaceholders(adaptSql(sql));
         const r = await c.query(q, params);
         return r.rows as T[];
       } finally {
