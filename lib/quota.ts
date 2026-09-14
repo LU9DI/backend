@@ -95,10 +95,17 @@ export async function checkQuota(plan: string, type: 'tags' | 'respostas'): Prom
 export async function contarReviewsMes(empresaId: string): Promise<number> {
   const db = getDb();
   const mes = getCurrentMonth();
+  const [ano, mesNumero] = mes.split('-').map(Number);
+  const inicio = new Date(Date.UTC(ano, mesNumero - 1, 1)).toISOString();
+  const fim = new Date(Date.UTC(ano, mesNumero, 1)).toISOString();
+
+  // Evita funções SQLite como substr/strftime sobre createdAt: em produção
+  // createdAt é timestamptz no PostgreSQL. Comparar por limites ISO funciona
+  // tanto no PostgreSQL quanto no SQLite usado em desenvolvimento.
   const row = await db.get(
     `SELECT COUNT(*) as c FROM reviews
-     WHERE empresa_id = ? AND substr(createdAt, 1, 7) = ?`,
-    [empresaId, mes]
+     WHERE empresa_id = ? AND createdAt >= ? AND createdAt < ?`,
+    [empresaId, inicio, fim]
   );
   return Number(row?.c || 0);
 }
