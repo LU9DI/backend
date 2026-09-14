@@ -1,6 +1,6 @@
 /**
- * Adapter Postgres — traduz SQLite e bloqueia date()/datetime() perigosos.
- * Nunca transforma datetime(x,y) em timestamptz(x,y) (erro 42725 no PG).
+ * Adapter Postgres — traduz SQLite com segurança.
+ * CRÍTICO: nunca gerar timestamptz(?, ?) a partir de datetime(?, ?).
  */
 import pg from 'pg';
 import type { Database } from 'sqlite';
@@ -25,49 +25,39 @@ function adaptSql(sql: string): string {
     }
   }
 
-  // --- Funções SQLite date/datetime ANTES de qualquer replace de tipo DATETIME ---
+  // 1) Funções SQLite de data → Postgres (ANTES de mexer na palavra DATETIME)
   s = s.replace(
     /date\s*\(\s*'now'\s*,\s*'start of month'\s*\)/gi,
-    "date_trunc('month', CURRENT_TIMESTAMP)"
-  );
-  s = s.replace(
-    /date\s*\(\s*"now"\s*,\s*"start of month"\s*\)/gi,
-    "date_trunc('month', CURRENT_TIMESTAMP)"
+    "date_trunc('month', (NOW() AT TIME ZONE 'UTC'))"
   );
   s = s.replace(/date\s*\(\s*'now'\s*\)/gi, 'CURRENT_DATE');
   s = s.replace(/date\s*\(\s*"now"\s*\)/gi, 'CURRENT_DATE');
   s = s.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'NOW()');
   s = s.replace(/datetime\s*\(\s*"now"\s*\)/gi, 'NOW()');
-
-  // datetime('now', '-7 days') → NOW() ± INTERVAL
   s = s.replace(
     /datetime\s*\(\s*'now'\s*,\s*'([^']+)'\s*\)/gi,
     (_m, mod: string) => {
       const m2 = String(mod).match(/^([+-]?)\s*(\d+)\s+days?$/i);
       if (m2) {
         const sign = m2[1] === '-' ? '-' : '+';
-        return `(NOW() ${sign} INTERVAL '${m2[2]} days')`;
+        return `(NOW() ${sign} INTERVAL '${Number(m2[2])} days')`;
       }
       return 'NOW()';
     }
   );
 
-  // datetime(?, ?) ou date(?, ?) residual → NOW() (nunca timestamptz(?, ?))
-  s = s.replace(/datetime\s*\(\s*\?\s*,\s*\?\s*\)/gi, 'NOW()');
-  s = s.replace(/date\s*\(\s*\?\s*,\s*\?\s*\)/gi, 'CURRENT_DATE');
-  s = s.replace(/datetime\s*\(\s*[^)]+\s*,\s*[^)]+\s*\)/gi, 'NOW()');
-  s = s.replace(/date\s*\(\s*[^)]+\s*,\s*[^)]+\s*\)/gi, 'CURRENT_DATE');
+  // 2) Qualquer date/datetime com 2 args residual → NOW()/CURRENT_DATE (NUNCA timestamptz)
+  s = s.replace(/\bdatetime\s*\([^)]*,[^)]*\)/gi, 'NOW()');
+  s = s.replace(/\bdate\s*\([^)]*,[^)]*\)/gi, 'CURRENT_DATE');
+
+  // 3) Proíbe timestamptz(x,y) se algo já gerou isso
+  s = s.replace(/\btimestamptz\s*\([^)]*,[^)]*\)/gi, 'NOW()');
 
   s = s.replace(/IFNULL\s*\(/gi, 'COALESCE(');
   s = s.replace(/INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT/gi, 'SERIAL PRIMARY KEY');
-  s = s.replace(/AUTOINCREMENT/gi, '');
+  s = s.replace(/\bAUTOINCREMENT\b/gi, '');
 
-  // Tipo de coluna DATETIME → TIMESTAMPTZ (somente como tipo, não como função)
-  // Evita \bDATETIME\b global que transformava datetime(...) em timestamptz(...)
-  s = s.replace(
-    /(\b(?:COLUMN|ADD COLUMN|CREATE TABLE)[^;]*?)\bDATETIME\b/gi,
-    '$1TIMESTAMPTZ'
-  );
+  // 4) Tipo de coluna: só DATETIME como tipo (não seguido de parêntese)
   s = s.replace(/\bDATETIME\b(?!\s*\()/gi, 'TIMESTAMPTZ');
   s = s.replace(/\bREAL\b/gi, 'DOUBLE PRECISION');
 
@@ -77,14 +67,14 @@ function adaptSql(sql: string): string {
 async function handlePragma(client: pg.PoolClient, sql: string): Promise<any[]> {
   const m = sql.match(/PRAGMA\s+table_info\s*\(\s*['"]?(\w+)['"]?\s*\)/i);
   if (!m) return [];
-  const table = m[1];
+  const table = m[1].toLowerCase();
   const r = await client.query(
     `SELECT column_name as name, data_type as type,
             CASE WHEN is_nullable = 'NO' THEN 1 ELSE 0 END as notnull,
             column_default as dflt_value,
             0 as pk
      FROM information_schema.columns
-     WHERE table_schema = 'public' AND table_name = $1
+     WHERE table_schema = 'public' AND lower(table_name) = $1
      ORDER BY ordinal_position`,
     [table]
   );
