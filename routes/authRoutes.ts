@@ -1,12 +1,10 @@
 import type { Express, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
-import { clearAuthCookie, extrairToken } from '../lib/auth.js';
-import { supabase } from '../lib/supabaseClient.js';
+import { clearAuthCookie } from '../lib/auth.js';
 import { validateBody, schemaLoginEmpresa } from '../middleware/validate.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { loginEmpresa, AuthUnauthorizedError } from '../services/authService.js';
 import { getDb } from '../lib/db.js';
-import { writeAuditFromReq } from '../lib/auditLog.js';
 import {
   assertNotLocked,
   recordLoginFail,
@@ -35,9 +33,10 @@ export function mountAuthRoutes(app: Express) {
     loginLimiter,
     validateBody(schemaLoginEmpresa),
     asyncHandler(async (req: Request, res: Response) => {
-      const cnpj = String(req.body.cnpj || '').replace(/\D/g, '');
+      const cnpj = String(req.body.cnpj || '').trim();
+      const email = String(req.body.email || '').trim().toLowerCase();
       const ip = clientIp(req);
-      const identity = `cnpj:${cnpj}`;
+      const identity = email ? `email:${email}` : `cnpj:${cnpj}`;
 
       try {
         assertNotLocked(identity, ip);
@@ -47,7 +46,11 @@ export function mountAuthRoutes(app: Express) {
 
       try {
         const result = await loginEmpresa(
-          { cnpj: String(req.body.cnpj), senha: String(req.body.senha) },
+          {
+            cnpj: cnpj || undefined,
+            email: email || undefined,
+            senha: String(req.body.senha),
+          },
           res,
           getDb(),
           req
@@ -72,7 +75,7 @@ export function mountAuthRoutes(app: Express) {
 
   app.post(
     '/api/auth/logout',
-    asyncHandler(async (req: Request, res: Response) => {
+    asyncHandler(async (_req: Request, res: Response) => {
       clearAuthCookie(res);
       res.json({ success: true });
     })
