@@ -12,10 +12,6 @@ export const PLAN_FEEDBACK_LIMITS: Record<string, number> = {
   rei: 8000,
 };
 
-/**
- * Teto mensal de tokens de IA por empresa.
- * Inicial/Pro = 0 (sem IA). Trial baixo. Ultra+ sobe gradualmente.
- */
 export const PLAN_TOKEN_LIMITS: Record<string, number> = {
   trial: 25_000,
   teste: 25_000,
@@ -26,7 +22,6 @@ export const PLAN_TOKEN_LIMITS: Record<string, number> = {
   rei: 1_200_000,
 };
 
-/** Inicial e Pro NÃO têm IA. */
 export function planTemIA(plan: string | null | undefined): boolean {
   const p = String(plan || '').toLowerCase();
   if (p === 'inicial' || p === 'pro') return false;
@@ -43,21 +38,29 @@ export function getTokenLimit(plan: string): number {
   return PLAN_TOKEN_LIMITS[key] ?? PLAN_TOKEN_LIMITS.trial;
 }
 
+function monthPrefix(isoLike: unknown): string {
+  return String(isoLike || '').slice(0, 7);
+}
+
 export async function tokensUsadosMes(empresaId: string): Promise<number> {
   const db = getDb();
   const mes = getCurrentMonth();
-  const row = await db.get(
-    `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
-     WHERE empresa_id = ? AND substr(criado_em::text, 1, 7) = ?`,
-    [empresaId, mes]
-  ).catch(async () =>
-    db.get(
-      `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
-       WHERE empresa_id = ? AND substr(criado_em, 1, 7) = ?`,
-      [empresaId, mes]
-    )
-  );
-  return Number((row as any)?.t || 0);
+  try {
+    // Sem substr/cast ambíguo — filtra em JS se necessário
+    const rows = await db.all(
+      `SELECT tokens, criado_em FROM ai_usage WHERE empresa_id = ? LIMIT 5000`,
+      [empresaId]
+    );
+    let sum = 0;
+    for (const r of rows || []) {
+      if (monthPrefix((r as any).criado_em) === mes) {
+        sum += Number((r as any).tokens || 0);
+      }
+    }
+    return sum;
+  } catch {
+    return 0;
+  }
 }
 
 export async function assertEmpresaTokenQuota(
@@ -74,19 +77,20 @@ export async function assertEmpresaTokenQuota(
 export async function checkQuota(plan: string, type: 'tags' | 'respostas'): Promise<void> {
   const db = getDb();
   const month = getCurrentMonth();
-  const row = await db.get(`SELECT ${type} FROM usage WHERE plan = ? AND month = ?`, [plan, month]);
+  const col = type === 'tags' ? 'tags' : 'respostas';
+  const row = await db.get(`SELECT ${col} FROM usage WHERE plan = ? AND month = ?`, [plan, month]);
   const limit =
     plan === 'rei' || plan === 'corporativo'
       ? 20000
       : plan === 'ultra'
         ? 4000
         : 1500;
-  if (row && row[type] >= limit) {
+  if (row && Number((row as any)[col] || 0) >= limit) {
     throw new Error(`Limite mensal de ${type} para o plano ${plan} atingido`);
   }
   await db.run(
-    `INSERT INTO usage (plan, month, ${type}) VALUES (?, ?, 1)
-    ON CONFLICT(plan, month) DO UPDATE SET ${type} = ${type} + 1`,
+    `INSERT INTO usage (plan, month, ${col}) VALUES (?, ?, 1)
+    ON CONFLICT(plan, month) DO UPDATE SET ${col} = usage.${col} + 1`,
     [plan, month]
   );
 }
@@ -95,18 +99,28 @@ export async function contarReviewsMes(empresaId: string): Promise<number> {
   const db = getDb();
   const mes = getCurrentMonth();
   try {
-    const row = await db.get(
-      `SELECT COUNT(*) as c FROM reviews
-       WHERE empresa_id = ? AND substr(createdAt::text, 1, 7) = ?`,
-      [empresaId, mes]
+    const rows = await db.all(
+      `SELECT "createdAt" AS c FROM reviews WHERE empresa_id = ? LIMIT 5000`,
+      [empresaId]
     );
-    return Number(row?.c || 0);
+    return (rows || []).filter((r: any) => monthPrefix(r.c) === mes).length;
   } catch {
-    const row = await db.get(
-      `SELECT COUNT(*) as c FROM reviews
-       WHERE empresa_id = ? AND substr(createdAt, 1, 7) = ?`,
-      [empresaId, mes]
-    );
-    return Number(row?.c || 0);
+    try {
+      const rows = await db.all(
+        `SELECT createdAt AS c FROM reviews WHERE empresa_id = ? LIMIT 5000`,
+        [empresaId]
+      );
+      return (rows || []).filter((r: any) => monthPrefix(r.c) === mes).length;
+    } catch {
+      try {
+        const row = await db.get(
+          `SELECT COUNT(*) as c FROM reviews WHERE empresa_id = ?`,
+          [empresaId]
+        );
+        return Number((row as any)?.c || 0);
+      } catch {
+        return 0;
+      }
+    }
   }
 }
