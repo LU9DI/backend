@@ -1,5 +1,6 @@
 /**
  * Adapter Postgres — traduz SQLite e bloqueia date()/datetime() perigosos.
+ * Nunca transforma datetime(x,y) em timestamptz(x,y) (erro 42725 no PG).
  */
 import pg from 'pg';
 import type { Database } from 'sqlite';
@@ -24,7 +25,7 @@ function adaptSql(sql: string): string {
     }
   }
 
-  // date/datetime SQLite → Postgres (várias formas)
+  // --- Funções SQLite date/datetime ANTES de qualquer replace de tipo DATETIME ---
   s = s.replace(
     /date\s*\(\s*'now'\s*,\s*'start of month'\s*\)/gi,
     "date_trunc('month', CURRENT_TIMESTAMP)"
@@ -37,11 +38,11 @@ function adaptSql(sql: string): string {
   s = s.replace(/date\s*\(\s*"now"\s*\)/gi, 'CURRENT_DATE');
   s = s.replace(/datetime\s*\(\s*'now'\s*\)/gi, 'NOW()');
   s = s.replace(/datetime\s*\(\s*"now"\s*\)/gi, 'NOW()');
-  // datetime('now', '-7 days') etc. — não suportado; preferir JS. Remove padrão residual.
+
+  // datetime('now', '-7 days') → NOW() ± INTERVAL
   s = s.replace(
     /datetime\s*\(\s*'now'\s*,\s*'([^']+)'\s*\)/gi,
     (_m, mod: string) => {
-      // best-effort: '-7 days' → NOW() - interval '7 days'
       const m2 = String(mod).match(/^([+-]?)\s*(\d+)\s+days?$/i);
       if (m2) {
         const sign = m2[1] === '-' ? '-' : '+';
@@ -50,12 +51,25 @@ function adaptSql(sql: string): string {
       return 'NOW()';
     }
   );
-  s = s.replace(/CURRENT_TIMESTAMP/gi, 'NOW()');
+
+  // datetime(?, ?) ou date(?, ?) residual → NOW() (nunca timestamptz(?, ?))
+  s = s.replace(/datetime\s*\(\s*\?\s*,\s*\?\s*\)/gi, 'NOW()');
+  s = s.replace(/date\s*\(\s*\?\s*,\s*\?\s*\)/gi, 'CURRENT_DATE');
+  s = s.replace(/datetime\s*\(\s*[^)]+\s*,\s*[^)]+\s*\)/gi, 'NOW()');
+  s = s.replace(/date\s*\(\s*[^)]+\s*,\s*[^)]+\s*\)/gi, 'CURRENT_DATE');
+
   s = s.replace(/IFNULL\s*\(/gi, 'COALESCE(');
-  s = s.replace(/\bDATETIME\b/gi, 'TIMESTAMPTZ');
-  s = s.replace(/\bREAL\b/gi, 'DOUBLE PRECISION');
   s = s.replace(/INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT/gi, 'SERIAL PRIMARY KEY');
   s = s.replace(/AUTOINCREMENT/gi, '');
+
+  // Tipo de coluna DATETIME → TIMESTAMPTZ (somente como tipo, não como função)
+  // Evita \bDATETIME\b global que transformava datetime(...) em timestamptz(...)
+  s = s.replace(
+    /(\b(?:COLUMN|ADD COLUMN|CREATE TABLE)[^;]*?)\bDATETIME\b/gi,
+    '$1TIMESTAMPTZ'
+  );
+  s = s.replace(/\bDATETIME\b(?!\s*\()/gi, 'TIMESTAMPTZ');
+  s = s.replace(/\bREAL\b/gi, 'DOUBLE PRECISION');
 
   return s;
 }
