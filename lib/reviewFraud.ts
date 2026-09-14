@@ -1,23 +1,13 @@
 /**
  * Anti-fraude de avaliações públicas.
- *
- * Camadas:
- * 1. Honeypot (campo oculto preenchido por bot)
- * 2. Rate limit por IP + empresa (memória + DB)
- * 3. Reclamação (≤3★) única por IP e por WhatsApp
- * 4. Comentário duplicado recente
- * 5. Padrões suspeitos (nome genérico + nota extrema em rajada)
- * 6. Flag is_test (não conta em métricas/PDF)
  */
 import crypto from 'crypto';
 import type { Database } from 'sqlite';
 
-/** IP:empresa → timestamps recentes (processo) */
 const recentHits = new Map<string, number[]>();
 
 const MAX_PER_HOUR = 5;
 const MAX_PER_DAY = 12;
-/** Uma reclamação (nota ≤3) por dispositivo a cada 30 dias. */
 const COMPLAINT_WINDOW_DAYS = Number(process.env.COMPLAINT_ONCE_DAYS || 30);
 const DUPLICATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -51,7 +41,6 @@ function prune(ts: number[], windowMs: number, now: number) {
   return ts.filter((t) => now - t < windowMs);
 }
 
-/** Rate limit em memória (rápido) */
 export function checkMemoryRate(ip: string, empresaId: string): void {
   const key = `${ip}|${empresaId}`;
   const now = Date.now();
@@ -72,16 +61,21 @@ export function checkMemoryRate(ip: string, empresaId: string): void {
   recentHits.set(key, list);
 }
 
+/** Garante colunas sem PRAGMA — só ALTER (idempotente). */
 export async function ensureReviewFraudColumns(db: Database): Promise<void> {
-  const cols = (await db.all(`PRAGMA table_info(reviews)`)).map((c: any) => c.name);
-  const add = async (name: string, ddl: string) => {
-    if (!cols.includes(name)) await db.exec(`ALTER TABLE reviews ADD COLUMN ${ddl}`);
-  };
-  await add('is_test', 'is_test INTEGER DEFAULT 0');
-  await add('ip_hash', 'ip_hash TEXT');
-  await add('fraud_flags', 'fraud_flags TEXT');
-  await add('origin', 'origin TEXT');
-  await add('client_whatsapp', 'client_whatsapp TEXT');
+  for (const ddl of [
+    'is_test INTEGER DEFAULT 0',
+    'ip_hash TEXT',
+    'fraud_flags TEXT',
+    'origin TEXT',
+    'client_whatsapp TEXT',
+  ]) {
+    try {
+      await db.exec(`ALTER TABLE reviews ADD COLUMN ${ddl}`);
+    } catch {
+      /* already exists */
+    }
+  }
 }
 
 function normalizeComment(c: string): string {
@@ -93,6 +87,11 @@ function normalizeComment(c: string): string {
     .trim();
 }
 
+function createdAtCol(sql: string): string {
+  // Preferência aspas para Postgres camelCase
+  return sql.replace(/\bcreatedAt\b/g, '"createdAt"');
+}
+
 export async function checkDuplicateComment(
   db: Database,
   empresaId: string,
@@ -102,19 +101,26 @@ export async function checkDuplicateComment(
   if (n.length < 12) return;
 
   const since = new Date(Date.now() - DUPLICATE_WINDOW_MS).toISOString();
-  const rows = await db.all(
-    `SELECT comment FROM reviews
-     WHERE empresa_id = ? AND createdAt >= ? AND comment IS NOT NULL
-     ORDER BY createdAt DESC LIMIT 40`,
-    [empresaId, since]
-  );
-  for (const r of rows || []) {
-    if (normalizeComment(String(r.comment || '')) === n) {
-      throw new ReviewFraudError(
-        'Este comentário já foi enviado recentemente. Evite repetições.',
-        409
-      );
+  try {
+    const rows = await db.all(
+      createdAtCol(
+        `SELECT comment FROM reviews
+         WHERE empresa_id = ? AND createdAt >= ? AND comment IS NOT NULL
+         ORDER BY createdAt DESC LIMIT 40`
+      ),
+      [empresaId, since]
+    );
+    for (const r of rows || []) {
+      if (normalizeComment(String(r.comment || '')) === n) {
+        throw new ReviewFraudError(
+          'Este comentário já foi enviado recentemente. Evite repetições.',
+          409
+        );
+      }
     }
+  } catch (e: any) {
+    if (e instanceof ReviewFraudError) throw e;
+    /* schema legado — não bloqueia */
   }
 }
 
@@ -126,33 +132,37 @@ export async function checkDbRateByIp(
   const sinceHour = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   const sinceDay = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-  const hour = await db.get(
-    `SELECT COUNT(*) as c FROM reviews
-     WHERE empresa_id = ? AND ip_hash = ? AND createdAt >= ? AND IFNULL(is_test,0) = 0`,
-    [empresaId, ipHash, sinceHour]
-  );
-  if (Number(hour?.c || 0) >= MAX_PER_HOUR) {
-    throw new ReviewFraudError(
-      'Muitas avaliações deste dispositivo. Aguarde um pouco e tente de novo.'
+  try {
+    const hour = await db.get(
+      createdAtCol(
+        `SELECT COUNT(*) as c FROM reviews
+         WHERE empresa_id = ? AND ip_hash = ? AND createdAt >= ? AND COALESCE(is_test,0) = 0`
+      ),
+      [empresaId, ipHash, sinceHour]
     );
-  }
+    if (Number(hour?.c || 0) >= MAX_PER_HOUR) {
+      throw new ReviewFraudError(
+        'Muitas avaliações deste dispositivo. Aguarde um pouco e tente de novo.'
+      );
+    }
 
-  const day = await db.get(
-    `SELECT COUNT(*) as c FROM reviews
-     WHERE empresa_id = ? AND ip_hash = ? AND createdAt >= ? AND IFNULL(is_test,0) = 0`,
-    [empresaId, ipHash, sinceDay]
-  );
-  if (Number(day?.c || 0) >= MAX_PER_DAY) {
-    throw new ReviewFraudError(
-      'Limite diário de avaliações deste dispositivo atingido. Tente amanhã.'
+    const day = await db.get(
+      createdAtCol(
+        `SELECT COUNT(*) as c FROM reviews
+         WHERE empresa_id = ? AND ip_hash = ? AND createdAt >= ? AND COALESCE(is_test,0) = 0`
+      ),
+      [empresaId, ipHash, sinceDay]
     );
+    if (Number(day?.c || 0) >= MAX_PER_DAY) {
+      throw new ReviewFraudError(
+        'Limite diário de avaliações deste dispositivo atingido. Tente amanhã.'
+      );
+    }
+  } catch (e: any) {
+    if (e instanceof ReviewFraudError) throw e;
   }
 }
 
-/**
- * Reclamação (nota ≤ 3): apenas 1 por dispositivo (IP) na janela configurável
- * e 1 por WhatsApp do cliente na mesma empresa.
- */
 export async function checkOneComplaintOnly(
   db: Database,
   opts: {
@@ -167,37 +177,44 @@ export async function checkOneComplaintOnly(
   const days = Math.max(1, COMPLAINT_WINDOW_DAYS);
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
-  const byIp = await db.get(
-    `SELECT COUNT(*) as c FROM reviews
-     WHERE empresa_id = ? AND ip_hash = ? AND rating <= 3
-       AND IFNULL(is_test,0) = 0 AND createdAt >= ?`,
-    [opts.empresaId, opts.ipHash, since]
-  );
-  if (Number(byIp?.c || 0) >= 1) {
-    throw new ReviewFraudError(
-      'Você já enviou uma reclamação recentemente para este estabelecimento. Aguarde ou fale pelo WhatsApp da empresa.',
-      409
+  try {
+    const byIp = await db.get(
+      createdAtCol(
+        `SELECT COUNT(*) as c FROM reviews
+         WHERE empresa_id = ? AND ip_hash = ? AND rating <= 3
+           AND COALESCE(is_test,0) = 0 AND createdAt >= ?`
+      ),
+      [opts.empresaId, opts.ipHash, since]
     );
-  }
-
-  const wpp = (opts.clientWhatsapp || '').replace(/\D/g, '');
-  if (wpp.length >= 10) {
-    const byWpp = await db.get(
-      `SELECT COUNT(*) as c FROM reviews
-       WHERE empresa_id = ? AND client_whatsapp = ? AND rating <= 3
-         AND IFNULL(is_test,0) = 0 AND createdAt >= ?`,
-      [opts.empresaId, wpp, since]
-    );
-    if (Number(byWpp?.c || 0) >= 1) {
+    if (Number(byIp?.c || 0) >= 1) {
       throw new ReviewFraudError(
-        'Este WhatsApp já registrou uma reclamação para este estabelecimento no período.',
+        'Você já enviou uma reclamação recentemente para este estabelecimento. Aguarde ou fale pelo WhatsApp da empresa.',
         409
       );
     }
+
+    const wpp = (opts.clientWhatsapp || '').replace(/\D/g, '');
+    if (wpp.length >= 10) {
+      const byWpp = await db.get(
+        createdAtCol(
+          `SELECT COUNT(*) as c FROM reviews
+           WHERE empresa_id = ? AND client_whatsapp = ? AND rating <= 3
+             AND COALESCE(is_test,0) = 0 AND createdAt >= ?`
+        ),
+        [opts.empresaId, wpp, since]
+      );
+      if (Number(byWpp?.c || 0) >= 1) {
+        throw new ReviewFraudError(
+          'Este WhatsApp já registrou uma reclamação para este estabelecimento no período.',
+          409
+        );
+      }
+    }
+  } catch (e: any) {
+    if (e instanceof ReviewFraudError) throw e;
   }
 }
 
-/** Heurísticas leves — não bloqueiam sozinhas, só marcam flags */
 export function softFraudFlags(opts: {
   name: string;
   comment: string;

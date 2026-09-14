@@ -1,5 +1,6 @@
 /**
  * Trial 7 dias (empresa + usuário + JWT).
+ * CNPJ/tax_id opcional — estrangeiros recebem ID sintético INTL-*.
  */
 import crypto from 'crypto';
 import type { Database } from 'sqlite';
@@ -9,7 +10,7 @@ import { createUsuarioForEmpresa } from '../passwordResetRoutes.js';
 import { normalizarWhatsapp } from '../lib/whatsapp.js';
 import { notificarTrialAtivado } from '../lib/notifications.js';
 import { setAuthCookie, signAccessToken } from '../lib/auth.js';
-import { normalizarCnpj, cnpjValido } from '../lib/cnpj.js';
+import { normalizarTaxId, cnpjValido, normalizarCnpj } from '../lib/cnpj.js';
 import { ensureRuntimeSchema } from '../lib/schemaEnsure.js';
 import { notifyN8n } from '../lib/n8n.js';
 
@@ -19,7 +20,7 @@ const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://loca
 );
 
 export type TrialInput = {
-  cnpj: string;
+  cnpj?: string;
   nome_empresa: string;
   email: string;
   senha: string;
@@ -45,7 +46,7 @@ export type TrialResult = {
 
 export class TrialConflictError extends Error {
   status = 409;
-  constructor(message = 'Este CNPJ já ativou o período de testes.') {
+  constructor(message = 'Já existe uma conta com este CNPJ ou e-mail.') {
     super(message);
     this.name = 'TrialConflictError';
   }
@@ -72,16 +73,23 @@ export async function ativarTrial(
 ): Promise<TrialResult> {
   await ensureRuntimeSchema(db);
 
-  const cnpj = normalizarCnpj(String(input.cnpj));
+  const rawCnpj = String(input.cnpj || '').trim();
+  const taxId = rawCnpj
+    ? normalizarTaxId(rawCnpj)
+    : normalizarTaxId(''); // gera INTL-*
+
+  // Se informou 14 dígitos inválidos, rejeita
+  const digits = normalizarCnpj(rawCnpj);
+  if (rawCnpj && digits.length === 14 && !cnpjValido(digits)) {
+    throw new TrialValidationError('CNPJ inválido.');
+  }
+
   const nome = String(input.nome_empresa || '').trim();
   const email = String(input.email || '').trim().toLowerCase();
   const senha = String(input.senha || '');
   const googleReviewUrl = input.google_review_url ? String(input.google_review_url).trim() : '';
   const wpp = normalizarWhatsapp(input.whatsapp || null);
 
-  if (!cnpjValido(cnpj)) {
-    throw new TrialValidationError('CNPJ inválido.');
-  }
   if (nome.length < 2) {
     throw new TrialValidationError('Nome da empresa inválido.');
   }
@@ -92,8 +100,21 @@ export async function ativarTrial(
     throw new TrialValidationError('WhatsApp inválido. Use DDD + número (ex: 11999998888).');
   }
 
-  const existente = await db.get('SELECT id FROM empresas WHERE cnpj = ?', [cnpj]);
-  if (existente) throw new TrialConflictError();
+  // Conflito por CNPJ (só se não for sintético novo) ou e-mail
+  if (!taxId.startsWith('INTL-')) {
+    const existente = await db.get('SELECT id FROM empresas WHERE cnpj = ?', [taxId]);
+    if (existente) throw new TrialConflictError('Este CNPJ já ativou o período de testes.');
+  }
+  try {
+    const byEmail = await db.get(
+      'SELECT id FROM usuarios WHERE lower(email) = lower(?) LIMIT 1',
+      [email]
+    );
+    if (byEmail) throw new TrialConflictError('Este e-mail já está cadastrado.');
+  } catch (e: any) {
+    if (e instanceof TrialConflictError) throw e;
+    // coluna email pode não existir em schema antigo — ignora
+  }
 
   const id = crypto.randomUUID();
   const slug = await slugUnico(slugify(nome) || 'empresa');
@@ -106,7 +127,7 @@ export async function ativarTrial(
          id, cnpj, nome_empresa, slug, google_review_url, whatsapp_suporte,
          status, plan, criado_em, expira_em
        ) VALUES (?, ?, ?, ?, ?, ?, 'trial', 'trial', ?, ?)`,
-      [id, cnpj, nome, slug, googleReviewUrl || null, wpp, criadoEm, expiraEm]
+      [id, taxId, nome, slug, googleReviewUrl || null, wpp, criadoEm, expiraEm]
     );
   } catch (e: any) {
     if (isUniqueViolation(e)) throw new TrialConflictError();
@@ -118,10 +139,20 @@ export async function ativarTrial(
 
   let usuarioId: string;
   try {
-    const u = await createUsuarioForEmpresa(db, { empresaId: id, cnpj, nome, email, senha });
+    const u = await createUsuarioForEmpresa(db, {
+      empresaId: id,
+      cnpj: taxId,
+      nome,
+      email,
+      senha,
+    });
     usuarioId = u.id;
   } catch (e: any) {
     await db.run('DELETE FROM empresas WHERE id = ?', [id]).catch(() => undefined);
+    const msg = String(e?.message || e);
+    if (isUniqueViolation(e) || /email|unique/i.test(msg)) {
+      throw new TrialConflictError('Este e-mail já está cadastrado.');
+    }
     throw new TrialValidationError(e?.message || 'Falha ao criar usuário.');
   }
 
@@ -169,7 +200,7 @@ export async function ativarTrial(
     slug,
     nome_empresa: nome,
     email,
-    cnpj,
+    cnpj: taxId,
     expira_em: expiraEm,
     link_painel: `${APP_URL}/painel/${slug}`,
   }).catch(() => undefined);
