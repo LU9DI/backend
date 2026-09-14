@@ -2,7 +2,7 @@
  * Middleware de validação de body — sem dependências externas.
  */
 import type { Request, Response, NextFunction } from 'express';
-import { normalizarCnpj, cnpjValido } from '../lib/cnpj.js';
+import { normalizarCnpj, cnpjValido, taxIdValido } from '../lib/cnpj.js';
 import { validarSenhaEmpresa } from '../lib/passwordPolicy.js';
 
 export type FieldRule = {
@@ -169,8 +169,17 @@ export function validateBody(schema: Schema) {
   };
 }
 
+/** Trial: CNPJ/tax_id opcional (estrangeiros). */
 export const schemaTrialAtivar: Schema = {
-  cnpj: { required: true, type: 'cnpj' },
+  cnpj: {
+    required: false,
+    type: 'string',
+    max: 32,
+    custom: (v) => {
+      if (v == null || String(v).trim() === '') return null;
+      return taxIdValido(String(v)) ? null : 'CNPJ ou identificação inválida.';
+    },
+  },
   nome_empresa: {
     required: true,
     type: 'string',
@@ -182,20 +191,35 @@ export const schemaTrialAtivar: Schema = {
   senha: { required: true, type: 'password_empresa' },
   google_review_url: { required: false, type: 'url', max: 500 },
   whatsapp: { required: false, type: 'string', max: 20 },
+  locale: { required: false, type: 'string', max: 8 },
 };
 
+/** Login: e-mail OU CNPJ/tax_id + senha. */
 export const schemaLoginEmpresa: Schema = {
   cnpj: {
-    required: true,
+    required: false,
     type: 'string',
-    transform: (v) => normalizarCnpj(String(v ?? '')),
-    custom: (v) => (String(v).length === 14 ? null : 'CNPJ inválido.'),
+    max: 64,
+  },
+  email: {
+    required: false,
+    type: 'email',
   },
   senha: {
     required: true,
     type: 'string',
     min: 1,
-    message: 'CNPJ e senha são obrigatórios.',
+    message: 'Senha é obrigatória.',
+  },
+  custom_require_id: {
+    required: false,
+    type: 'string',
+    custom: (_v, body) => {
+      const hasCnpj = String(body.cnpj || '').trim().length > 0;
+      const hasEmail = String(body.email || '').trim().length > 0;
+      if (!hasCnpj && !hasEmail) return 'Informe e-mail ou CNPJ.';
+      return null;
+    },
   },
 };
 
@@ -222,7 +246,6 @@ export const schemaReview: Schema = {
       return null;
     },
   },
-  /** WhatsApp do cliente — obrigatório em nota ≤ 3 (schema + serviço). */
   client_whatsapp: {
     required: false,
     type: 'string',
@@ -240,7 +263,6 @@ export const schemaReview: Schema = {
   whatsapp: { required: false, type: 'string', max: 20 },
   empresa_id: { required: false, type: 'string', max: 100 },
   empresa_ref: { required: false, type: 'string', max: 100 },
-  /** Honeypot — deve ficar vazio */
   website: { required: false, type: 'string', max: 200 },
   is_test: { required: false, type: 'boolean' },
 };
