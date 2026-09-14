@@ -13,6 +13,8 @@ import { planTemPdf } from '../lib/plans.js';
 import { logPdfGeneration } from '../lib/opsLog.js';
 import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
 import { readPdfCache, writePdfCache } from '../lib/pdfCache.js';
+import { dispatchN8nEvent } from '../lib/n8n.js';
+import { buildN8nMonthlyReport } from '../lib/n8nReport.js';
 
 const pdfLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -31,6 +33,19 @@ function authModeOf(req: AuthRequest): string {
   if (isAdminUser(req.user)) return 'jwt_admin';
   if (req.user?.empresa_id) return 'jwt_cliente';
   return 'jwt';
+}
+
+function dispararRelatorioN8n(db: any, empresaId: string, slug: string | null, mesAno: string): void {
+  if (!process.env.N8N_WEBHOOK_URL?.trim()) return;
+  void buildN8nMonthlyReport(db, empresaId, mesAno)
+    .then((payload) => {
+      if (!payload) return false;
+      return dispatchN8nEvent('report.generated', payload, { empresaId, slug });
+    })
+    .catch((error: any) => {
+      console.warn('[n8n] report.generated falhou:', error?.message || error);
+      return false;
+    });
 }
 
 export function mountRelatorioRoutes(app: Express) {
@@ -70,11 +85,12 @@ export function mountRelatorioRoutes(app: Express) {
         return res.status(400).json({ error: mesCheck.error, exemplo: '2026-09' });
       }
       const mesAno = mesCheck.value;
+      const slug = empresa.slug || empresa.id.slice(0, 8);
 
       const cached = readPdfCache(empresa.id, mesAno, plan);
       if (cached) {
+        dispararRelatorioN8n(db, empresa.id, slug, mesAno);
         await logPdfGeneration(db, { empresa_id: empresa.id, empresa_nome: empresa.nome_empresa, mes: mesAno, status: 'ok', bytes: cached.length, auth_mode: auth_mode + '_cache', duration_ms: Date.now() - t0 });
-        const slug = empresa.slug || empresa.id.slice(0, 8);
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="relatorio-${slug}-${mesAno}.pdf"`);
         res.setHeader('X-PDF-Cache', 'HIT');
@@ -92,9 +108,9 @@ export function mountRelatorioRoutes(app: Express) {
       }
 
       writePdfCache(empresa.id, mesAno, plan, pdf);
+      dispararRelatorioN8n(db, empresa.id, slug, mesAno);
       await logPdfGeneration(db, { empresa_id: empresa.id, empresa_nome: empresa.nome_empresa, mes: mesAno, status: 'ok', bytes: pdf.length, auth_mode, duration_ms: Date.now() - t0 });
 
-      const slug = empresa.slug || empresa.id.slice(0, 8);
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="relatorio-${slug}-${mesAno}.pdf"`);
       res.setHeader('X-PDF-Cache', 'MISS');
