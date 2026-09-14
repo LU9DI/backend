@@ -84,19 +84,51 @@ function podeGerirEmpresa(req: AuthRequest, empresaId: string): boolean {
   return Boolean(req.user?.empresa_id && req.user.empresa_id === empresaId);
 }
 
-/** Idempotente em SQLite e Postgres (ignora column already exists). */
 async function ensureReviewSentimentColumns(db: any): Promise<void> {
   for (const sql of [
     `ALTER TABLE reviews ADD COLUMN sentiment TEXT`,
-    `ALTER TABLE reviews ADD COLUMN sentiment_score REAL`,
+    `ALTER TABLE reviews ADD COLUMN sentiment_score DOUBLE PRECISION`,
     `ALTER TABLE reviews ADD COLUMN sentiment_source TEXT`,
   ]) {
     try {
       await db.exec(sql);
     } catch {
-      /* coluna ja existe */
+      /* */
     }
   }
+}
+
+/** SELECT reviews com fallback se colunas extras faltarem (Postgres). */
+async function loadReviewsForPainel(db: any, empresaId: string): Promise<any[]> {
+  const queries = [
+    `SELECT id, name, rating, comment, ai_reply, ai_tags, "createdAt" AS "createdAt",
+            COALESCE(is_test, 0) AS is_test, fraud_flags, origin,
+            sentiment, sentiment_score, sentiment_source,
+            client_whatsapp, treated_at, treated_note
+     FROM reviews WHERE empresa_id = $EMP ORDER BY "createdAt" DESC LIMIT 500`,
+    `SELECT id, name, rating, comment, ai_reply, ai_tags, "createdAt" AS "createdAt",
+            COALESCE(is_test, 0) AS is_test, client_whatsapp, treated_at, treated_note
+     FROM reviews WHERE empresa_id = $EMP ORDER BY "createdAt" DESC LIMIT 500`,
+    `SELECT id, name, rating, comment, ai_reply, ai_tags, "createdAt" AS "createdAt",
+            client_whatsapp
+     FROM reviews WHERE empresa_id = $EMP ORDER BY "createdAt" DESC LIMIT 500`,
+    `SELECT id, name, rating, comment, ai_reply, ai_tags, createdAt,
+            client_whatsapp
+     FROM reviews WHERE empresa_id = $EMP ORDER BY createdAt DESC LIMIT 500`,
+    `SELECT id, name, rating, comment, ai_reply, ai_tags, "createdAt" AS "createdAt"
+     FROM reviews WHERE empresa_id = $EMP ORDER BY "createdAt" DESC LIMIT 500`,
+  ];
+
+  for (const q of queries) {
+    try {
+      const sql = q.replace(/\$EMP/g, '?');
+      const rows = await db.all(sql, [empresaId]);
+      return rows || [];
+    } catch (e: any) {
+      console.warn('[painel] reviews query fallback:', e?.message || e);
+    }
+  }
+  return [];
 }
 
 export function mountEmpresaRoutes(app: Express) {
@@ -257,18 +289,23 @@ export function mountEmpresaRoutes(app: Express) {
       }
 
       const db = getDb();
-      await ensureReviewFraudColumns(db);
-      await ensureReviewTreatmentColumns(db);
-      await ensureReviewSentimentColumns(db);
+      try {
+        await ensureReviewFraudColumns(db);
+      } catch (e: any) {
+        console.warn('[painel] fraud cols:', e?.message || e);
+      }
+      try {
+        await ensureReviewTreatmentColumns(db);
+      } catch (e: any) {
+        console.warn('[painel] treatment cols:', e?.message || e);
+      }
+      try {
+        await ensureReviewSentimentColumns(db);
+      } catch (e: any) {
+        console.warn('[painel] sentiment cols:', e?.message || e);
+      }
 
-      const rows = await db.all(
-        `SELECT id, name, rating, comment, ai_reply, ai_tags, createdAt,
-                IFNULL(is_test,0) as is_test, fraud_flags, origin,
-                sentiment, sentiment_score, sentiment_source,
-                client_whatsapp, treated_at, treated_note
-         FROM reviews WHERE empresa_id = ? ORDER BY createdAt DESC LIMIT 500`,
-        [empresa.id]
-      );
+      const rows = await loadReviewsForPainel(db, empresa.id);
 
       const reviews = (rows || []).map((r: any) => {
         let tags: string[] = [];
@@ -293,7 +330,7 @@ export function mountEmpresaRoutes(app: Express) {
           ai_tags: tags,
           createdAt: r.createdAt,
           is_test: Number(r.is_test) === 1,
-          fraud_flags: r.fraud_flags,
+          fraud_flags: r.fraud_flags || null,
           origin: r.origin || 'publico',
           sentiment: r.sentiment || null,
           sentiment_score: r.sentiment_score != null ? Number(r.sentiment_score) : null,
@@ -365,10 +402,21 @@ export function mountEmpresaRoutes(app: Express) {
       const relatorio_disponivel = planTemRelatorio(plan);
       const tem_ia = trial || planTemIA(plan);
 
+      let feedback_usados = 0;
+      let token_usados = 0;
+      try {
+        feedback_usados = await contarReviewsMes(empresa.id);
+      } catch {
+        feedback_usados = total;
+      }
+      try {
+        token_usados = tem_ia ? await tokensUsadosMes(empresa.id) : 0;
+      } catch {
+        token_usados = 0;
+      }
+
       const feedback_limite = getFeedbackLimit(plan);
-      const feedback_usados = await contarReviewsMes(empresa.id);
       const token_limite = getTokenLimit(plan);
-      const token_usados = tem_ia ? await tokensUsadosMes(empresa.id) : 0;
 
       const base = APP_URL.replace(/\/$/, '');
       const ref = empresa.slug || empresa.id;
