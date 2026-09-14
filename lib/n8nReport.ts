@@ -1,9 +1,23 @@
 import type { Database } from 'sqlite';
 import { assertReportConsistency, formatAverage, formatPercent, normalizeReportReviews } from './reportMetrics.js';
 
+function monthBounds(mesAno: string): { start: string; end: string } {
+  const match = /^(\d{4})-(\d{2})$/.exec(mesAno);
+  if (!match) throw new Error(`Período inválido: ${mesAno}`);
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) throw new Error(`Período inválido: ${mesAno}`);
+
+  const start = new Date(Date.UTC(year, month - 1, 1));
+  const end = new Date(Date.UTC(year, month, 1));
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
 /**
  * Monta o payload determinístico enviado ao n8n.
  * Os números vêm exclusivamente do backend; a IA pode interpretar, mas não calcular.
+ * A consulta usa intervalo de datas, não funções SQLite, para funcionar com SQLite e Postgres.
  */
 export async function buildN8nMonthlyReport(
   db: Database,
@@ -16,13 +30,15 @@ export async function buildN8nMonthlyReport(
   );
   if (!empresa) return null;
 
+  const { start, end } = monthBounds(mesAno);
   const rows = await db.all(
     `SELECT rating, comment, unidade_id, origin, createdAt
        FROM reviews
       WHERE empresa_id = ?
-        AND strftime('%Y-%m', createdAt) = ?
+        AND createdAt >= ?
+        AND createdAt < ?
         AND IFNULL(is_test, 0) = 0`,
-    [empresaId, mesAno]
+    [empresaId, start, end]
   );
 
   const metrics = normalizeReportReviews(rows);
