@@ -3,13 +3,9 @@ FROM node:20-bookworm-slim
 
 WORKDIR /app
 
-# Dependências de build do bcrypt/sqlite3
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 make g++ \
-    && rm -rf /var/lib/apt/lists/*
-
+# O runtime de produção usa Postgres e bcryptjs (JS puro), portanto não
+# precisa de toolchain nativa para bcrypt/sqlite3.
 COPY package.json ./
-# Sem package-lock: npm install (não npm ci)
 RUN npm install --omit=dev && npm cache clean --force
 
 COPY . .
