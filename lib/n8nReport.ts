@@ -17,7 +17,7 @@ function monthBounds(mesAno: string): { start: string; end: string } {
 /**
  * Monta o payload determinístico enviado ao n8n.
  * Os números vêm exclusivamente do backend; a IA pode interpretar, mas não calcular.
- * A consulta usa intervalo de datas, não funções SQLite, para funcionar com SQLite e Postgres.
+ * A consulta usa intervalo de datas e COALESCE padrão SQL, evitando funções SQLite-específicas.
  */
 export async function buildN8nMonthlyReport(
   db: Database,
@@ -37,7 +37,7 @@ export async function buildN8nMonthlyReport(
       WHERE empresa_id = ?
         AND createdAt >= ?
         AND createdAt < ?
-        AND IFNULL(is_test, 0) = 0`,
+        AND COALESCE(is_test, 0) = 0`,
     [empresaId, start, end]
   );
 
