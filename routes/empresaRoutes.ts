@@ -10,7 +10,6 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { ensureReviewFraudColumns } from '../lib/reviewFraud.js';
 import {
   planTemPdf,
-  planTemRelatorio,
   allowPlanSwitch,
   PLANOS_OFICIAIS,
   planLabel,
@@ -133,7 +132,7 @@ function emptyPainel(empresa: any) {
   const plan = String(empresa.plan || 'trial').toLowerCase();
   const trial = isTrialPlan(plan);
   const tem_ia = trial || planTemIA(plan);
-  const relatorio = typeof planTemRelatorio === 'function' ? planTemRelatorio(plan) : planTemPdf(plan);
+  const pdf = planTemPdf(plan);
   const wpp = normalizarWhatsapp(empresa.whatsapp_suporte);
   return {
     empresa: {
@@ -175,8 +174,8 @@ function emptyPainel(empresa: any) {
     },
     dashboard: {
       nivel: nivelDashboard(plan),
-      pdf_disponivel: planTemPdf(plan),
-      relatorio_disponivel: relatorio,
+      pdf_disponivel: pdf,
+      relatorio_disponivel: pdf,
       tem_ia,
       trial_completo: trial,
       plan_switch: allowPlanSwitch(),
@@ -206,8 +205,8 @@ function emptyPainel(empresa: any) {
       painel: `${base}/painel/${ref}`,
       widget: `${base}/widget/${ref}`,
       embed: `${base}/avaliacao/${ref}`,
-      relatorio_pdf: planTemPdf(plan) ? `/api/empresa/${ref}/relatorio.pdf` : null,
-      relatorio_enviar: relatorio ? `/api/empresa/${ref}/relatorio/enviar` : null,
+      relatorio_pdf: pdf ? `/api/empresa/${ref}/relatorio.pdf` : null,
+      relatorio_enviar: pdf ? `/api/empresa/${ref}/relatorio/enviar` : null,
       login: `${base}/login`,
     },
   };
@@ -346,7 +345,6 @@ export function mountEmpresaRoutes(app: Express) {
         });
       }
 
-      // NUNCA deixar o painel 500 após trial — fallback total
       try {
         const db = getDb();
         try {
@@ -467,8 +465,6 @@ export function mountEmpresaRoutes(app: Express) {
         const trial = isTrialPlan(plan);
         const nivel = nivelDashboard(plan);
         const pdf_disponivel = planTemPdf(plan);
-        const relatorio_disponivel =
-          typeof planTemRelatorio === 'function' ? planTemRelatorio(plan) : pdf_disponivel;
         const tem_ia = trial || planTemIA(plan);
 
         let feedback_usados = total;
@@ -541,7 +537,7 @@ export function mountEmpresaRoutes(app: Express) {
           dashboard: {
             nivel,
             pdf_disponivel,
-            relatorio_disponivel,
+            relatorio_disponivel: pdf_disponivel,
             tem_ia,
             trial_completo: trial,
             plan_switch: allowPlanSwitch(),
@@ -574,14 +570,14 @@ export function mountEmpresaRoutes(app: Express) {
             widget: `${base}/widget/${ref}`,
             embed: `${base}/avaliacao/${ref}`,
             relatorio_pdf: pdf_disponivel ? `/api/empresa/${ref}/relatorio.pdf` : null,
-            relatorio_enviar: relatorio_disponivel
+            relatorio_enviar: pdf_disponivel
               ? `/api/empresa/${ref}/relatorio/enviar`
               : null,
             login: `${base}/login`,
           },
         });
       } catch (e: any) {
-        console.error('[painel] FATAL fallback:', e?.message || e, e?.stack?.split('\n').slice(0, 4));
+        console.error('[painel] FATAL fallback:', e?.message || e);
         return res.json(emptyPainel(empresa));
       }
     })
