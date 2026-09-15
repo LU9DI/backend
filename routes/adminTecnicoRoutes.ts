@@ -135,8 +135,6 @@ export function mountAdminTecnicoRoutes(app: Express) {
       const mpLast24hOk =
         mpHealth.total === 0 ? null : mpHealth.errors === 0 && mpHealth.ok > 0;
 
-      // SQLite PRAGMA não é SQL válido no PostgreSQL. A compatibilidade do adapter
-      // cobre consultas genéricas, mas esta rota precisa usar a coluna real do Postgres.
       const cols = (await db.all(`SELECT column_name AS name FROM information_schema.columns WHERE table_name = 'reviews'`)).map((c: any) => c.name);
       if (!cols.includes('client_whatsapp')) {
         try {
@@ -146,8 +144,6 @@ export function mountAdminTecnicoRoutes(app: Express) {
         }
       }
 
-      // No PostgreSQL as colunas criadas sem aspas são lowercase (createdat).
-      // O alias entre aspas preserva o nome esperado pelo restante da aplicação.
       const criticas = await db.all(
         `SELECT r.id, r.name, r.rating, r.comment, r.ai_reply, r.ai_tags,
                 r.createdat AS "createdAt", r.client_whatsapp, r.empresa_id, r.origin,
@@ -189,16 +185,33 @@ export function mountAdminTecnicoRoutes(app: Express) {
       const retry = await retryQueueStats(db);
       const pdfLogs = await recentPdfLogs(db, 20);
 
+      // These flags describe actual server configuration, not whether an event
+      // happened during the last 24h. A fresh production instance can have zero
+      // webhook events while the integration is correctly configured.
+      const groqConfigured = Boolean(
+        process.env.GROQ_API_KEY?.trim() || process.env.GROQ_KEY?.trim()
+      );
+      const jobsSecretConfigured = Boolean(process.env.JOBS_SECRET?.trim());
+      const integrations = {
+        stripe: stripeConfigured(),
+        paypal: paypalConfigured(),
+        paypal_webhook: paypalWebhookConfigured(),
+        pix: mpConfigured(),
+        smtp: smtpConfigured(),
+        n8n: Boolean(n8nUrl),
+        groq: groqConfigured,
+        jobs_secret: jobsSecretConfigured,
+      };
+
       res.json({
         ok: true,
-        integrations: {
-          stripe: stripeConfigured(),
-          paypal: paypalConfigured(),
-          paypal_webhook: paypalWebhookConfigured(),
-          pix: mpConfigured(),
-          smtp: smtpConfigured(),
-          n8n: Boolean(n8nUrl),
-        },
+        integrations,
+        // Explicit aliases keep the admin UI compatible with older clients.
+        paypal: integrations.paypal,
+        pix: integrations.pix,
+        smtp: integrations.smtp,
+        groq: integrations.groq,
+        jobs_secret: integrations.jobs_secret,
         health24h: {
           stripe: stripeLast24hOk,
           n8n: n8nLast24hOk,
