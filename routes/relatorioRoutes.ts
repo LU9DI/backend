@@ -1,27 +1,21 @@
-/**
- * Relatório PDF mensal — autenticado, cache em disco, sem tokens de IA.
- * A geração usa métricas determinísticas e validação de integridade.
- */
+/** Relatório inteligente (texto → n8n) + PDF legado se disponível. */
 import type { Express, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { getDb, findEmpresa } from '../lib/db.js';
-import { ensureUnidadesSchema } from '../relatorioPdf.js';
-import { gerarRelatorioMensalPDFSeguro } from '../relatorioSeguroPdf.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validateReportMonth } from '../lib/dateValidation.js';
-import { planTemPdf } from '../lib/plans.js';
-import { logPdfGeneration } from '../lib/opsLog.js';
+import { empresaTemPdf, empresaTemRelatorio, planLabel } from '../lib/plans.js';
 import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
-import { readPdfCache, writePdfCache } from '../lib/pdfCache.js';
-import { dispatchN8nEvent } from '../lib/n8n.js';
-import { buildN8nMonthlyReport } from '../lib/n8nReport.js';
+import { notifyN8nAsync, n8nConfigured } from '../lib/n8n.js';
+import {
+  buildRelatorioInteligente,
+  normalizeDestinatarios,
+} from '../services/relatorioInteligente.js';
 
-const pdfLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 120,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Muitos downloads de PDF deste IP. Aguarde um pouco.' },
+const sendLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: { error: 'Muitos envios de relatório. Aguarde.' },
 });
 
 function podeAcessarEmpresa(req: AuthRequest, empresaId: string): boolean {
@@ -29,92 +23,152 @@ function podeAcessarEmpresa(req: AuthRequest, empresaId: string): boolean {
   return Boolean(req.user?.empresa_id && req.user.empresa_id === empresaId);
 }
 
-function authModeOf(req: AuthRequest): string {
-  if (isAdminUser(req.user)) return 'jwt_admin';
-  if (req.user?.empresa_id) return 'jwt_cliente';
-  return 'jwt';
-}
-
-function dispararRelatorioN8n(db: any, empresaId: string, slug: string | null, mesAno: string): void {
-  if (!process.env.N8N_WEBHOOK_URL?.trim()) return;
-  void buildN8nMonthlyReport(db, empresaId, mesAno)
-    .then((payload) => {
-      if (!payload) return false;
-      return dispatchN8nEvent('report.generated', payload, { empresaId, slug });
-    })
-    .catch((error: any) => {
-      console.warn('[n8n] report.generated falhou:', error?.message || error);
-      return false;
-    });
-}
-
 export function mountRelatorioRoutes(app: Express) {
+  const previewHandler = asyncHandler(async (req: AuthRequest, res: Response) => {
+    const empresa = await findEmpresa(req.params.ref);
+    if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
+    if (!podeAcessarEmpresa(req, empresa.id)) {
+      return res.status(403).json({ error: 'Sem permissão.' });
+    }
+    if (!empresaTemRelatorio(empresa)) {
+      return res.status(403).json({
+        error: 'Relatório inteligente não disponível neste plano (Inicial não inclui).',
+        plan: empresa.plan,
+        code: 'PLAN_NO_REPORT',
+      });
+    }
+    const mesCheck = validateReportMonth(req.query.mes || req.body?.mes, {
+      defaultToCurrent: true,
+      minYear: 2020,
+      allowFutureMonths: 0,
+    });
+    const mesAno = mesCheck.ok ? mesCheck.value : new Date().toISOString().slice(0, 7);
+    const rel = await buildRelatorioInteligente(getDb(), empresa, mesAno);
+    res.json({
+      success: true,
+      tipo: 'relatorio_inteligente',
+      plano: planLabel(String(empresa.plan || 'trial')),
+      ...rel,
+      n8n_configured: n8nConfigured(),
+    });
+  });
+
+  app.get('/api/empresa/:ref/relatorio/inteligente', autenticarToken, previewHandler);
+  app.get('/api/empresa/:ref/relatorio', autenticarToken, previewHandler);
+  app.post('/api/empresa/:ref/relatorio/preview', autenticarToken, sendLimiter, previewHandler);
+
+  const sendHandler = asyncHandler(async (req: AuthRequest, res: Response) => {
+    const empresa = await findEmpresa(req.params.ref);
+    if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
+    if (!podeAcessarEmpresa(req, empresa.id)) {
+      return res.status(403).json({ error: 'Sem permissão.' });
+    }
+    if (!empresaTemRelatorio(empresa)) {
+      return res.status(403).json({
+        error: 'Relatório inteligente não disponível neste plano (Inicial não inclui).',
+        plan: empresa.plan,
+        code: 'PLAN_NO_REPORT',
+      });
+    }
+
+    const mesCheck = validateReportMonth(req.body?.mes || req.query.mes, {
+      defaultToCurrent: true,
+      minYear: 2020,
+      allowFutureMonths: 0,
+    });
+    const mesAno = mesCheck.ok ? mesCheck.value : new Date().toISOString().slice(0, 7);
+
+    let destinatarios = normalizeDestinatarios(req.body || {});
+    if (destinatarios.length === 0) {
+      try {
+        const u = await getDb().get(
+          `SELECT email FROM usuarios WHERE empresa_id = ? AND email IS NOT NULL LIMIT 1`,
+          [empresa.id]
+        );
+        if (u?.email) destinatarios = [{ canal: 'email', destino: String(u.email) }];
+      } catch {
+        /* */
+      }
+    }
+    if (destinatarios.length === 0) {
+      return res.status(400).json({
+        error: 'Informe email, whatsapp, sms ou destinatarios[{canal,destino}].',
+        code: 'NO_DESTINATARIO',
+      });
+    }
+
+    const rel = await buildRelatorioInteligente(getDb(), empresa, mesAno);
+
+    if (!n8nConfigured()) {
+      return res.status(503).json({
+        error: 'n8n não configurado. Defina N8N_WEBHOOK_URL no Render.',
+        code: 'N8N_OFF',
+        preview: { subject: rel.subject, texto: rel.texto, metricas: rel.metricas },
+      });
+    }
+
+    const ok = await notifyN8nAsync('report.generated', {
+      empresa_id: empresa.id,
+      slug: empresa.slug,
+      nome_empresa: empresa.nome_empresa,
+      plan: empresa.plan,
+      periodo: rel.periodo,
+      subject: rel.subject,
+      message: rel.texto,
+      html: rel.html,
+      relatorio: rel.texto,
+      metricas: rel.metricas,
+      destinatarios,
+      channels: [...new Set(destinatarios.map((d) => d.canal))],
+      email: destinatarios.find((d) => d.canal === 'email')?.destino || null,
+      modelo_ia: 'none',
+      tokens: 0,
+    });
+
+    if (!ok) {
+      return res.status(502).json({
+        error: 'n8n não aceitou o webhook (workflow Active?).',
+        code: 'N8N_REJECT',
+        preview: { subject: rel.subject, texto: rel.texto },
+      });
+    }
+
+    res.json({
+      success: true,
+      tipo: 'relatorio_inteligente',
+      enviado: true,
+      destinatarios,
+      periodo: rel.periodo,
+      metricas: rel.metricas,
+      modelo_ia: 'none',
+      tokens: 0,
+      mensagem: 'Relatório gerado e enviado ao n8n.',
+    });
+  });
+
+  app.post('/api/empresa/:ref/relatorio/enviar', autenticarToken, sendLimiter, sendHandler);
+  app.post('/api/empresa/:ref/relatorio/inteligente', autenticarToken, sendLimiter, sendHandler);
+  app.post('/api/empresa/:ref/relatorio/send', autenticarToken, sendLimiter, sendHandler);
+
   app.get(
     '/api/empresa/:ref/relatorio.pdf',
-    pdfLimiter,
     autenticarToken,
     asyncHandler(async (req: AuthRequest, res: Response) => {
-      const t0 = Date.now();
-      const auth_mode = authModeOf(req);
-      const db = getDb();
-
       const empresa = await findEmpresa(req.params.ref);
-      if (!empresa) {
-        await logPdfGeneration(db, { status: 'error', error: 'Empresa não encontrada', auth_mode, duration_ms: Date.now() - t0 });
-        return res.status(404).json({ error: 'Empresa não encontrada.' });
-      }
-
+      if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
       if (!podeAcessarEmpresa(req, empresa.id)) {
-        await logPdfGeneration(db, { empresa_id: empresa.id, empresa_nome: empresa.nome_empresa, status: 'forbidden', error: 'Sem permissão', auth_mode, duration_ms: Date.now() - t0 });
-        return res.status(403).json({ error: 'Sem permissão para baixar este relatório.' });
+        return res.status(403).json({ error: 'Sem permissão.' });
       }
-
-      const plan = String(empresa.plan || '').toLowerCase();
-      if (!planTemPdf(plan)) {
-        await logPdfGeneration(db, { empresa_id: empresa.id, empresa_nome: empresa.nome_empresa, status: 'forbidden', error: `Plano ${plan} sem PDF`, auth_mode, duration_ms: Date.now() - t0 });
-        return res.status(403).json({ error: 'Relatório PDF não disponível neste plano. Faça upgrade.', plan });
+      if (!empresaTemPdf(empresa)) {
+        return res.status(403).json({
+          error: 'PDF não disponível. Use o relatório inteligente.',
+          code: 'USE_RELATORIO_INTELIGENTE',
+        });
       }
-
-      const mesCheck = validateReportMonth(req.query.mes, {
-        defaultToCurrent: true,
-        minYear: 2020,
-        allowFutureMonths: 0,
+      return res.status(410).json({
+        error: 'PDF descontinuado. Use POST /api/empresa/:ref/relatorio/enviar',
+        code: 'PDF_GONE',
       });
-      if (!mesCheck.ok) {
-        await logPdfGeneration(db, { empresa_id: empresa.id, empresa_nome: empresa.nome_empresa, status: 'error', error: mesCheck.error, auth_mode, duration_ms: Date.now() - t0 });
-        return res.status(400).json({ error: mesCheck.error, exemplo: '2026-09' });
-      }
-      const mesAno = mesCheck.value;
-      const slug = empresa.slug || empresa.id.slice(0, 8);
-
-      const cached = readPdfCache(empresa.id, mesAno, plan);
-      if (cached) {
-        dispararRelatorioN8n(db, empresa.id, slug, mesAno);
-        await logPdfGeneration(db, { empresa_id: empresa.id, empresa_nome: empresa.nome_empresa, mes: mesAno, status: 'ok', bytes: cached.length, auth_mode: auth_mode + '_cache', duration_ms: Date.now() - t0 });
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="relatorio-${slug}-${mesAno}.pdf"`);
-        res.setHeader('X-PDF-Cache', 'HIT');
-        return res.send(cached);
-      }
-
-      await ensureUnidadesSchema(db);
-
-      let pdf: Buffer;
-      try {
-        pdf = await gerarRelatorioMensalPDFSeguro(db, empresa.id, mesAno);
-      } catch (e: any) {
-        await logPdfGeneration(db, { empresa_id: empresa.id, empresa_nome: empresa.nome_empresa, mes: mesAno, status: 'error', error: e?.message || 'Falha geração PDF', auth_mode, duration_ms: Date.now() - t0 });
-        throw e;
-      }
-
-      writePdfCache(empresa.id, mesAno, plan, pdf);
-      dispararRelatorioN8n(db, empresa.id, slug, mesAno);
-      await logPdfGeneration(db, { empresa_id: empresa.id, empresa_nome: empresa.nome_empresa, mes: mesAno, status: 'ok', bytes: pdf.length, auth_mode, duration_ms: Date.now() - t0 });
-
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="relatorio-${slug}-${mesAno}.pdf"`);
-      res.setHeader('X-PDF-Cache', 'MISS');
-      return res.send(pdf);
     })
   );
 }
