@@ -1,7 +1,7 @@
 /**
  * Adapter Postgres — API compatível sqlite (get/run/all/exec).
  * CRÍTICO: nunca transformar datetime(?,?) em timestamptz(?,?).
- * Também reescreve rowid / substr / createdAt (legado SQLite).
+ * Também reescreve rowid / substr / strftime / createdAt (legado SQLite).
  */
 import pg from 'pg';
 import type { Database } from 'sqlite';
@@ -45,6 +45,10 @@ function adaptSql(sql: string): string {
   s = s.replace(
     /substr\s*\(\s*([\w."]+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/gi,
     'substring(($1)::text from $2 for $3)'
+  );
+  s = s.replace(
+    /strftime\s*\(\s*['"]%Y-%m['"]\s*,\s*([\w."]+)\s*\)/gi,
+    "to_char(($1)::timestamptz, 'YYYY-MM')"
   );
 
   s = s.replace(/last_insert_rowid\s*\(\s*\)/gi, 'NULL');
