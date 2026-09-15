@@ -1,4 +1,4 @@
-/** Relatório inteligente (texto → n8n) + PDF legado se disponível. */
+/** Relatório inteligente (texto → n8n) + reentrega via retry queue. */
 import type { Express, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { getDb, findEmpresa } from '../lib/db.js';
@@ -7,6 +7,7 @@ import { validateReportMonth } from '../lib/dateValidation.js';
 import { empresaTemPdf, empresaTemRelatorio, planLabel } from '../lib/plans.js';
 import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
 import { notifyN8nAsync, n8nConfigured } from '../lib/n8n.js';
+import { enqueueRetry } from '../lib/retryQueue.js';
 import {
   buildRelatorioInteligente,
   normalizeDestinatarios,
@@ -50,6 +51,7 @@ export function mountRelatorioRoutes(app: Express) {
       plano: planLabel(String(empresa.plan || 'trial')),
       ...rel,
       n8n_configured: n8nConfigured(),
+      request_id: (req as any).requestId || null,
     });
   });
 
@@ -98,16 +100,10 @@ export function mountRelatorioRoutes(app: Express) {
     }
 
     const rel = await buildRelatorioInteligente(getDb(), empresa, mesAno);
+    const requestId = (req as any).requestId || null;
 
-    if (!n8nConfigured()) {
-      return res.status(503).json({
-        error: 'n8n não configurado. Defina N8N_WEBHOOK_URL no Render.',
-        code: 'N8N_OFF',
-        preview: { subject: rel.subject, texto: rel.texto, metricas: rel.metricas },
-      });
-    }
-
-    const ok = await notifyN8nAsync('report.generated', {
+    const payload = {
+      event: 'report.generated',
       empresa_id: empresa.id,
       slug: empresa.slug,
       nome_empresa: empresa.nome_empresa,
@@ -123,12 +119,51 @@ export function mountRelatorioRoutes(app: Express) {
       email: destinatarios.find((d) => d.canal === 'email')?.destino || null,
       modelo_ia: 'none',
       tokens: 0,
-    });
+      request_id: requestId,
+    };
+
+    if (!n8nConfigured()) {
+      // Enfileira mesmo assim — quando N8N_WEBHOOK_URL for definido, o worker reenvia
+      try {
+        await enqueueRetry({
+          jobType: 'n8n_dispatch',
+          dedupeKey: `report:${empresa.id}:${rel.periodo}:${destinatarios.map((d) => d.destino).join(',')}`,
+          payload: { event: 'report.generated', body: payload },
+          delayMs: 60_000,
+        });
+      } catch {
+        /* ok */
+      }
+      return res.status(503).json({
+        error: 'n8n não configurado. Relatório enfileirado para reentrega quando o webhook estiver ON.',
+        code: 'N8N_OFF',
+        queued: true,
+        request_id: requestId,
+        preview: { subject: rel.subject, texto: rel.texto, metricas: rel.metricas },
+      });
+    }
+
+    const ok = await notifyN8nAsync('report.generated', payload);
 
     if (!ok) {
-      return res.status(502).json({
-        error: 'n8n não aceitou o webhook (workflow Active?).',
-        code: 'N8N_REJECT',
+      let jobId = 0;
+      try {
+        jobId = await enqueueRetry({
+          jobType: 'n8n_dispatch',
+          dedupeKey: `report:${empresa.id}:${rel.periodo}:${Date.now()}`,
+          payload: { event: 'report.generated', body: payload },
+          delayMs: 20_000,
+        });
+      } catch (e: any) {
+        console.warn('[relatorio] enqueue fail:', e?.message || e);
+      }
+      return res.status(202).json({
+        success: false,
+        queued: true,
+        retry_job_id: jobId || null,
+        error: 'n8n não aceitou agora. Reentrega automática enfileirada.',
+        code: 'N8N_QUEUED',
+        request_id: requestId,
         preview: { subject: rel.subject, texto: rel.texto },
       });
     }
@@ -142,6 +177,7 @@ export function mountRelatorioRoutes(app: Express) {
       metricas: rel.metricas,
       modelo_ia: 'none',
       tokens: 0,
+      request_id: requestId,
       mensagem: 'Relatório gerado e enviado ao n8n.',
     });
   });
