@@ -1,6 +1,7 @@
 /**
  * Adapter Postgres — API compatível sqlite (get/run/all/exec).
  * CRÍTICO: nunca transformar datetime(?,?) em timestamptz(?,?).
+ * Também reescreve rowid / substr / createdAt (legado SQLite).
  */
 import pg from 'pg';
 import type { Database } from 'sqlite';
@@ -38,8 +39,25 @@ function adaptSql(sql: string): string {
   // Qualquer datetime(x,y) residual → NOW() (NUNCA timestamptz)
   s = s.replace(/\bdatetime\s*\([^)]*,[^)]*\)/gi, 'NOW()');
   s = s.replace(/\bdate\s*\([^)]*,[^)]*\)/gi, 'CURRENT_DATE');
-  // Proíbe timestamptz(x,y) se algo gerou isso
   s = s.replace(/\btimestamptz\s*\([^)]*,[^)]*\)/gi, 'NOW()');
+
+  // substr(col, 1, 7) em timestamps (SQLite YYYY-MM) → to_char
+  s = s.replace(
+    /substr\s*\(\s*([\w."]+)\s*,\s*1\s*,\s*7\s*\)/gi,
+    "to_char(($1)::timestamptz, 'YYYY-MM')"
+  );
+  // substr genérico em coluna de data ainda comum
+  s = s.replace(
+    /substr\s*\(\s*([\w."]+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/gi,
+    'substring(($1)::text from $2 for $3)'
+  );
+
+  // rowid / last_insert_rowid (SQLite) — Postgres não tem
+  s = s.replace(/last_insert_rowid\s*\(\s*\)/gi, 'NULL');
+  s = s.replace(/\browid\b/gi, 'ctid');
+
+  // createdAt sem aspas vira createdat no PG; forçar identificador citado
+  s = s.replace(/(?<!["\w])createdAt(?!["\w])/g, '"createdAt"');
 
   s = s.replace(/IFNULL\s*\(/gi, 'COALESCE(');
   s = s.replace(/INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT/gi, 'SERIAL PRIMARY KEY');
