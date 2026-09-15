@@ -28,6 +28,75 @@ function podeAcessarEmpresa(req: AuthRequest, empresaId: string): boolean {
 }
 
 export function mountRelatorioRoutes(app: Express) {
+  // --- Destinatários/configuração persistente do relatório ---
+  const getDestinatariosHandler = asyncHandler(async (req: AuthRequest, res: Response) => {
+    const empresa = await findEmpresa(req.params.ref);
+    if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
+    if (!podeAcessarEmpresa(req, empresa.id)) return res.status(403).json({ error: 'Sem permissão.' });
+
+    let raw: unknown = null;
+    try {
+      const row = await getDb().get<{ relatorio_destinatarios?: string }>(
+        'SELECT relatorio_destinatarios FROM empresas WHERE id = ?',
+        [empresa.id]
+      );
+      raw = row?.relatorio_destinatarios ?? null;
+    } catch {
+      raw = null;
+    }
+
+    let destinatarios: Array<{ canal: string; destino: string }> = [];
+    if (typeof raw === 'string' && raw.trim()) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          destinatarios = parsed
+            .map((d: any) => ({
+              canal: String(d?.canal ?? d?.channel ?? d?.tipo ?? '').trim().toLowerCase(),
+              destino: String(d?.destino ?? d?.destination ?? d?.phone ?? d?.email ?? d?.address ?? '').trim(),
+            }))
+            .filter((d) => d.canal && d.destino);
+        }
+      } catch {
+        destinatarios = [];
+      }
+    }
+
+    return res.json({
+      success: true,
+      ativo: destinatarios.length > 0,
+      destinatarios,
+    });
+  });
+
+  const saveDestinatariosHandler = asyncHandler(async (req: AuthRequest, res: Response) => {
+    const empresa = await findEmpresa(req.params.ref);
+    if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
+    if (!podeAcessarEmpresa(req, empresa.id)) return res.status(403).json({ error: 'Sem permissão.' });
+
+    const destinatarios = normalizeDestinatarios(req.body || {});
+    if (destinatarios.length > 20) {
+      return res.status(400).json({ error: 'Máximo de 20 destinatários.' });
+    }
+
+    await getDb().exec(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS relatorio_destinatarios TEXT`);
+    await getDb().run(
+      'UPDATE empresas SET relatorio_destinatarios = ? WHERE id = ?',
+      [JSON.stringify(destinatarios), empresa.id]
+    );
+
+    return res.json({
+      success: true,
+      ativo: destinatarios.length > 0,
+      destinatarios,
+    });
+  });
+
+  // GET/PUT/POST são aceitos para manter compatibilidade com versões do frontend.
+  app.get('/api/empresa/:ref/relatorio/destinatarios', autenticarToken, getDestinatariosHandler);
+  app.put('/api/empresa/:ref/relatorio/destinatarios', autenticarToken, saveDestinatariosHandler);
+  app.post('/api/empresa/:ref/relatorio/destinatarios', autenticarToken, saveDestinatariosHandler);
+
   // --- Relatório inteligente: preview ---
   const previewHandler = asyncHandler(async (req: AuthRequest, res: Response) => {
     const empresa = await findEmpresa(req.params.ref);
@@ -88,7 +157,6 @@ export function mountRelatorioRoutes(app: Express) {
 
     let destinatarios = normalizeDestinatarios(req.body || {});
 
-    // fallback: e-mail do usuário logado / dono
     if (destinatarios.length === 0) {
       try {
         const u = await getDb().get(
@@ -139,7 +207,6 @@ export function mountRelatorioRoutes(app: Express) {
       metricas: rel.metricas,
       destinatarios,
       channels: [...new Set(destinatarios.map((d) => d.canal))],
-      // atalho e-mail (workflows antigos)
       email: destinatarios.find((d) => d.canal === 'email')?.destino || null,
       modelo_ia: 'none',
       tokens: 0,
@@ -170,7 +237,7 @@ export function mountRelatorioRoutes(app: Express) {
   app.post('/api/empresa/:ref/relatorio/inteligente', autenticarToken, sendLimiter, sendHandler);
   app.post('/api/empresa/:ref/relatorio/send', autenticarToken, sendLimiter, sendHandler);
 
-  // --- PDF legado (mantido se o arquivo de geração existir) ---
+  // --- PDF legado ---
   app.get(
     '/api/empresa/:ref/relatorio.pdf',
     autenticarToken,
@@ -187,9 +254,7 @@ export function mountRelatorioRoutes(app: Express) {
         });
       }
 
-      // Preferir relatório inteligente se PDF engine não estiver disponível
       try {
-        // dynamic import evita quebrar boot se relatorioPdf sumiu
         const mod = await import('../relatorioPdf.js').catch(() => null);
         if (!mod?.gerarRelatorioMensalPDF) {
           return res.status(410).json({
