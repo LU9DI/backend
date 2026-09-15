@@ -24,7 +24,20 @@ function podeAcessarEmpresa(req: AuthRequest, empresaId: string): boolean {
   return Boolean(req.user?.empresa_id && req.user.empresa_id === empresaId);
 }
 
+async function ensureDestinatariosColumn() {
+  try {
+    await getDb().exec(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS relatorio_destinatarios TEXT`);
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    if (!/duplicate column|already exists/i.test(msg)) throw e;
+  }
+}
+
 export function mountRelatorioRoutes(app: Express) {
+  void ensureDestinatariosColumn().catch((e) =>
+    console.warn('[relatorio] coluna destinatários:', e?.message || e)
+  );
+
   const previewHandler = asyncHandler(async (req: AuthRequest, res: Response) => {
     const empresa = await findEmpresa(req.params.ref);
     if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
@@ -59,6 +72,36 @@ export function mountRelatorioRoutes(app: Express) {
   app.get('/api/empresa/:ref/relatorio', autenticarToken, previewHandler);
   app.post('/api/empresa/:ref/relatorio/preview', autenticarToken, sendLimiter, previewHandler);
 
+  app.put('/api/empresa/:ref/relatorio/destinatarios', autenticarToken, asyncHandler(async (req: AuthRequest, res: Response) => {
+    const empresa = await findEmpresa(req.params.ref);
+    if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
+    if (!podeAcessarEmpresa(req, empresa.id)) {
+      return res.status(403).json({ error: 'Sem permissão.' });
+    }
+    if (!empresaTemRelatorio(empresa)) {
+      return res.status(403).json({
+        error: 'Relatório inteligente não disponível neste plano.',
+        code: 'PLAN_NO_REPORT',
+      });
+    }
+
+    await ensureDestinatariosColumn();
+    const destinatarios = normalizeDestinatarios(req.body || {});
+    if (destinatarios.length === 0) {
+      return res.status(400).json({
+        error: 'Informe pelo menos um destinatário válido.',
+        code: 'NO_DESTINATARIO',
+      });
+    }
+
+    await getDb().run(
+      'UPDATE empresas SET relatorio_destinatarios = ? WHERE id = ?',
+      [JSON.stringify(destinatarios), empresa.id]
+    );
+
+    return res.json({ success: true, destinatarios });
+  }));
+
   const sendHandler = asyncHandler(async (req: AuthRequest, res: Response) => {
     const empresa = await findEmpresa(req.params.ref);
     if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
@@ -81,6 +124,25 @@ export function mountRelatorioRoutes(app: Express) {
     const mesAno = mesCheck.ok ? mesCheck.value : new Date().toISOString().slice(0, 7);
 
     let destinatarios = normalizeDestinatarios(req.body || {});
+    if (destinatarios.length === 0) {
+      try {
+        await ensureDestinatariosColumn();
+        const saved = await getDb().get<{ relatorio_destinatarios?: string }>(
+          'SELECT relatorio_destinatarios FROM empresas WHERE id = ?',
+          [empresa.id]
+        );
+        if (saved?.relatorio_destinatarios) {
+          try {
+            const parsed = JSON.parse(saved.relatorio_destinatarios);
+            if (Array.isArray(parsed)) destinatarios = normalizeDestinatarios({ destinatarios: parsed });
+          } catch {
+            /* */
+          }
+        }
+      } catch {
+        /* */
+      }
+    }
     if (destinatarios.length === 0) {
       try {
         const u = await getDb().get(
@@ -123,7 +185,6 @@ export function mountRelatorioRoutes(app: Express) {
     };
 
     if (!n8nConfigured()) {
-      // Enfileira mesmo assim — quando N8N_WEBHOOK_URL for definido, o worker reenvia
       try {
         await enqueueRetry({
           jobType: 'n8n_dispatch',
