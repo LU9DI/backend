@@ -188,8 +188,10 @@ export async function retryQueueStats(db: Database = getDb()) {
   );
   const by: Record<string, number> = {};
   for (const r of rows || []) by[r.status] = Number(r.c);
+  const nowIso = new Date().toISOString();
   const pendingDue = await db.get(
-    `SELECT COUNT(*) as c FROM retry_queue WHERE status = 'pending' AND next_run_at <= datetime('now')`
+    `SELECT COUNT(*) as c FROM retry_queue WHERE status = 'pending' AND next_run_at <= ?`,
+    [nowIso]
   );
   return {
     by_status: by,
@@ -218,8 +220,6 @@ export function startRetryWorker() {
     }
   };
 
-  const t = setInterval(tick, interval);
-  if (typeof t === 'object' && t && 'unref' in t) (t as NodeJS.Timeout).unref();
-  setTimeout(tick, 5000);
-  console.log(`🔄 Retry worker a cada ${Math.round(interval / 1000)}s`);
+  tick();
+  setInterval(tick, interval);
 }
