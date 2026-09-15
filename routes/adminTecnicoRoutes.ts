@@ -135,7 +135,7 @@ export function mountAdminTecnicoRoutes(app: Express) {
       const mpLast24hOk =
         mpHealth.total === 0 ? null : mpHealth.errors === 0 && mpHealth.ok > 0;
 
-      const cols = (await db.all(`PRAGMA table_info(reviews)`)).map((c: any) => c.name);
+      const cols = (await db.all(`SELECT column_name AS name FROM information_schema.columns WHERE table_name = 'reviews'`)).map((c: any) => c.name);
       if (!cols.includes('client_whatsapp')) {
         try {
           await db.exec(`ALTER TABLE reviews ADD COLUMN client_whatsapp TEXT`);
@@ -145,13 +145,13 @@ export function mountAdminTecnicoRoutes(app: Express) {
       }
 
       const criticas = await db.all(
-        `SELECT r.id, r.name, r.rating, r.comment, r.ai_reply, r.ai_tags, r.createdAt,
-                r.client_whatsapp, r.empresa_id, r.origin,
+        `SELECT r.id, r.name, r.rating, r.comment, r.ai_reply, r.ai_tags,
+                r.createdat AS "createdAt", r.client_whatsapp, r.empresa_id, r.origin,
                 e.nome_empresa, e.plan, e.slug
          FROM reviews r
          LEFT JOIN empresas e ON e.id = r.empresa_id
-         WHERE r.rating <= 3 AND IFNULL(r.is_test, 0) = 0
-         ORDER BY r.createdAt DESC
+         WHERE r.rating <= 3 AND COALESCE(r.is_test, 0) = 0
+         ORDER BY r.createdat DESC
          LIMIT 80`
       );
 
@@ -172,169 +172,41 @@ export function mountAdminTecnicoRoutes(app: Express) {
           comment: r.comment,
           ai_reply: r.ai_reply,
           ai_tags: tags,
-          client_whatsapp: r.client_whatsapp || null,
           createdAt: r.createdAt,
+          client_whatsapp: r.client_whatsapp,
           empresa_id: r.empresa_id,
-          nome_empresa: r.nome_empresa || r.empresa_id,
+          origin: r.origin,
+          nome_empresa: r.nome_empresa,
           plan: r.plan,
           slug: r.slug,
-          origin: r.origin || 'publico',
-          tem_ia: Boolean(r.ai_reply),
         };
       });
 
-      const comIa = criticasFmt.filter((c: any) => c.tem_ia).length;
-      const semIa = criticasFmt.length - comIa;
-
-      const pdfLogs = await recentPdfLogs(db, 40);
-      const pdfSince = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-      const pdfStats = await db.get(
-        `SELECT
-           COUNT(*) as total,
-           SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) as ok_count,
-           SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as err_count,
-           SUM(CASE WHEN status = 'forbidden' THEN 1 ELSE 0 END) as forbidden_count,
-           SUM(CASE WHEN auth_mode LIKE 'jwt%' THEN 1 ELSE 0 END) as jwt_count,
-           MAX(created_at) as last_at
-         FROM pdf_generation_log
-         WHERE created_at >= ?`,
-        [pdfSince]
-      );
-
-      const pdfOk24h =
-        Number(pdfStats?.total || 0) === 0
-          ? null
-          : Number(pdfStats?.err_count || 0) === 0 && Number(pdfStats?.ok_count || 0) > 0;
-
-      let retry: any = { by_status: {}, pending_due: 0 };
-      try {
-        retry = await retryQueueStats(db);
-      } catch {
-        /* */
-      }
+      const retry = await retryQueueStats(db);
+      const pdfLogs = await recentPdfLogs(db, 20);
 
       res.json({
-        gerado_em: new Date().toISOString(),
-        webhooks: {
-          stripe: {
-            configurado: stripeConfigured(),
-            ok: stripeConfigured() ? stripeLast24hOk : false,
-            detalhe: !stripeConfigured()
-              ? 'STRIPE_SECRET_KEY ausente'
-              : stripeHealth.total === 0
-                ? 'Nenhum evento nas últimas 24h (aguardando webhooks)'
-                : `${stripeHealth.ok} ok / ${stripeHealth.errors} erro(s) em 24h`,
-            last_at: stripeHealth.last_at,
-            last_age: ageLabel(stripeHealth.last_at),
-            stats_24h: stripeHealth,
-            eventos: (allEvents || []).filter((e: any) => e.source === 'stripe').slice(0, 20),
-          },
-          n8n: {
-            configurado: Boolean(n8nUrl) || n8nHealth.total > 0,
-            url_mascarada: n8nUrl
-              ? n8nUrl.replace(/^(https?:\/\/[^/]+).*/, '$1/…')
-              : null,
-            inbound: '/api/webhook/n8n',
-            ok: n8nLast24hOk !== null ? n8nLast24hOk : n8nPingOk,
-            ping_ok: n8nPingOk,
-            detalhe:
-              n8nHealth.total > 0
-                ? `${n8nHealth.ok} eventos ok / ${n8nHealth.errors} erro(s) em 24h · ping: ${n8nPingDetail}`
-                : n8nPingDetail,
-            last_at: n8nHealth.last_at,
-            last_age: ageLabel(n8nHealth.last_at),
-            stats_24h: n8nHealth,
-            eventos: (allEvents || []).filter((e: any) => e.source === 'n8n').slice(0, 20),
-          },
-          paypal: {
-            configurado: paypalConfigured(),
-            webhook_id: paypalWebhookConfigured(),
-            ok: !paypalConfigured() ? false : paypalLast24hOk,
-            detalhe: !paypalConfigured()
-              ? 'PAYPAL_CLIENT_ID/SECRET ausentes'
-              : !paypalWebhookConfigured()
-                ? 'PAYPAL_WEBHOOK_ID ausente (verify em prod)'
-                : paypalHealth.total === 0
-                  ? 'Nenhum evento PayPal em 24h'
-                  : `${paypalHealth.ok} ok / ${paypalHealth.errors} erro(s) em 24h`,
-            last_at: paypalHealth.last_at,
-            last_age: ageLabel(paypalHealth.last_at),
-            stats_24h: paypalHealth,
-            eventos: (allEvents || []).filter((e: any) => e.source === 'paypal').slice(0, 20),
-          },
-          mercadopago: {
-            configurado: mpConfigured(),
-            inbound: '/api/webhook/mercadopago',
-            ok: !mpConfigured() ? false : mpLast24hOk,
-            detalhe: !mpConfigured()
-              ? 'MP_ACCESS_TOKEN ausente'
-              : mpHealth.total === 0
-                ? 'Nenhum evento Pix/MP em 24h'
-                : `${mpHealth.ok} ok / ${mpHealth.errors} erro(s) em 24h`,
-            last_at: mpHealth.last_at,
-            last_age: ageLabel(mpHealth.last_at),
-            stats_24h: mpHealth,
-            eventos: (allEvents || [])
-              .filter((e: any) => e.source === 'mercadopago')
-              .slice(0, 20),
-          },
-        },
-        criticas_retidas: {
-          total: criticasFmt.length,
-          com_resposta_ia: comIa,
-          sem_resposta_ia: semIa,
-          items: criticasFmt,
-        },
-        pdf: {
-          ok: pdfOk24h,
-          detalhe:
-            Number(pdfStats?.total || 0) === 0
-              ? 'Nenhuma geração nas últimas 24h'
-              : `${pdfStats?.ok_count || 0} ok / ${pdfStats?.err_count || 0} erro(s) / ${pdfStats?.forbidden_count || 0} bloqueado(s) · JWT: ${pdfStats?.jwt_count || 0}`,
-          last_at: pdfStats?.last_at || null,
-          last_age: ageLabel(pdfStats?.last_at || null),
-          stats_24h: {
-            total: Number(pdfStats?.total || 0),
-            ok: Number(pdfStats?.ok_count || 0),
-            errors: Number(pdfStats?.err_count || 0),
-            forbidden: Number(pdfStats?.forbidden_count || 0),
-            jwt: Number(pdfStats?.jwt_count || 0),
-          },
-          logs: pdfLogs || [],
-        },
-        retry_queue: retry,
-        sistema: {
-          smtp: smtpConfigured(),
+        ok: true,
+        integrations: {
           stripe: stripeConfigured(),
           paypal: paypalConfigured(),
+          paypal_webhook: paypalWebhookConfigured(),
           pix: mpConfigured(),
-          groq: Boolean(process.env.GROQ_API_KEY?.trim()),
-          gemini: Boolean(
-            process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_AI_API_KEY?.trim()
-          ),
-          jobs_secret: Boolean(process.env.JOBS_SECRET?.trim()),
+          smtp: smtpConfigured(),
+          n8n: Boolean(n8nUrl),
         },
+        health24h: {
+          stripe: stripeLast24hOk,
+          n8n: n8nLast24hOk,
+          paypal: paypalLast24hOk,
+          pix: mpLast24hOk,
+        },
+        n8n_ping: { ok: n8nPingOk, detail: n8nPingDetail },
+        events: allEvents,
+        criticas: criticasFmt,
+        retry,
+        pdf: pdfLogs,
       });
-    })
-  );
-
-  app.get(
-    '/api/admin/criticas-retidas',
-    autenticarToken,
-    asyncHandler(async (req: AuthRequest, res: Response) => {
-      if (!requireAdmin(req, res)) return;
-      const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 80));
-      const rows = await getDb().all(
-        `SELECT r.id, r.name, r.rating, r.comment, r.ai_reply, r.ai_tags, r.createdAt,
-                r.client_whatsapp, r.empresa_id, e.nome_empresa, e.plan
-         FROM reviews r
-         LEFT JOIN empresas e ON e.id = r.empresa_id
-         WHERE r.rating <= 3 AND IFNULL(r.is_test, 0) = 0
-         ORDER BY r.createdAt DESC
-         LIMIT ?`,
-        [limit]
-      );
-      res.json({ items: rows || [], total: (rows || []).length });
     })
   );
 }
