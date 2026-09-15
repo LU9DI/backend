@@ -532,8 +532,10 @@ export function mountPixRoutes(app: Express) {
       await ensurePixTables(db);
 
       const body = req.body || {};
-      const type = String(body.type || body.action || body.topic || '');
-      const dataId = String(body.data?.id || body.id || (body as any)['data.id'] || '').trim();
+      // Mercado Pago signs the data.id from the query string, not the JSON body.
+      const queryDataId = String((req.query as any)['data.id'] || '').trim();
+      const type = String(req.query.type || body.type || body.action || body.topic || '').trim();
+      const dataId = String(queryDataId || body.data?.id || body.id || (body as any)['data.id'] || '').trim();
 
       const xSig = (req.headers['x-signature'] as string) || '';
       const xReq = (req.headers['x-request-id'] as string) || '';
@@ -542,7 +544,7 @@ export function mountPixRoutes(app: Express) {
         const okSig = verifyMpWebhookSignature({
           xSignature: xSig,
           xRequestId: xReq,
-          dataId: dataId || null,
+          dataId: queryDataId || dataId || null,
         });
         if (!okSig) {
           await logWebhookEvent(db, {
@@ -555,8 +557,8 @@ export function mountPixRoutes(app: Express) {
         }
       }
 
-      const topic = String(req.query.topic || body.topic || type || '');
-      const qid = String(req.query.id || dataId || '').trim();
+      const topic = String(req.query.topic || req.query.type || body.topic || type || '').trim();
+      const qid = String(req.query.id || queryDataId || dataId || '').trim();
 
       try {
         if (
