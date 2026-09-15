@@ -8,10 +8,9 @@ import cookieParser from 'cookie-parser';
 import 'dotenv/config';
 import type { Server } from 'http';
 
-import { assertEnvOrExit, validateEnv } from './lib/env.js';
+import { assertEnvOrExit } from './lib/env.js';
 import { initDB, getDb, dbEngine, pingDb } from './lib/db.js';
 import { requireJwtSecret, setAuthCookie, autenticarToken } from './lib/auth.js';
-import { jwtRotationStatus } from './lib/jwtKeys.js';
 import { buildCorsOptions } from './lib/cors.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { requestIdMiddleware, securityHeaders } from './middleware/security.js';
@@ -45,7 +44,6 @@ app.use((req, res, next) => {
 });
 app.use(cors(buildCorsOptions()));
 
-/** Live: sobe mesmo se DB estiver lento (Render port scan). */
 app.get('/api/live', (_req, res) => {
   res.status(200).json({ ok: true, live: true, build: BUILD, time: new Date().toISOString() });
 });
@@ -67,12 +65,8 @@ app.get('/api/ready', async (_req, res) => {
   }
 });
 
-function softFlag(fn: () => boolean, fallback = false): boolean {
-  try {
-    return Boolean(fn());
-  } catch {
-    return fallback;
-  }
+function envOn(...keys: string[]): boolean {
+  return keys.some((k) => Boolean(String(process.env[k] || '').trim()));
 }
 
 app.get('/api/health', async (_req, res) => {
@@ -101,52 +95,15 @@ app.get('/api/health', async (_req, res) => {
     db_ok: dbPing.ok,
     build: BUILD,
     modules: getMountResults(),
-    stripe: softFlag(() => require('./stripeBilling.js').stripeConfigured?.() ?? false),
-    paypal: softFlag(asyncFlagSync('paypal')),
-    pix: softFlag(asyncFlagSync('mp')),
-    wechat: softFlag(asyncFlagSync('wechat')),
-    ai: softFlag(() => {
-      try {
-        return require('./groqService.js').aiConfigured();
-      } catch {
-        return false;
-      }
-    }),
-    push: softFlag(() => {
-      try {
-        return require('./lib/push.js').pushConfigured();
-      } catch {
-        return false;
-      }
-    }),
-    smtp: softFlag(() => {
-      try {
-        return require('./lib/mailer.js').smtpConfigured();
-      } catch {
-        return false;
-      }
-    }),
-    n8n: softFlag(() => {
-      try {
-        return require('./lib/n8n.js').n8nConfigured();
-      } catch {
-        return false;
-      }
-    }),
-    plan_switch: softFlag(() => {
-      try {
-        return require('./lib/plans.js').allowPlanSwitch();
-      } catch {
-        return false;
-      }
-    }),
-    jwt: softFlag(() => {
-      try {
-        return require('./lib/jwtKeys.js').jwtRotationStatus();
-      } catch {
-        return { active: false };
-      }
-    }),
+    stripe: envOn('STRIPE_SECRET_KEY'),
+    paypal: envOn('PAYPAL_CLIENT_ID') && envOn('PAYPAL_CLIENT_SECRET'),
+    pix: envOn('MP_ACCESS_TOKEN'),
+    wechat: envOn('WECHAT_APP_ID') && envOn('WECHAT_MCH_ID'),
+    ai: envOn('GROQ_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY'),
+    push: envOn('VAPID_PUBLIC_KEY') && envOn('VAPID_PRIVATE_KEY'),
+    smtp: envOn('SMTP_HOST') && envOn('SMTP_FROM'),
+    n8n: envOn('N8N_WEBHOOK_URL'),
+    plan_switch: String(process.env.ALLOW_PLAN_SWITCH || '') === '1',
     ai_latency: aiLatency,
     http_latency: getHttpMetrics().global,
     env: process.env.NODE_ENV || 'development',
@@ -155,18 +112,6 @@ app.get('/api/health', async (_req, res) => {
 
   res.status(dbPing.ok ? 200 : 503).json(body);
 });
-
-function asyncFlagSync(kind: 'paypal' | 'mp' | 'wechat'): () => boolean {
-  return () => {
-    try {
-      if (kind === 'paypal') return require('./lib/paypal.js').paypalConfigured();
-      if (kind === 'mp') return require('./lib/mercadopago.js').mpConfigured();
-      return require('./lib/wechat.js').wechatConfigured();
-    } catch {
-      return false;
-    }
-  };
-}
 
 app.get('/api/metrics', (req, res) => {
   const secret = process.env.JOBS_SECRET?.trim();
@@ -212,11 +157,9 @@ async function schemaSafe(name: string, fn: () => Promise<void>) {
 }
 
 async function main() {
-  // 1) Banco — único hard requirement após env
   await initDB();
   console.log(`🐘 DB engine=${typeof dbEngine === 'function' ? dbEngine() : '?'}`);
 
-  // 2) Schemas opcionais isolados
   await schemaSafe('unidades', async () => {
     const { ensureUnidadesSchema } = await import('./lib/unidades.js');
     await ensureUnidadesSchema(getDb());
@@ -276,7 +219,6 @@ async function main() {
     await ensureReviewTreatmentColumns(getDb());
   });
 
-  // 3) Jobs de boot NÃO bloqueiam e NÃO derrubam
   void (async () => {
     if (process.env.BACKFILL_SENTIMENT === '1') {
       try {
@@ -303,109 +245,32 @@ async function main() {
     }
   })();
 
-  // 4) Rotas CORE (ainda isoladas — se uma falhar, as outras sobem)
   await safeImportMount('trial', () => import('./routes/trialRoutes.js'), 'mountTrialRoutes', app);
   await safeImportMount('auth', () => import('./routes/authRoutes.js'), 'mountAuthRoutes', app);
-  await safeImportMount(
-    'empresa',
-    () => import('./routes/empresaRoutes.js'),
-    'mountEmpresaRoutes',
-    app
-  );
-  await safeImportMount(
-    'review',
-    () => import('./routes/reviewRoutes.js'),
-    'mountReviewRoutes',
-    app
-  );
+  await safeImportMount('empresa', () => import('./routes/empresaRoutes.js'), 'mountEmpresaRoutes', app);
+  await safeImportMount('review', () => import('./routes/reviewRoutes.js'), 'mountReviewRoutes', app);
 
-  // 5) Rotas periféricas — falha isolada
-  await safeImportMount(
-    'adminDashboard',
-    () => import('./routes/adminDashboardRoutes.js'),
-    'mountAdminDashboardRoutes',
-    app
-  );
-  await safeImportMount(
-    'adminTecnico',
-    () => import('./routes/adminTecnicoRoutes.js'),
-    'mountAdminTecnicoRoutes',
-    app
-  );
-  await safeImportMount(
-    'adminNegocio',
-    () => import('./routes/adminNegocioRoutes.js'),
-    'mountAdminNegocioRoutes',
-    app
-  );
-  await safeImportMount(
-    'tokenMetrics',
-    () => import('./routes/tokenMetricsRoutes.js'),
-    'mountTokenMetricsRoutes',
-    app
-  );
-  await safeImportMount(
-    'relatorio',
-    () => import('./routes/relatorioRoutes.js'),
-    'mountRelatorioRoutes',
-    app
-  );
-  await safeImportMount(
-    'planSwitch',
-    () => import('./routes/planSwitchRoutes.js'),
-    'mountPlanSwitchRoutes',
-    app
-  );
-  await safeImportMount(
-    'webauthn',
-    () => import('./routes/webauthnRoutes.js'),
-    'mountWebAuthnRoutes',
-    app
-  );
+  await safeImportMount('adminDashboard', () => import('./routes/adminDashboardRoutes.js'), 'mountAdminDashboardRoutes', app);
+  await safeImportMount('adminTecnico', () => import('./routes/adminTecnicoRoutes.js'), 'mountAdminTecnicoRoutes', app);
+  await safeImportMount('adminNegocio', () => import('./routes/adminNegocioRoutes.js'), 'mountAdminNegocioRoutes', app);
+  await safeImportMount('tokenMetrics', () => import('./routes/tokenMetricsRoutes.js'), 'mountTokenMetricsRoutes', app);
+  await safeImportMount('relatorio', () => import('./routes/relatorioRoutes.js'), 'mountRelatorioRoutes', app);
+  await safeImportMount('planSwitch', () => import('./routes/planSwitchRoutes.js'), 'mountPlanSwitchRoutes', app);
+  await safeImportMount('webauthn', () => import('./routes/webauthnRoutes.js'), 'mountWebAuthnRoutes', app);
   await safeImportMount('push', () => import('./routes/pushRoutes.js'), 'mountPushRoutes', app);
   await safeImportMount('jobs', () => import('./routes/jobsRoutes.js'), 'mountJobsRoutes', app);
-  await safeImportMount(
-    'monthlyReports',
-    () => import('./routes/monthlyReportJobRoutes.js'),
-    'mountMonthlyReportJobRoutes',
-    app
-  );
+  await safeImportMount('monthlyReports', () => import('./routes/monthlyReportJobRoutes.js'), 'mountMonthlyReportJobRoutes', app);
   await safeImportMount('paypal', () => import('./routes/paypalRoutes.js'), 'mountPayPalRoutes', app);
   await safeImportMount('pix', () => import('./routes/pixRoutes.js'), 'mountPixRoutes', app);
   await safeImportMount('wechat', () => import('./routes/wechatRoutes.js'), 'mountWechatRoutes', app);
-  await safeImportMount(
-    'subscription',
-    () => import('./routes/subscriptionRoutes.js'),
-    'mountSubscriptionRoutes',
-    app
-  );
-  await safeImportMount(
-    'unidade',
-    () => import('./routes/unidadeRoutes.js'),
-    'mountUnidadeRoutes',
-    app
-  );
+  await safeImportMount('subscription', () => import('./routes/subscriptionRoutes.js'), 'mountSubscriptionRoutes', app);
+  await safeImportMount('unidade', () => import('./routes/unidadeRoutes.js'), 'mountUnidadeRoutes', app);
   await safeImportMount('export', () => import('./routes/exportRoutes.js'), 'mountExportRoutes', app);
-  await safeImportMount(
-    'publicPlanos',
-    () => import('./routes/publicPlanosRoutes.js'),
-    'mountPublicPlanosRoutes',
-    app
-  );
+  await safeImportMount('publicPlanos', () => import('./routes/publicPlanosRoutes.js'), 'mountPublicPlanosRoutes', app);
   await safeImportMount('audit', () => import('./routes/auditRoutes.js'), 'mountAuditRoutes', app);
-  await safeImportMount(
-    'n8nEmail',
-    () => import('./routes/n8nEmailRoutes.js'),
-    'mountN8nEmailRoutes',
-    app
-  );
+  await safeImportMount('n8nEmail', () => import('./routes/n8nEmailRoutes.js'), 'mountN8nEmailRoutes', app);
   await safeImportMount('n8n', () => import('./routes/n8nRoutes.js'), 'mountN8nRoutes', app);
-  await safeImportMount(
-    'smtpTest',
-    () => import('./routes/smtpTestRoutes.js'),
-    'mountSmtpTestRoutes',
-    app
-  );
+  await safeImportMount('smtpTest', () => import('./routes/smtpTestRoutes.js'), 'mountSmtpTestRoutes', app);
 
   await safeMount('adminLogin', async () => {
     const { mountAdminLoginRoute } = await import('./adminLoginRoute.js');
@@ -433,14 +298,11 @@ async function main() {
 
   const off = getMountResults().filter((r) => !r.ok);
   console.log(`📦 build ${BUILD.version} marker=${BUILD.marker}`);
-  console.log(
-    `📋 módulos: ${getMountResults().filter((r) => r.ok).length} ok, ${off.length} off`
-  );
+  console.log(`📋 módulos: ${getMountResults().filter((r) => r.ok).length} ok, ${off.length} off`);
   if (off.length) {
     for (const o of off) console.warn(`   · ${o.name}: ${o.error}`);
   }
 
-  // Flags de integração (nunca throw)
   try {
     const { stripeConfigured } = await import('./stripeBilling.js');
     const { paypalConfigured } = await import('./lib/paypal.js');
