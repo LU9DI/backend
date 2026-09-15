@@ -1,25 +1,21 @@
-/**
- * Logs operacionais para o painel técnico do admin:
- * - webhook_events (Stripe, n8n, etc.)
- * - pdf_generation_log (relatórios mensais)
- */
+/** Logs operacionais (webhooks, PDF). Postgres-safe. */
 import type { Database } from 'sqlite';
 
 export async function ensureOpsTables(db: Database): Promise<void> {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS webhook_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       source TEXT NOT NULL,
       event_type TEXT,
       status TEXT NOT NULL DEFAULT 'ok',
       detail TEXT,
       payload_summary TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
   await db.exec(`
     CREATE TABLE IF NOT EXISTS pdf_generation_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       empresa_id TEXT,
       empresa_nome TEXT,
       mes TEXT,
@@ -28,15 +24,15 @@ export async function ensureOpsTables(db: Database): Promise<void> {
       duration_ms INTEGER,
       error TEXT,
       auth_mode TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  await db.exec(
-    `CREATE INDEX IF NOT EXISTS idx_webhook_events_created ON webhook_events(created_at DESC)`
-  );
-  await db.exec(
-    `CREATE INDEX IF NOT EXISTS idx_pdf_log_created ON pdf_generation_log(created_at DESC)`
-  );
+  try {
+    await db.exec(`CREATE INDEX IF NOT EXISTS idx_webhook_events_created ON webhook_events(created_at)`);
+    await db.exec(`CREATE INDEX IF NOT EXISTS idx_pdf_log_created ON pdf_generation_log(created_at)`);
+  } catch {
+    /* ok */
+  }
 }
 
 export async function logWebhookEvent(
@@ -52,14 +48,15 @@ export async function logWebhookEvent(
   try {
     await ensureOpsTables(db);
     await db.run(
-      `INSERT INTO webhook_events (source, event_type, status, detail, payload_summary)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO webhook_events (source, event_type, status, detail, payload_summary, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       [
         String(opts.source || 'unknown').slice(0, 40),
         opts.event_type ? String(opts.event_type).slice(0, 80) : null,
         opts.status || 'ok',
         opts.detail ? String(opts.detail).slice(0, 500) : null,
         opts.payload_summary ? String(opts.payload_summary).slice(0, 1000) : null,
+        new Date().toISOString(),
       ]
     );
   } catch (e: any) {
@@ -84,8 +81,8 @@ export async function logPdfGeneration(
     await ensureOpsTables(db);
     await db.run(
       `INSERT INTO pdf_generation_log
-        (empresa_id, empresa_nome, mes, status, bytes, duration_ms, error, auth_mode)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        (empresa_id, empresa_nome, mes, status, bytes, duration_ms, error, auth_mode, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         opts.empresa_id || null,
         opts.empresa_nome ? String(opts.empresa_nome).slice(0, 120) : null,
@@ -95,6 +92,7 @@ export async function logPdfGeneration(
         opts.duration_ms ?? null,
         opts.error ? String(opts.error).slice(0, 500) : null,
         opts.auth_mode || null,
+        new Date().toISOString(),
       ]
     );
   } catch (e: any) {
@@ -104,18 +102,16 @@ export async function logPdfGeneration(
 
 export async function recentWebhookEvents(db: Database, limit = 30) {
   await ensureOpsTables(db);
-  return db.all(
-    `SELECT * FROM webhook_events ORDER BY id DESC LIMIT ?`,
-    [Math.min(100, Math.max(1, limit))]
-  );
+  return db.all(`SELECT * FROM webhook_events ORDER BY id DESC LIMIT ?`, [
+    Math.min(100, Math.max(1, limit)),
+  ]);
 }
 
 export async function recentPdfLogs(db: Database, limit = 30) {
   await ensureOpsTables(db);
-  return db.all(
-    `SELECT * FROM pdf_generation_log ORDER BY id DESC LIMIT ?`,
-    [Math.min(100, Math.max(1, limit))]
-  );
+  return db.all(`SELECT * FROM pdf_generation_log ORDER BY id DESC LIMIT ?`, [
+    Math.min(100, Math.max(1, limit)),
+  ]);
 }
 
 export async function webhookHealth(db: Database, source: string, hours = 24) {

@@ -1,13 +1,5 @@
 /**
- * Fila de retry persistente (SQLite) com backoff exponencial.
- *
- * Tipos comuns:
- *   paypal_webhook | email | capture_paypal | generic
- *
- * Env:
- *   RETRY_MAX_ATTEMPTS=8
- *   RETRY_BASE_MS=30000
- *   RETRY_WORKER_INTERVAL_MS=60000
+ * Fila de retry persistente com backoff (SQLite + Postgres).
  */
 import type { Database } from 'sqlite';
 import { getDb } from './db.js';
@@ -16,33 +8,45 @@ export type RetryJobType =
   | 'paypal_webhook'
   | 'email'
   | 'capture_paypal'
+  | 'mp_webhook'
   | 'generic'
   | string;
+
+function nowSql(): string {
+  return new Date().toISOString();
+}
 
 export async function ensureRetryQueue(db: Database = getDb()) {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS retry_queue (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       job_type TEXT NOT NULL,
       payload TEXT NOT NULL,
       attempts INTEGER NOT NULL DEFAULT 0,
       max_attempts INTEGER NOT NULL DEFAULT 8,
-      next_run_at TEXT NOT NULL,
+      next_run_at TIMESTAMPTZ NOT NULL,
       last_error TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       dedupe_key TEXT
-    );
+    )
   `);
-  await db.exec(
-    `CREATE INDEX IF NOT EXISTS idx_retry_pending ON retry_queue(status, next_run_at)`
-  );
-  await db.exec(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_retry_dedupe ON retry_queue(dedupe_key) WHERE dedupe_key IS NOT NULL AND status = 'pending'`
-  ).catch(() => {
-    /* SQLite partial unique pode falhar em versões antigas — ignora */
-  });
+  // SQLite fallback se SERIAL falhar — já existe tabela
+  try {
+    await db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_retry_pending ON retry_queue(status, next_run_at)`
+    );
+  } catch {
+    /* ok */
+  }
+  try {
+    await db.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_retry_dedupe ON retry_queue(dedupe_key) WHERE dedupe_key IS NOT NULL AND status = 'pending'`
+    );
+  } catch {
+    /* partial unique pode falhar em alguns engines */
+  }
 }
 
 function maxAttempts(): number {
@@ -53,7 +57,6 @@ function baseMs(): number {
   return Math.max(1000, Number(process.env.RETRY_BASE_MS || 30_000));
 }
 
-/** backoff: base * 2^attempt (+ jitter), teto 6h */
 export function nextBackoffIso(attempts: number): string {
   const exp = Math.min(attempts, 10);
   const ms = Math.min(6 * 60 * 60 * 1000, baseMs() * Math.pow(2, exp));
@@ -86,21 +89,22 @@ export async function enqueueRetry(
   }
 
   const r = await db.run(
-    `INSERT INTO retry_queue (job_type, payload, attempts, max_attempts, next_run_at, status, dedupe_key)
-     VALUES (?, ?, 0, ?, ?, 'pending', ?)`,
+    `INSERT INTO retry_queue (job_type, payload, attempts, max_attempts, next_run_at, status, dedupe_key, created_at, updated_at)
+     VALUES (?, ?, 0, ?, ?, 'pending', ?, ?, ?)`,
     [
       opts.jobType,
       JSON.stringify(opts.payload),
       opts.maxAttempts ?? maxAttempts(),
       next,
       opts.dedupeKey || null,
+      nowSql(),
+      nowSql(),
     ]
   );
-  return Number(r.lastID);
+  return Number(r.lastID || 0);
 }
 
 type Handler = (payload: any, job: any) => Promise<void>;
-
 const handlers = new Map<string, Handler>();
 
 export function registerRetryHandler(jobType: string, handler: Handler) {
@@ -129,8 +133,8 @@ export async function processRetryQueue(
     const handler = handlers.get(job.job_type);
     if (!handler) {
       await db.run(
-        `UPDATE retry_queue SET status = 'dead', last_error = ?, updated_at = datetime('now') WHERE id = ?`,
-        [`handler ausente: ${job.job_type}`, job.id]
+        `UPDATE retry_queue SET status = 'dead', last_error = ?, updated_at = ? WHERE id = ?`,
+        [`handler ausente: ${job.job_type}`, nowSql(), job.id]
       );
       dead++;
       continue;
@@ -141,8 +145,8 @@ export async function processRetryQueue(
       payload = JSON.parse(job.payload);
     } catch {
       await db.run(
-        `UPDATE retry_queue SET status = 'dead', last_error = 'payload JSON inválido', updated_at = datetime('now') WHERE id = ?`,
-        [job.id]
+        `UPDATE retry_queue SET status = 'dead', last_error = 'payload JSON inválido', updated_at = ? WHERE id = ?`,
+        [nowSql(), job.id]
       );
       dead++;
       continue;
@@ -152,8 +156,8 @@ export async function processRetryQueue(
     try {
       await handler(payload, job);
       await db.run(
-        `UPDATE retry_queue SET status = 'done', attempts = ?, updated_at = datetime('now'), last_error = NULL WHERE id = ?`,
-        [attempts, job.id]
+        `UPDATE retry_queue SET status = 'done', attempts = ?, updated_at = ?, last_error = NULL WHERE id = ?`,
+        [attempts, nowSql(), job.id]
       );
       ok++;
     } catch (e: any) {
@@ -161,16 +165,16 @@ export async function processRetryQueue(
       const maxA = Number(job.max_attempts || maxAttempts());
       if (attempts >= maxA) {
         await db.run(
-          `UPDATE retry_queue SET status = 'dead', attempts = ?, last_error = ?, updated_at = datetime('now') WHERE id = ?`,
-          [attempts, err, job.id]
+          `UPDATE retry_queue SET status = 'dead', attempts = ?, last_error = ?, updated_at = ? WHERE id = ?`,
+          [attempts, err, nowSql(), job.id]
         );
         dead++;
         console.error(`[retry] dead job #${job.id} ${job.job_type}:`, err);
       } else {
         const next = nextBackoffIso(attempts);
         await db.run(
-          `UPDATE retry_queue SET status = 'pending', attempts = ?, last_error = ?, next_run_at = ?, updated_at = datetime('now') WHERE id = ?`,
-          [attempts, err, next, job.id]
+          `UPDATE retry_queue SET status = 'pending', attempts = ?, last_error = ?, next_run_at = ?, updated_at = ? WHERE id = ?`,
+          [attempts, err, next, nowSql(), job.id]
         );
         failed++;
         console.warn(`[retry] job #${job.id} tentativa ${attempts}/${maxA} → ${next}:`, err);
@@ -183,18 +187,15 @@ export async function processRetryQueue(
 
 export async function retryQueueStats(db: Database = getDb()) {
   await ensureRetryQueue(db);
-  const rows = await db.all(
-    `SELECT status, COUNT(*) as c FROM retry_queue GROUP BY status`
-  );
+  const rows = await db.all(`SELECT status, COUNT(*) as c FROM retry_queue GROUP BY status`);
   const by: Record<string, number> = {};
   for (const r of rows || []) by[r.status] = Number(r.c);
+  const agora = new Date().toISOString();
   const pendingDue = await db.get(
-    `SELECT COUNT(*) as c FROM retry_queue WHERE status = 'pending' AND next_run_at <= datetime('now')`
+    `SELECT COUNT(*) as c FROM retry_queue WHERE status = 'pending' AND next_run_at <= ?`,
+    [agora]
   );
-  return {
-    by_status: by,
-    pending_due: Number(pendingDue?.c || 0),
-  };
+  return { by_status: by, pending_due: Number(pendingDue?.c || 0) };
 }
 
 let workerStarted = false;
@@ -210,9 +211,7 @@ export function startRetryWorker() {
 
   const tick = () => {
     try {
-      processRetryQueue(getDb(), 25).catch((e) =>
-        console.warn('[retry worker]', e?.message || e)
-      );
+      processRetryQueue(getDb(), 25).catch((e) => console.warn('[retry worker]', e?.message || e));
     } catch {
       /* db não pronto */
     }
