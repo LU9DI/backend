@@ -38,6 +38,27 @@ export function mountRelatorioRoutes(app: Express) {
     console.warn('[relatorio] coluna destinatários:', e?.message || e)
   );
 
+  const getDestinatariosHandler = asyncHandler(async (req: AuthRequest, res: Response) => {
+    const empresa = await findEmpresa(req.params.ref);
+    if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
+    if (!podeAcessarEmpresa(req, empresa.id)) return res.status(403).json({ error: 'Sem permissão.' });
+    await ensureDestinatariosColumn();
+    const saved = await getDb().get<{ relatorio_destinatarios?: string }>(
+      'SELECT relatorio_destinatarios FROM empresas WHERE id = ?',
+      [empresa.id]
+    );
+    let destinatarios: Array<{ canal: string; destino: string }> = [];
+    if (saved?.relatorio_destinatarios) {
+      try {
+        const parsed = JSON.parse(saved.relatorio_destinatarios);
+        if (Array.isArray(parsed)) destinatarios = normalizeDestinatarios({ destinatarios: parsed });
+      } catch {
+        /* ignore malformed legacy data */
+      }
+    }
+    return res.json({ success: true, ativo: destinatarios.length > 0, destinatarios });
+  });
+
   const previewHandler = asyncHandler(async (req: AuthRequest, res: Response) => {
     const empresa = await findEmpresa(req.params.ref);
     if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
@@ -72,6 +93,8 @@ export function mountRelatorioRoutes(app: Express) {
   app.get('/api/empresa/:ref/relatorio', autenticarToken, previewHandler);
   app.post('/api/empresa/:ref/relatorio/preview', autenticarToken, sendLimiter, previewHandler);
 
+  app.get('/api/empresa/:ref/relatorio/destinatarios', autenticarToken, getDestinatariosHandler);
+
   app.put('/api/empresa/:ref/relatorio/destinatarios', autenticarToken, asyncHandler(async (req: AuthRequest, res: Response) => {
     const empresa = await findEmpresa(req.params.ref);
     if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
@@ -99,7 +122,7 @@ export function mountRelatorioRoutes(app: Express) {
       [JSON.stringify(destinatarios), empresa.id]
     );
 
-    return res.json({ success: true, destinatarios });
+    return res.json({ success: true, ativo: true, destinatarios });
   }));
 
   const sendHandler = asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -167,6 +190,7 @@ export function mountRelatorioRoutes(app: Express) {
     const payload = {
       event: 'report.generated',
       empresa_id: empresa.id,
+      cliente_id: empresa.id,
       slug: empresa.slug,
       nome_empresa: empresa.nome_empresa,
       plan: empresa.plan,
