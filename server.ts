@@ -21,14 +21,19 @@ import {
   installProcessGuards,
   getMountResults,
 } from './lib/safeMount.js';
+import {
+  applyPublicRateLimit,
+  ensureWebhookDedupe,
+  initObservability,
+} from './lib/bootExtras.js';
 
 installProcessGuards();
 assertEnvOrExit();
 const JWT_SECRET = requireJwtSecret();
 
 const BUILD = {
-  version: '1.3.0',
-  marker: 'cascade-isolation-v1',
+  version: '1.3.1',
+  marker: 'ops-rate-limit-retry-v1',
   started_at: new Date().toISOString(),
 };
 
@@ -103,6 +108,7 @@ app.get('/api/health', async (_req, res) => {
     push: envOn('VAPID_PUBLIC_KEY') && envOn('VAPID_PRIVATE_KEY'),
     smtp: envOn('SMTP_HOST') && envOn('SMTP_FROM'),
     n8n: envOn('N8N_WEBHOOK_URL'),
+    sentry: envOn('SENTRY_DSN'),
     plan_switch: String(process.env.ALLOW_PLAN_SWITCH || '') === '1',
     ai_latency: aiLatency,
     http_latency: getHttpMetrics().global,
@@ -157,8 +163,13 @@ async function schemaSafe(name: string, fn: () => Promise<void>) {
 }
 
 async function main() {
+  // Observabilidade + rate limit ANTES das rotas de negócio
+  await applyPublicRateLimit(app);
+  await initObservability(app);
+
   await initDB();
   console.log(`🐘 DB engine=${typeof dbEngine === 'function' ? dbEngine() : '?'}`);
+  await ensureWebhookDedupe();
 
   await schemaSafe('unidades', async () => {
     const { ensureUnidadesSchema } = await import('./lib/unidades.js');
