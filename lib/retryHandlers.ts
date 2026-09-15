@@ -1,5 +1,5 @@
 /**
- * Handlers registrados na fila de retry.
+ * Handlers da fila de retry (+ dead letter implícita: status=dead).
  */
 import { registerRetryHandler } from './retryQueue.js';
 import { getDb } from './db.js';
@@ -19,6 +19,7 @@ import { resolvePlano } from '../stripeBilling.js';
 import { activatePlan, blockEmpresa } from '../services/billingService.js';
 import { enviarEmail } from './mailer.js';
 import { logWebhookEvent } from './opsLog.js';
+import { notifyN8nAsync, n8nConfigured } from './n8n.js';
 
 async function activatePayPal(
   empresaId: string,
@@ -40,13 +41,6 @@ async function activatePayPal(
     exp.toISOString()
   );
   try {
-    const cols = (await db.all(`PRAGMA table_info(empresas)`)).map((c: any) => c.name);
-    if (!cols.includes('payment_gateway')) {
-      await db.exec(`ALTER TABLE empresas ADD COLUMN payment_gateway TEXT`);
-    }
-    if (!cols.includes('billing_cycle')) {
-      await db.exec(`ALTER TABLE empresas ADD COLUMN billing_cycle TEXT`);
-    }
     await db.run(`UPDATE empresas SET payment_gateway = 'paypal', billing_cycle = ? WHERE id = ?`, [
       plano?.interval === 'year' ? 'year' : 'month',
       empresaId,
@@ -80,16 +74,6 @@ async function activateFromMp(
     exp.toISOString()
   );
   try {
-    const cols = (await db.all(`PRAGMA table_info(empresas)`)).map((c: any) => c.name);
-    if (!cols.includes('payment_gateway')) {
-      await db.exec(`ALTER TABLE empresas ADD COLUMN payment_gateway TEXT`);
-    }
-    if (!cols.includes('billing_cycle')) {
-      await db.exec(`ALTER TABLE empresas ADD COLUMN billing_cycle TEXT`);
-    }
-    if (!cols.includes('mp_preapproval_id')) {
-      await db.exec(`ALTER TABLE empresas ADD COLUMN mp_preapproval_id TEXT`);
-    }
     await db.run(
       `UPDATE empresas SET payment_gateway = 'mercadopago_pix', billing_cycle = ? WHERE id = ?`,
       [plano?.interval === 'year' ? 'year' : 'month', empresaId]
@@ -129,10 +113,7 @@ export function registerAllRetryHandlers() {
       return;
     }
 
-    if (
-      eventType === 'CHECKOUT.ORDER.APPROVED' ||
-      eventType === 'CHECKOUT.ORDER.COMPLETED'
-    ) {
+    if (eventType === 'CHECKOUT.ORDER.APPROVED' || eventType === 'CHECKOUT.ORDER.COMPLETED') {
       const orderId = resource.id;
       if (!orderId) throw new Error('order id ausente');
       const cap = await capturePayPalOrder(String(orderId));
@@ -147,10 +128,7 @@ export function registerAllRetryHandlers() {
       return;
     }
 
-    if (
-      eventType === 'PAYMENT.CAPTURE.REFUNDED' ||
-      eventType === 'PAYMENT.CAPTURE.REVERSED'
-    ) {
+    if (eventType === 'PAYMENT.CAPTURE.REFUNDED' || eventType === 'PAYMENT.CAPTURE.REVERSED') {
       const parsed = parseCustomId(resource.custom_id);
       let empresaId = parsed.empresaId;
       if (!empresaId && resource.id) {
@@ -162,7 +140,6 @@ export function registerAllRetryHandlers() {
       }
       if (!empresaId) throw new Error('refund sem empresa');
       await blockEmpresa(getDb(), empresaId, { notify: true, tipo: 'assinatura' });
-      return;
     }
   });
 
@@ -181,7 +158,6 @@ export function registerAllRetryHandlers() {
     );
   });
 
-  /** Reprocessa webhook Mercado Pago (payment / preapproval). */
   registerRetryHandler('mp_webhook', async (payload) => {
     if (!mpConfigured()) throw new Error('MP_ACCESS_TOKEN ausente');
     const body = payload.body || payload;
@@ -191,7 +167,11 @@ export function registerAllRetryHandlers() {
       body.data?.id || body.id || query.id || body['data.id'] || ''
     ).trim();
 
-    if (type.includes('preapproval') || type.includes('subscription') || String(query.topic || '').includes('subscription')) {
+    if (
+      type.includes('preapproval') ||
+      type.includes('subscription') ||
+      String(query.topic || '').includes('subscription')
+    ) {
       const preId = dataId || String(query.id || '');
       if (!preId) throw new Error('mp_webhook: preapproval id ausente');
       const remote = await getPreapproval(preId);
@@ -201,12 +181,6 @@ export function registerAllRetryHandlers() {
       const planoKey = remote.metadata?.plano || parsed.planoKey;
       if ((status === 'authorized' || status === 'active') && empresaId) {
         await activateFromMp(String(empresaId), planoKey, null, preId);
-        await logWebhookEvent(getDb(), {
-          source: 'mercadopago',
-          event_type: type || 'preapproval_retry',
-          status: 'ok',
-          detail: `retry activate ${empresaId}`,
-        });
         return;
       }
       if ((status === 'cancelled' || status === 'paused') && empresaId) {
@@ -255,6 +229,16 @@ export function registerAllRetryHandlers() {
       html: payload.html ? String(payload.html) : undefined,
     });
     if (!r.ok) throw new Error('enviarEmail retornou ok=false');
+  });
+
+  /** Reentrega de relatório / evento n8n (WhatsApp, e-mail, SMS via workflow). */
+  registerRetryHandler('n8n_dispatch', async (payload) => {
+    if (!n8nConfigured()) throw new Error('N8N_WEBHOOK_URL ausente');
+    const event = String(payload.event || 'report.generated');
+    const body = { ...(payload.body || payload) };
+    delete body.event;
+    const ok = await notifyN8nAsync(event, body);
+    if (!ok) throw new Error('n8n_dispatch: webhook não aceitou');
   });
 
   registerRetryHandler('generic', async (payload) => {
