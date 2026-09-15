@@ -185,16 +185,33 @@ export function mountAdminTecnicoRoutes(app: Express) {
       const retry = await retryQueueStats(db);
       const pdfLogs = await recentPdfLogs(db, 20);
 
+      // These flags describe actual server configuration, not whether an event
+      // happened during the last 24h. A fresh production instance can have zero
+      // webhook events while the integration is correctly configured.
+      const groqConfigured = Boolean(
+        process.env.GROQ_API_KEY?.trim() || process.env.GROQ_KEY?.trim()
+      );
+      const jobsSecretConfigured = Boolean(process.env.JOBS_SECRET?.trim());
+      const integrations = {
+        stripe: stripeConfigured(),
+        paypal: paypalConfigured(),
+        paypal_webhook: paypalWebhookConfigured(),
+        pix: mpConfigured(),
+        smtp: smtpConfigured(),
+        n8n: Boolean(n8nUrl),
+        groq: groqConfigured,
+        jobs_secret: jobsSecretConfigured,
+      };
+
       res.json({
         ok: true,
-        integrations: {
-          stripe: stripeConfigured(),
-          paypal: paypalConfigured(),
-          paypal_webhook: paypalWebhookConfigured(),
-          pix: mpConfigured(),
-          smtp: smtpConfigured(),
-          n8n: Boolean(n8nUrl),
-        },
+        integrations,
+        // Explicit aliases keep the admin UI compatible with older clients.
+        paypal: integrations.paypal,
+        pix: integrations.pix,
+        smtp: integrations.smtp,
+        groq: integrations.groq,
+        jobs_secret: integrations.jobs_secret,
         health24h: {
           stripe: stripeLast24hOk,
           n8n: n8nLast24hOk,
