@@ -49,7 +49,11 @@ function adaptSql(sql: string): string {
 
   s = s.replace(/last_insert_rowid\s*\(\s*\)/gi, 'NULL');
   s = s.replace(/\browid\b/gi, 'ctid');
-  s = s.replace(/(?<!["\w])createdAt(?!["\w])/g, '"createdAt"');
+
+  // SQLite aceita createdAt como identificador camelCase. No PostgreSQL,
+  // identificadores não citados são convertidos para minúsculas (createdat).
+  // Portanto, nunca gere "createdAt": isso procura uma coluna diferente.
+  s = s.replace(/(?<!["\w])createdAt(?!["\w])/g, 'createdat');
 
   s = s.replace(/IFNULL\s*\(/gi, 'COALESCE(');
   s = s.replace(/INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT/gi, 'SERIAL PRIMARY KEY');
@@ -58,6 +62,27 @@ function adaptSql(sql: string): string {
   s = s.replace(/\bREAL\b/gi, 'DOUBLE PRECISION');
 
   return s;
+}
+
+/**
+ * Mantém a API legada da aplicação: o PostgreSQL retorna `createdat`
+ * para a coluna criada sem aspas, mas o restante do código usa `createdAt`.
+ */
+function normalizeRow<T = any>(row: any): T {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return row as T;
+  if (Object.prototype.hasOwnProperty.call(row, 'createdat')) {
+    const normalized = { ...row };
+    if (!Object.prototype.hasOwnProperty.call(normalized, 'createdAt')) {
+      normalized.createdAt = normalized.createdat;
+    }
+    delete normalized.createdat;
+    return normalized as T;
+  }
+  return row as T;
+}
+
+function normalizeRows<T = any>(rows: any[]): T[] {
+  return rows.map((row) => normalizeRow<T>(row));
 }
 
 async function handlePragma(client: pg.PoolClient, sql: string): Promise<any[]> {
@@ -141,11 +166,11 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
       try {
         if (/PRAGMA\s+table_info/i.test(sql)) {
           const rows = await handlePragma(c, sql);
-          return rows[0] as T;
+          return normalizeRow<T>(rows[0]);
         }
         const q = convertPlaceholders(adaptSql(sql));
         const r = await c.query(q, params);
-        return r.rows[0] as T | undefined;
+        return normalizeRow<T>(r.rows[0]);
       } finally {
         c.release();
       }
@@ -154,11 +179,11 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
       const c = await pool!.connect();
       try {
         if (/PRAGMA\s+table_info/i.test(sql)) {
-          return (await handlePragma(c, sql)) as T[];
+          return normalizeRows<T>(await handlePragma(c, sql));
         }
         const q = convertPlaceholders(adaptSql(sql));
         const r = await c.query(q, params);
-        return r.rows as T[];
+        return normalizeRows<T>(r.rows);
       } finally {
         c.release();
       }
