@@ -132,7 +132,25 @@ export async function createPayPalOrder(opts: {
   });
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data?.message || data?.details?.[0]?.description || `PayPal ${res.status}`);
+    const details = Array.isArray(data?.details)
+      ? data.details.map((item: any) => ({
+          field: item?.field,
+          issue: item?.issue,
+          description: item?.description,
+          location: item?.location,
+        }))
+      : [];
+    const message =
+      data?.message || data?.details?.[0]?.description || `PayPal ${res.status}`;
+    const error = new Error(message);
+    (error as any).status = res.status;
+    (error as any).body = {
+      provider: 'paypal',
+      name: data?.name || null,
+      debug_id: data?.debug_id || null,
+      details,
+    };
+    throw error;
   }
 
   const approve = (data.links || []).find((l: any) => l.rel === 'approve');
