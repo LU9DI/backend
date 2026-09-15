@@ -1,10 +1,14 @@
+/**
+ * Filtra.IA — bootstrap resiliente.
+ * Princípio: módulo periférico OFF ≠ API morta.
+ */
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import 'dotenv/config';
 import type { Server } from 'http';
 
-import { assertEnvOrExit } from './lib/env.js';
+import { assertEnvOrExit, validateEnv } from './lib/env.js';
 import { initDB, getDb, dbEngine, pingDb } from './lib/db.js';
 import { requireJwtSecret, setAuthCookie, autenticarToken } from './lib/auth.js';
 import { jwtRotationStatus } from './lib/jwtKeys.js';
@@ -12,61 +16,22 @@ import { buildCorsOptions } from './lib/cors.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { requestIdMiddleware, securityHeaders } from './middleware/security.js';
 import { latencyMiddleware, getHttpMetrics } from './lib/metrics.js';
-import { mountTrialRoutes } from './routes/trialRoutes.js';
-import { mountAuthRoutes } from './routes/authRoutes.js';
-import { mountEmpresaRoutes } from './routes/empresaRoutes.js';
-import { mountReviewRoutes } from './routes/reviewRoutes.js';
-import { mountAdminDashboardRoutes } from './routes/adminDashboardRoutes.js';
-import { mountAdminTecnicoRoutes } from './routes/adminTecnicoRoutes.js';
-import { mountAdminNegocioRoutes } from './routes/adminNegocioRoutes.js';
-import { mountTokenMetricsRoutes } from './routes/tokenMetricsRoutes.js';
-import { mountRelatorioRoutes } from './routes/relatorioRoutes.js';
-import { mountPlanSwitchRoutes } from './routes/planSwitchRoutes.js';
-import { mountWebAuthnRoutes } from './routes/webauthnRoutes.js';
-import { mountPushRoutes } from './routes/pushRoutes.js';
-import { mountJobsRoutes } from './routes/jobsRoutes.js';
-import { mountMonthlyReportJobRoutes } from './routes/monthlyReportJobRoutes.js';
-import { mountPayPalRoutes } from './routes/paypalRoutes.js';
-import { mountPixRoutes } from './routes/pixRoutes.js';
-import { mountWechatRoutes } from './routes/wechatRoutes.js';
-import { mountSubscriptionRoutes } from './routes/subscriptionRoutes.js';
-import { mountUnidadeRoutes } from './routes/unidadeRoutes.js';
-import { mountExportRoutes } from './routes/exportRoutes.js';
-import { mountPublicPlanosRoutes } from './routes/publicPlanosRoutes.js';
-import { mountAuditRoutes } from './routes/auditRoutes.js';
-import { mountPasswordResetRoutes } from './passwordResetRoutes.js';
-import { mountAdminLoginRoute } from './adminLoginRoute.js';
-import { mountAdminPasswordResetRoutes } from './adminPasswordReset.js';
-import { mountMfaRoutes } from './mfa.js';
-import { mountStripeRoutes } from './stripeRoutes.js';
-import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
-import { paypalConfigured } from './lib/paypal.js';
-import { mpConfigured } from './lib/mercadopago.js';
-import { wechatConfigured } from './lib/wechat.js';
-import { aiConfigured, listAiProviders, getAiLoadStats } from './groqService.js';
-import { ensureUnidadesSchema } from './lib/unidades.js';
-import { ensureWebAuthnSchema, webauthnConfig } from './lib/webauthn.js';
-import { ensurePushSchema, pushConfigured, initWebPush } from './lib/push.js';
-import { ensureAiUsageSchema } from './lib/aiUsage.js';
-import { ensureOpsTables } from './lib/opsLog.js';
-import { ensureAuditSchema } from './lib/auditLog.js';
-import { ensureRetryQueue, startRetryWorker } from './lib/retryQueue.js';
-import { registerAllRetryHandlers } from './lib/retryHandlers.js';
-import { ensurePlanPricingSchema } from './lib/planPricing.js';
-import { allowPlanSwitch } from './lib/plans.js';
-import { smtpConfigured } from './lib/mailer.js';
-import { mountN8nEmailRoutes } from './routes/n8nEmailRoutes.js';
 import {
-  anonymizeOldClientWhatsapp,
-  ensureReviewTreatmentColumns,
-} from './lib/lgpd.js';
-import {
-  backfillSentiment,
-  countMissingSentiment,
-} from './services/sentimentBackfill.js';
+  safeMount,
+  safeImportMount,
+  installProcessGuards,
+  getMountResults,
+} from './lib/safeMount.js';
 
+installProcessGuards();
 assertEnvOrExit();
 const JWT_SECRET = requireJwtSecret();
+
+const BUILD = {
+  version: '1.3.0',
+  marker: 'cascade-isolation-v1',
+  started_at: new Date().toISOString(),
+};
 
 const app = express();
 app.set('trust proxy', 1);
@@ -80,9 +45,37 @@ app.use((req, res, next) => {
 });
 app.use(cors(buildCorsOptions()));
 
-/** Health com ping real no banco — Render usa para saber se o serviço está vivo. */
+/** Live: sobe mesmo se DB estiver lento (Render port scan). */
+app.get('/api/live', (_req, res) => {
+  res.status(200).json({ ok: true, live: true, build: BUILD, time: new Date().toISOString() });
+});
+
+app.get('/api/ready', async (_req, res) => {
+  try {
+    const dbPing = await pingDb();
+    if (!dbPing.ok) {
+      return res.status(503).json({ ok: false, ready: false, db: dbPing, build: BUILD });
+    }
+    res.status(200).json({ ok: true, ready: true, db: dbPing, build: BUILD });
+  } catch (e: any) {
+    res.status(503).json({
+      ok: false,
+      ready: false,
+      error: String(e?.message || e),
+      build: BUILD,
+    });
+  }
+});
+
+function softFlag(fn: () => boolean, fallback = false): boolean {
+  try {
+    return Boolean(fn());
+  } catch {
+    return fallback;
+  }
+}
+
 app.get('/api/health', async (_req, res) => {
-  const ai = getAiLoadStats();
   let dbPing: { ok: boolean; engine: string; error?: string } = {
     ok: false,
     engine: 'unknown',
@@ -93,25 +86,68 @@ app.get('/api/health', async (_req, res) => {
     dbPing = { ok: false, engine: 'unknown', error: String(e?.message || e) };
   }
 
+  let aiLatency: any = {};
+  try {
+    const { getAiLoadStats } = await import('./groqService.js');
+    const ai = getAiLoadStats();
+    aiLatency = { groq: ai.stats.groq.latency, gemini: ai.stats.gemini.latency };
+  } catch {
+    aiLatency = {};
+  }
+
   const body = {
     ok: dbPing.ok,
-    db: dbPing.engine || (typeof dbEngine === 'function' ? dbEngine() : 'sqlite'),
+    db: dbPing.engine || (typeof dbEngine === 'function' ? dbEngine() : 'unknown'),
     db_ok: dbPing.ok,
-    stripe: stripeConfigured(),
-    paypal: paypalConfigured(),
-    pix: mpConfigured(),
-    wechat: wechatConfigured(),
-    ai: aiConfigured(),
-    ai_providers: listAiProviders(),
-    plan_switch: allowPlanSwitch(),
-    jwt: jwtRotationStatus(),
-    webauthn: webauthnConfig(),
-    push: pushConfigured(),
-    smtp: smtpConfigured(),
-    ai_latency: {
-      groq: ai.stats.groq.latency,
-      gemini: ai.stats.gemini.latency,
-    },
+    build: BUILD,
+    modules: getMountResults(),
+    stripe: softFlag(() => require('./stripeBilling.js').stripeConfigured?.() ?? false),
+    paypal: softFlag(asyncFlagSync('paypal')),
+    pix: softFlag(asyncFlagSync('mp')),
+    wechat: softFlag(asyncFlagSync('wechat')),
+    ai: softFlag(() => {
+      try {
+        return require('./groqService.js').aiConfigured();
+      } catch {
+        return false;
+      }
+    }),
+    push: softFlag(() => {
+      try {
+        return require('./lib/push.js').pushConfigured();
+      } catch {
+        return false;
+      }
+    }),
+    smtp: softFlag(() => {
+      try {
+        return require('./lib/mailer.js').smtpConfigured();
+      } catch {
+        return false;
+      }
+    }),
+    n8n: softFlag(() => {
+      try {
+        return require('./lib/n8n.js').n8nConfigured();
+      } catch {
+        return false;
+      }
+    }),
+    plan_switch: softFlag(() => {
+      try {
+        return require('./lib/plans.js').allowPlanSwitch();
+      } catch {
+        return false;
+      }
+    }),
+    jwt: softFlag(() => {
+      try {
+        return require('./lib/jwtKeys.js').jwtRotationStatus();
+      } catch {
+        return { active: false };
+      }
+    }),
+    ai_latency: aiLatency,
     http_latency: getHttpMetrics().global,
     env: process.env.NODE_ENV || 'development',
     time: new Date().toISOString(),
@@ -119,6 +155,18 @@ app.get('/api/health', async (_req, res) => {
 
   res.status(dbPing.ok ? 200 : 503).json(body);
 });
+
+function asyncFlagSync(kind: 'paypal' | 'mp' | 'wechat'): () => boolean {
+  return () => {
+    try {
+      if (kind === 'paypal') return require('./lib/paypal.js').paypalConfigured();
+      if (kind === 'mp') return require('./lib/mercadopago.js').mpConfigured();
+      return require('./lib/wechat.js').wechatConfigured();
+    } catch {
+      return false;
+    }
+  };
+}
 
 app.get('/api/metrics', (req, res) => {
   const secret = process.env.JOBS_SECRET?.trim();
@@ -130,42 +178,15 @@ app.get('/api/metrics', (req, res) => {
   }
   res.json({
     time: new Date().toISOString(),
+    build: BUILD,
+    modules: getMountResults(),
     http: getHttpMetrics(),
-    ai: getAiLoadStats(),
   });
 });
 
 const PORT = Number(process.env.PORT || 5000);
 let server: Server | null = null;
 let shuttingDown = false;
-
-async function runSentimentBackfillOnBoot() {
-  if (process.env.BACKFILL_SENTIMENT === '0') return;
-  try {
-    const db = getDb();
-    const missing = await countMissingSentiment(db);
-    if (missing === 0) return;
-    const limit = Math.max(1, Number(process.env.BACKFILL_SENTIMENT_LIMIT || 2000));
-    const r = await backfillSentiment(db, {
-      limit,
-      useAi: process.env.BACKFILL_SENTIMENT_AI === '1',
-    });
-    console.log(`🧠 Backfill sentimento: updated=${r.updated} errors=${r.errors}`);
-  } catch (e: any) {
-    console.warn('Backfill sentimento:', e?.message || e);
-  }
-}
-
-async function runLgpdSweepOnBoot() {
-  if (process.env.LGPD_SWEEP === '0') return;
-  try {
-    const db = getDb();
-    await ensureReviewTreatmentColumns(db);
-    await anonymizeOldClientWhatsapp(db, { limit: 1000 });
-  } catch (e: any) {
-    console.warn('LGPD sweep:', e?.message || e);
-  }
-}
 
 function gracefulShutdown(signal: string) {
   if (shuttingDown) return;
@@ -176,7 +197,6 @@ function gracefulShutdown(signal: string) {
     process.exit(1);
   }, 10_000);
   force.unref();
-
   if (server) {
     server.close(() => {
       console.log('HTTP fechado.');
@@ -187,110 +207,266 @@ function gracefulShutdown(signal: string) {
   }
 }
 
+async function schemaSafe(name: string, fn: () => Promise<void>) {
+  await safeMount(`schema:${name}`, fn);
+}
+
 async function main() {
+  // 1) Banco — único hard requirement após env
   await initDB();
-  try {
+  console.log(`🐘 DB engine=${typeof dbEngine === 'function' ? dbEngine() : '?'}`);
+
+  // 2) Schemas opcionais isolados
+  await schemaSafe('unidades', async () => {
+    const { ensureUnidadesSchema } = await import('./lib/unidades.js');
     await ensureUnidadesSchema(getDb());
-  } catch (e) {
-    console.warn('ensureUnidadesSchema:', e);
-  }
-  try {
+  });
+  await schemaSafe('webauthn', async () => {
+    const { ensureWebAuthnSchema } = await import('./lib/webauthn.js');
     await ensureWebAuthnSchema(getDb());
-  } catch (e) {
-    console.warn('ensureWebAuthnSchema:', e);
-  }
-  try {
-    await ensurePushSchema(getDb());
-    initWebPush();
-  } catch (e) {
-    console.warn('ensurePushSchema:', e);
-  }
-  try {
+  });
+  await schemaSafe('push', async () => {
+    const push = await import('./lib/push.js');
+    await push.ensurePushSchema(getDb());
+    try {
+      push.initWebPush();
+    } catch (e: any) {
+      console.warn('initWebPush:', e?.message || e);
+    }
+  });
+  await schemaSafe('ai_usage', async () => {
+    const { ensureAiUsageSchema } = await import('./lib/aiUsage.js');
     await ensureAiUsageSchema(getDb());
-  } catch (e) {
-    console.warn('ensureAiUsageSchema:', e);
-  }
-  try {
+  });
+  await schemaSafe('ops', async () => {
+    const { ensureOpsTables } = await import('./lib/opsLog.js');
     await ensureOpsTables(getDb());
-  } catch (e) {
-    console.warn('ensureOpsTables:', e);
-  }
-  try {
+  });
+  await schemaSafe('audit', async () => {
+    const { ensureAuditSchema } = await import('./lib/auditLog.js');
     await ensureAuditSchema(getDb());
-  } catch (e) {
-    console.warn('ensureAuditSchema:', e);
-  }
-  try {
+  });
+  await schemaSafe('plan_pricing', async () => {
+    const { ensurePlanPricingSchema } = await import('./lib/planPricing.js');
     await ensurePlanPricingSchema(getDb());
-    await refreshPlanPricesFromDb(getDb());
-  } catch (e) {
-    console.warn('plan pricing:', e);
-  }
-  try {
-    await ensureRetryQueue(getDb());
-    registerAllRetryHandlers();
-    startRetryWorker();
-  } catch (e) {
-    console.warn('retry queue:', e);
-  }
-  try {
+    try {
+      const { refreshPlanPricesFromDb } = await import('./stripeBilling.js');
+      await refreshPlanPricesFromDb(getDb());
+    } catch (e: any) {
+      console.warn('refreshPlanPrices:', e?.message || e);
+    }
+  });
+  await schemaSafe('retry_queue', async () => {
+    const rq = await import('./lib/retryQueue.js');
+    await rq.ensureRetryQueue(getDb());
+    try {
+      const { registerAllRetryHandlers } = await import('./lib/retryHandlers.js');
+      registerAllRetryHandlers();
+    } catch (e: any) {
+      console.warn('retryHandlers:', e?.message || e);
+    }
+    try {
+      rq.startRetryWorker();
+    } catch (e: any) {
+      console.warn('retryWorker:', e?.message || e);
+    }
+  });
+  await schemaSafe('lgpd_cols', async () => {
+    const { ensureReviewTreatmentColumns } = await import('./lib/lgpd.js');
     await ensureReviewTreatmentColumns(getDb());
-  } catch (e) {
-    console.warn('treatment columns:', e);
-  }
+  });
 
-  await runSentimentBackfillOnBoot();
-  await runLgpdSweepOnBoot();
+  // 3) Jobs de boot NÃO bloqueiam e NÃO derrubam
+  void (async () => {
+    if (process.env.BACKFILL_SENTIMENT === '1') {
+      try {
+        const s = await import('./services/sentimentBackfill.js');
+        const missing = await s.countMissingSentiment(getDb());
+        if (missing > 0) {
+          const r = await s.backfillSentiment(getDb(), {
+            limit: Math.max(1, Number(process.env.BACKFILL_SENTIMENT_LIMIT || 500)),
+            useAi: process.env.BACKFILL_SENTIMENT_AI === '1',
+          });
+          console.log(`🧠 Backfill sentimento: updated=${r.updated}`);
+        }
+      } catch (e: any) {
+        console.warn('Backfill sentimento:', e?.message || e);
+      }
+    }
+    if (process.env.LGPD_SWEEP === '1') {
+      try {
+        const l = await import('./lib/lgpd.js');
+        await l.anonymizeOldClientWhatsapp(getDb(), { limit: 1000 });
+      } catch (e: any) {
+        console.warn('LGPD sweep:', e?.message || e);
+      }
+    }
+  })();
 
-  mountTrialRoutes(app);
-  mountAuthRoutes(app);
-  mountEmpresaRoutes(app);
-  mountReviewRoutes(app);
-  mountAdminDashboardRoutes(app);
-  mountAdminTecnicoRoutes(app);
-  mountAdminNegocioRoutes(app);
-  mountTokenMetricsRoutes(app);
-  mountRelatorioRoutes(app);
-  mountPlanSwitchRoutes(app);
-  mountWebAuthnRoutes(app);
-  mountPushRoutes(app);
-  mountJobsRoutes(app);
-  mountMonthlyReportJobRoutes(app);
-  mountPayPalRoutes(app);
-  mountPixRoutes(app);
-  mountWechatRoutes(app);
-  mountSubscriptionRoutes(app);
-  mountUnidadeRoutes(app);
-  mountExportRoutes(app);
-  mountPublicPlanosRoutes(app);
-  mountAuditRoutes(app);
-  mountN8nEmailRoutes(app);
+  // 4) Rotas CORE (ainda isoladas — se uma falhar, as outras sobem)
+  await safeImportMount('trial', () => import('./routes/trialRoutes.js'), 'mountTrialRoutes', app);
+  await safeImportMount('auth', () => import('./routes/authRoutes.js'), 'mountAuthRoutes', app);
+  await safeImportMount(
+    'empresa',
+    () => import('./routes/empresaRoutes.js'),
+    'mountEmpresaRoutes',
+    app
+  );
+  await safeImportMount(
+    'review',
+    () => import('./routes/reviewRoutes.js'),
+    'mountReviewRoutes',
+    app
+  );
 
-  mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
-  mountAdminPasswordResetRoutes(app, getDb);
-  mountMfaRoutes(app, getDb, { JWT_SECRET, setAuthCookie, autenticarToken });
-  mountPasswordResetRoutes(app, getDb);
-  mountStripeRoutes(app, getDb);
+  // 5) Rotas periféricas — falha isolada
+  await safeImportMount(
+    'adminDashboard',
+    () => import('./routes/adminDashboardRoutes.js'),
+    'mountAdminDashboardRoutes',
+    app
+  );
+  await safeImportMount(
+    'adminTecnico',
+    () => import('./routes/adminTecnicoRoutes.js'),
+    'mountAdminTecnicoRoutes',
+    app
+  );
+  await safeImportMount(
+    'adminNegocio',
+    () => import('./routes/adminNegocioRoutes.js'),
+    'mountAdminNegocioRoutes',
+    app
+  );
+  await safeImportMount(
+    'tokenMetrics',
+    () => import('./routes/tokenMetricsRoutes.js'),
+    'mountTokenMetricsRoutes',
+    app
+  );
+  await safeImportMount(
+    'relatorio',
+    () => import('./routes/relatorioRoutes.js'),
+    'mountRelatorioRoutes',
+    app
+  );
+  await safeImportMount(
+    'planSwitch',
+    () => import('./routes/planSwitchRoutes.js'),
+    'mountPlanSwitchRoutes',
+    app
+  );
+  await safeImportMount(
+    'webauthn',
+    () => import('./routes/webauthnRoutes.js'),
+    'mountWebAuthnRoutes',
+    app
+  );
+  await safeImportMount('push', () => import('./routes/pushRoutes.js'), 'mountPushRoutes', app);
+  await safeImportMount('jobs', () => import('./routes/jobsRoutes.js'), 'mountJobsRoutes', app);
+  await safeImportMount(
+    'monthlyReports',
+    () => import('./routes/monthlyReportJobRoutes.js'),
+    'mountMonthlyReportJobRoutes',
+    app
+  );
+  await safeImportMount('paypal', () => import('./routes/paypalRoutes.js'), 'mountPayPalRoutes', app);
+  await safeImportMount('pix', () => import('./routes/pixRoutes.js'), 'mountPixRoutes', app);
+  await safeImportMount('wechat', () => import('./routes/wechatRoutes.js'), 'mountWechatRoutes', app);
+  await safeImportMount(
+    'subscription',
+    () => import('./routes/subscriptionRoutes.js'),
+    'mountSubscriptionRoutes',
+    app
+  );
+  await safeImportMount(
+    'unidade',
+    () => import('./routes/unidadeRoutes.js'),
+    'mountUnidadeRoutes',
+    app
+  );
+  await safeImportMount('export', () => import('./routes/exportRoutes.js'), 'mountExportRoutes', app);
+  await safeImportMount(
+    'publicPlanos',
+    () => import('./routes/publicPlanosRoutes.js'),
+    'mountPublicPlanosRoutes',
+    app
+  );
+  await safeImportMount('audit', () => import('./routes/auditRoutes.js'), 'mountAuditRoutes', app);
+  await safeImportMount(
+    'n8nEmail',
+    () => import('./routes/n8nEmailRoutes.js'),
+    'mountN8nEmailRoutes',
+    app
+  );
+  await safeImportMount('n8n', () => import('./routes/n8nRoutes.js'), 'mountN8nRoutes', app);
+  await safeImportMount(
+    'smtpTest',
+    () => import('./routes/smtpTestRoutes.js'),
+    'mountSmtpTestRoutes',
+    app
+  );
+
+  await safeMount('adminLogin', async () => {
+    const { mountAdminLoginRoute } = await import('./adminLoginRoute.js');
+    mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
+  });
+  await safeMount('adminPasswordReset', async () => {
+    const { mountAdminPasswordResetRoutes } = await import('./adminPasswordReset.js');
+    mountAdminPasswordResetRoutes(app, getDb);
+  });
+  await safeMount('mfa', async () => {
+    const { mountMfaRoutes } = await import('./mfa.js');
+    mountMfaRoutes(app, getDb, { JWT_SECRET, setAuthCookie, autenticarToken });
+  });
+  await safeMount('passwordReset', async () => {
+    const { mountPasswordResetRoutes } = await import('./passwordResetRoutes.js');
+    mountPasswordResetRoutes(app, getDb);
+  });
+  await safeMount('stripe', async () => {
+    const { mountStripeRoutes } = await import('./stripeRoutes.js');
+    mountStripeRoutes(app, getDb);
+  });
 
   app.use(notFoundHandler);
   app.use(errorHandler);
 
+  const off = getMountResults().filter((r) => !r.ok);
+  console.log(`📦 build ${BUILD.version} marker=${BUILD.marker}`);
   console.log(
-    `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | WeChat: ${wechatConfigured() ? 'ok' : 'OFF'}`
+    `📋 módulos: ${getMountResults().filter((r) => r.ok).length} ok, ${off.length} off`
   );
-  if (!wechatConfigured()) {
-    console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
+  if (off.length) {
+    for (const o of off) console.warn(`   · ${o.name}: ${o.error}`);
+  }
+
+  // Flags de integração (nunca throw)
+  try {
+    const { stripeConfigured } = await import('./stripeBilling.js');
+    const { paypalConfigured } = await import('./lib/paypal.js');
+    const { mpConfigured } = await import('./lib/mercadopago.js');
+    const { wechatConfigured } = await import('./lib/wechat.js');
+    const { smtpConfigured } = await import('./lib/mailer.js');
+    const { n8nConfigured } = await import('./lib/n8n.js');
+    console.log(
+      `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | WeChat: ${wechatConfigured() ? 'ok' : 'OFF'}`
+    );
+    console.log(`📧 SMTP: ${smtpConfigured() ? 'ok' : 'OFF'} | n8n: ${n8nConfigured() ? 'ok' : 'OFF'}`);
+  } catch (e: any) {
+    console.warn('status integrações:', e?.message || e);
   }
 
   server = app.listen(PORT, () => {
     console.log(`🚀 API Filtra.IA em http://localhost:${PORT}`);
   });
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
 
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }
 
 main().catch((e) => {
-  console.error(e);
+  console.error('❌ Boot fatal (só DB/JWT devem causar isso):', e);
   process.exit(1);
 });
