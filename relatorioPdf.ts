@@ -11,45 +11,175 @@ type Unit = { id: string; nome: string; slug?: string | null };
 type Group = { u: Unit; list: Review[] };
 const C = { navy: '#152238', indigo: '#4f46e5', ink: '#25344d', muted: '#68788f', line: '#dce3ec', pale: '#f5f7fa', green: '#16845a', red: '#c0392b', amber: '#b7791f', white: '#fff', star: ['#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e'] };
 const M = { left: 44, right: 44, top: 98, bottom: 54 };
-const LANGS: Lang[] = ['pt-BR','en-US','es-ES','fr-FR','de-DE','it-IT','zh-CN'];
-const L: Record<Lang, Record<string,string>> = {
-'pt-BR':{period:'Período',plan:'Plano',summary:'Resumo executivo',volume:'Volume',volumeSub:'Avaliações válidas',avg:'Nota média',avgSub:'Escala de 1 a 5',critical:'Críticas',criticalSub:'Notas 1–3',positive:'Positivas',distribution:'Distribuição de notas',compare:'Positivas (4–5 estrelas): {p} ({pp}) • Críticas (1–3 estrelas): {c} ({cp})',sentiment:'Sentimento',pos:'Positivo',neu:'Neutro',neg:'Negativo',themes:'Principais temas',ranking:'Ranking de unidades',branch:'Detalhes da unidade',noUnits:'Nenhuma unidade com avaliações no período.',empty:'Nenhuma avaliação válida foi registrada neste período.',page:'Página',thisPeriod:'Neste período'},
-'en-US':{period:'Period',plan:'Plan',summary:'Executive summary',volume:'Volume',volumeSub:'Valid reviews',avg:'Average rating',avgSub:'Scale 1 to 5',critical:'Critical',criticalSub:'Ratings 1–3',positive:'Positive',distribution:'Rating distribution',compare:'Positive (4–5 stars): {p} ({pp}) • Critical (1–3 stars): {c} ({cp})',sentiment:'Sentiment',pos:'Positive',neu:'Neutral',neg:'Negative',themes:'Top themes',ranking:'Unit ranking',branch:'Unit details',noUnits:'No units with reviews in this period.',empty:'No valid reviews were recorded for this period.',page:'Page',thisPeriod:'This period'},
-'es-ES':{period:'Período',plan:'Plan',summary:'Resumen ejecutivo',volume:'Volumen',volumeSub:'Reseñas válidas',avg:'Calificación media',avgSub:'Escala de 1 a 5',critical:'Críticas',criticalSub:'Notas 1–3',positive:'Positivas',distribution:'Distribución',compare:'Positivas (4–5 estrellas): {p} ({pp}) • Críticas (1–3 estrellas): {c} ({cp})',sentiment:'Sentimiento',pos:'Positivo',neu:'Neutro',neg:'Negativo',themes:'Temas principales',ranking:'Ranking de unidades',branch:'Detalles de la unidad',noUnits:'No hay unidades con reseñas en este período.',empty:'No se registraron reseñas válidas en este período.',page:'Página',thisPeriod:'En este período'},
-'fr-FR':{period:'Période',plan:'Plan',summary:'Résumé',volume:'Volume',volumeSub:'Avis valides',avg:'Note moyenne',avgSub:'Échelle de 1 à 5',critical:'Critiques',criticalSub:'Notes 1–3',positive:'Positifs',distribution:'Répartition',compare:'Positifs (4–5 étoiles) : {p} ({pp}) • Critiques (1–3 étoiles) : {c} ({cp})',sentiment:'Sentiment',pos:'Positif',neu:'Neutre',neg:'Négatif',themes:'Thèmes principaux',ranking:'Classement des unités',branch:'Détails de l’unité',noUnits:'Aucune unité avec des avis sur cette période.',empty:'Aucun avis valide sur cette période.',page:'Page',thisPeriod:'Sur cette période'},
-'de-DE':{period:'Zeitraum',plan:'Plan',summary:'Zusammenfassung',volume:'Volumen',volumeSub:'Gültige Bewertungen',avg:'Durchschnitt',avgSub:'Skala 1 bis 5',critical:'Kritisch',criticalSub:'Bewertungen 1–3',positive:'Positiv',distribution:'Bewertungsverteilung',compare:'Positiv (4–5 Sterne): {p} ({pp}) • Kritisch (1–3 Sterne): {c} ({cp})',sentiment:'Stimmung',pos:'Positiv',neu:'Neutral',neg:'Negativ',themes:'Wichtigste Themen',ranking:'Einheiten-Ranking',branch:'Einheitsdetails',noUnits:'Keine Einheiten mit Bewertungen in diesem Zeitraum.',empty:'Keine gültigen Bewertungen in diesem Zeitraum.',page:'Seite',thisPeriod:'In diesem Zeitraum'},
-'it-IT':{period:'Periodo',plan:'Piano',summary:'Riepilogo',volume:'Volume',volumeSub:'Recensioni valide',avg:'Valutazione media',avgSub:'Scala da 1 a 5',critical:'Critiche',criticalSub:'Voti 1–3',positive:'Positive',distribution:'Distribuzione',compare:'Positive (4–5 stelle): {p} ({pp}) • Critiche (1–3 stelle): {c} ({cp})',sentiment:'Sentiment',pos:'Positivo',neu:'Neutro',neg:'Negativo',themes:'Temi principali',ranking:'Classifica unità',branch:'Dettagli unità',noUnits:'Nessuna unità con recensioni nel periodo.',empty:'Nessuna recensione valida nel periodo.',page:'Pagina',thisPeriod:'Nel periodo'},
-'zh-CN':{period:'分析期间',plan:'套餐',summary:'执行摘要',volume:'评价数量',volumeSub:'有效评价',avg:'平均评分',avgSub:'1 至 5 分',critical:'负面评价',criticalSub:'1–3 分',positive:'正面评价',distribution:'评分分布',compare:'正面评价（4–5 分）：{p}（{pp}） • 负面评价（1–3 分）：{c}（{cp}）',sentiment:'情感',pos:'正面',neu:'中性',neg:'负面',themes:'主要主题',ranking:'门店排名',branch:'门店详情',noUnits:'该期间没有包含评价的门店。',empty:'该期间没有有效评价记录。',page:'页',thisPeriod:'该期间'}};
-const MONTHS: Record<Lang,string[]>={'pt-BR':['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'],'en-US':['January','February','March','April','May','June','July','August','September','October','November','December'],'es-ES':['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'],'fr-FR':['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'],'de-DE':['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'],'it-IT':['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno','Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre'],'zh-CN':['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月']};
-function langOf(v?:string|null):Lang{return LANGS.includes(String(v||'pt-BR') as Lang)?String(v||'pt-BR') as Lang:'pt-BR'}
-function text(l:Lang,k:string,v:Record<string,string|number>={}){let s=L[l][k]||L['en-US'][k]||k;for(const[k2,val]of Object.entries(v))s=s.replace(new RegExp(`\\{${k2}\\}`,'g'),String(val));return s}
-function period(m:string,l:Lang){const x=/^(\d{4})-(\d{2})$/.exec(m);if(!x)return m;const month=MONTHS[l][Number(x[2])-1]||x[2];return l==='zh-CN'?`${x[1]}年${month}`:`${month} / ${x[1]}`}
-function depthForPlan(plan:string,trial:boolean):PdfDepth{if(trial)return'ultra';const p=String(plan||'').toLowerCase();if(p==='rei')return'rei';if(p==='corporativo'||p==='corporate')return'corp';if(p==='ultra')return'ultra';return'pro'}
-export function depthForPlanPublic(plan:string,trial:boolean){return depthForPlan(plan,trial)}
-export async function ensureUnidadesSchema(db:Database):Promise<void>{try{await db.exec(`CREATE TABLE IF NOT EXISTS unidades (id TEXT PRIMARY KEY, empresa_id TEXT NOT NULL, nome TEXT NOT NULL, slug TEXT, ativo INTEGER DEFAULT 1, criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP)`)}catch{}}
-function isTest(r:Review){return Number(r.is_test)===1||r.is_test===true}
-function dateOf(r:Review){return r.createdAt??r.createdat??r.created_at??null}
-function monthOk(r:Review,m:string){const d=dateOf(r);if(!d)return true;const s=typeof d==='string'?d:new Date(d).toISOString();return s.slice(0,7)===m}
-async function loadReviews(db:Database,id:string,m:string){const qs=['SELECT * FROM reviews WHERE empresa_id=?','SELECT rating,is_test,ai_tags,sentiment,unidade_id,origin,createdAt FROM reviews WHERE empresa_id=?'];for(const q of qs){try{const rows=await db.all(q,[id]) as any[];return(rows||[]).filter(r=>!isTest(r)&&monthOk(r,m)&&Number(r.rating)>=1&&Number(r.rating)<=5) as Review[]}catch{}}return[]}
-async function loadUnits(db:Database,id:string):Promise<Unit[]>{try{return await db.all('SELECT id,nome,slug FROM unidades WHERE empresa_id=? AND ativo=1 ORDER BY nome',[id]) as Unit[]||[]}catch{return[]}}
-function average(rs:Review[]){return rs.length?rs.reduce((s,r)=>s+Number(r.rating),0)/rs.length:0}
-function percent(n:number,t:number){return t?`${Math.round(n/t*100)}%`:'0%'}
-function distribution(rs:Review[]){const a=[0,0,0,0,0];for(const r of rs){const n=Number(r.rating);if(n>=1&&n<=5)a[n-1]++}return a}
-function sentiments(rs:Review[]){let p=0,n=0,u=0;for(const r of rs){const s=String(r.sentiment||'').toLowerCase();if(s.includes('pos'))p++;else if(s.includes('neg'))n++;else if(s.includes('neu'))u++;else{const x=Number(r.rating);if(x>=4)p++;else if(x<=2)n++;else u++}}return{p,n,u}}
-function topics(rs:Review[]){const m=new Map<string,number>();for(const r of rs){if(!r.ai_tags)continue;try{const a=JSON.parse(String(r.ai_tags));if(Array.isArray(a))for(const x of a){const k=String(x||'').trim();if(k)m.set(k,(m.get(k)||0)+1)}}catch{}}return[...m.entries()].sort((a,b)=>b[1]-a[1]).slice(0,8)}
-function W(doc:PDFKit.PDFDocument){return doc.page.width-M.left-M.right}
-function header(doc:PDFKit.PDFDocument,plan:string,per:string,depth:PdfDepth){doc.rect(0,0,doc.page.width,72).fill(C.navy);doc.rect(0,72,doc.page.width,3).fill(C.indigo);doc.fillColor(C.white).font('Helvetica-Bold').fontSize(15).text('Filtra.AI',M.left,18,{lineBreak:false});doc.fillColor('#a5b4fc').font('Helvetica').fontSize(8).text(plan,M.left,42,{lineBreak:false});doc.fillColor(C.white).font('Helvetica-Bold').fontSize(9).text(depth.toUpperCase(),doc.page.width-160,18,{width:112,align:'right',lineBreak:false});doc.fillColor('#cbd5e1').font('Helvetica').fontSize(8).text(per,doc.page.width-160,38,{width:112,align:'right',lineBreak:false});doc.y=M.top}
-function footer(doc:PDFKit.PDFDocument,lang:Lang,pageNumber:number){const y=doc.page.height-30;doc.strokeColor(C.line).lineWidth(.6).moveTo(M.left,y-5).lineTo(doc.page.width-M.right,y-5).stroke();doc.fillColor(C.muted).font('Helvetica').fontSize(7).text('Filtra.AI',M.left,y,{lineBreak:false});doc.text(`${text(lang,'page')} ${pageNumber}`,doc.page.width-M.right-100,y,{width:100,align:'right',lineBreak:false})}
-function title(doc:PDFKit.PDFDocument,s:string){doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(12).text(s,{width:W(doc)});doc.moveDown(.35)}
-function cards(doc:PDFKit.PDFDocument,items:{l:string,v:string,s:string,c?:string}[]){const gap=8,w=W(doc),bw=(w-gap*3)/4,y=doc.y;items.forEach((it,i)=>{const x=M.left+i*(bw+gap);doc.roundedRect(x,y,bw,68,6).fillAndStroke(C.pale,C.line);doc.rect(x,y,3,68).fill(it.c||C.indigo);doc.fillColor(C.muted).font('Helvetica-Bold').fontSize(6.5).text(it.l.toUpperCase(),x+9,y+9,{width:bw-15,lineBreak:false});doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(18).text(it.v,x+9,y+25,{width:bw-15,lineBreak:false});doc.fillColor(C.muted).font('Helvetica').fontSize(7).text(it.s,x+9,y+49,{width:bw-15,lineBreak:false})});doc.y=y+82}
-function bars(doc:PDFKit.PDFDocument,d:number[]){const y0=doc.y,w=W(doc),h=150,g=12,bw=(w-g*6)/5,max=Math.max(...d,1),usable=88;doc.roundedRect(M.left,y0,w,h,6).fillAndStroke(C.white,C.line);d.forEach((v,i)=>{const bh=v/max*usable,x=M.left+g+i*(bw+g),y=y0+28+usable-bh;doc.roundedRect(x,y,bw,Math.max(2,bh),3).fill(C.star[i]);doc.fillColor(C.ink).font('Helvetica-Bold').fontSize(9).text(String(v),x,y-13,{width:bw,align:'center',lineBreak:false});doc.fillColor(C.muted).font('Helvetica').fontSize(8).text(`${i+1}*`,x,y0+123,{width:bw,align:'center',lineBreak:false})});doc.y=y0+h+12}
-function pageIfNeeded(doc:PDFKit.PDFDocument,n:number,plan:string,per:string,depth:PdfDepth){if(doc.y+n>doc.page.height-M.bottom){doc.addPage();header(doc,plan,per,depth)}}
-export async function gerarRelatorioMensalPDF(db:Database,empresaId:string,mesAno:string,_callGroq?: (system:string,user:string)=>Promise<string>,langRaw?:string|null):Promise<Buffer>{
- let empresa:any;try{empresa=await db.get('SELECT id,nome_empresa,plan,status,locale,idioma,language FROM empresas WHERE id=?',[empresaId])}catch{empresa=await db.get('SELECT id,nome_empresa,plan,status FROM empresas WHERE id=?',[empresaId])}
- if(!empresa)throw new Error('Empresa não encontrada.');const planRaw=String(empresa.plan||empresa.status||'trial').trim().toLowerCase();const trial=isTrialPlan(planRaw)||isTrialPlan(String(empresa.status||''));if(!planTemPdf(planRaw)&&!trial)throw new Error('Plano não elegível para relatório mensal.');const lang=langOf(langRaw||empresa.locale||empresa.idioma||empresa.language),depth=depthForPlan(planRaw,trial),reviews=await loadReviews(db,empresaId,mesAno),units=(depth==='corp'||depth==='rei')?await loadUnits(db,empresaId):[],total=reviews.length,avg=average(reviews),d=distribution(reviews),pos=reviews.filter(r=>Number(r.rating)>=4).length,crit=reviews.filter(r=>Number(r.rating)<=3).length,sen=sentiments(reviews),top=topics(reviews),per=period(mesAno,lang),pLabel=trial?'Trial':String(planRaw||'').toUpperCase(),name=String(empresa.nome_empresa||'Empresa');
- const doc=new PDFDocument({size:'A4',margin:M.left,bufferPages:true,compress:true,info:{Title:`${name} - ${mesAno}`,Author:'Filtra.AI',Subject:`${pLabel} | ${lang} | ${PDF_LAYOUT_VERSION}`}});const chunks:Buffer[]=[];doc.on('data',(c:Buffer)=>chunks.push(c));header(doc,pLabel,per,depth);doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(19).text(name,{width:W(doc)});doc.moveDown(.15);doc.fillColor(C.muted).font('Helvetica').fontSize(9).text(`${text(lang,'period')}: ${per} | ${text(lang,'plan')}: ${pLabel}`,{width:W(doc)});doc.moveDown(.7);title(doc,text(lang,'summary'));cards(doc,[{l:text(lang,'volume'),v:String(total),s:text(lang,'volumeSub')},{l:text(lang,'avg'),v:total?avg.toFixed(1):'-',s:text(lang,'avgSub')},{l:text(lang,'critical'),v:String(crit),s:text(lang,'criticalSub'),c:C.red},{l:text(lang,'positive'),v:String(pos),s:percent(pos,total),c:C.green}]);title(doc,text(lang,'distribution'));bars(doc,d);doc.fillColor(C.ink).font('Helvetica').fontSize(9).text(text(lang,'compare',{p:pos,pp:percent(pos,total),c:crit,cp:percent(crit,total)}),{width:W(doc)});doc.moveDown(.7);
- if(depth!=='pro'){pageIfNeeded(doc,110,pLabel,per,depth);title(doc,text(lang,'sentiment'));cards(doc,[{l:text(lang,'pos'),v:String(sen.p),s:percent(sen.p,total),c:C.green},{l:text(lang,'neu'),v:String(sen.u),s:percent(sen.u,total),c:C.amber},{l:text(lang,'neg'),v:String(sen.n),s:percent(sen.n,total),c:C.red},{l:'TOTAL',v:String(total),s:text(lang,'thisPeriod')}]);if(top.length){pageIfNeeded(doc,35+top.length*16,pLabel,per,depth);title(doc,text(lang,'themes'));for(const[k,v]of top)doc.fillColor(C.ink).font('Helvetica').fontSize(9).text(`- ${k} (${v})`,{width:W(doc)});doc.moveDown(.6)}}
- if(depth==='corp'||depth==='rei'){const groups:Group[]=units.map((u:Unit):Group=>({u,list:reviews.filter((r:Review)=>String(r.unidade_id||'')===String(u.id)||(u.slug!==null&&u.slug!==undefined&&String(r.origin||'')===String(u.slug)))})).filter((g:Group)=>g.list.length>0);if(groups.length){doc.addPage();header(doc,pLabel,per,depth);title(doc,text(lang,'ranking'));for(const g of groups.sort((a:Group,b:Group)=>average(b.list)-average(a.list))){const y=doc.y;doc.roundedRect(M.left,y,W(doc),42,5).fillAndStroke(C.pale,C.line);doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(9).text(String(g.u.nome),M.left+10,y+8,{width:W(doc)-20,lineBreak:false});doc.fillColor(C.muted).font('Helvetica').fontSize(8).text(`${text(lang,'volume')}: ${g.list.length} | ${text(lang,'avg')}: ${average(g.list).toFixed(1)} | ${text(lang,'critical')}: ${g.list.filter((r:Review)=>Number(r.rating)<=3).length}`,M.left+10,y+23,{width:W(doc)-20,lineBreak:false});doc.y=y+52}for(const g of groups){doc.addPage();header(doc,pLabel,per,depth);title(doc,`${text(lang,'branch')}: ${String(g.u.nome)}`);cards(doc,[{l:text(lang,'volume'),v:String(g.list.length),s:text(lang,'thisPeriod')},{l:text(lang,'avg'),v:average(g.list).toFixed(1),s:text(lang,'avgSub')},{l:text(lang,'critical'),v:String(g.list.filter((r:Review)=>Number(r.rating)<=3).length),s:text(lang,'criticalSub'),c:C.red},{l:text(lang,'positive'),v:String(g.list.filter((r:Review)=>Number(r.rating)>=4).length),s:percent(g.list.filter((r:Review)=>Number(r.rating)>=4).length,g.list.length),c:C.green}]);title(doc,text(lang,'distribution'));bars(doc,distribution(g.list));if(depth==='rei'){const lt=topics(g.list);if(lt.length){title(doc,text(lang,'themes'));for(const[k,v]of lt.slice(0,6))doc.fillColor(C.ink).font('Helvetica').fontSize(9).text(`- ${k} (${v})`)}}}}else{pageIfNeeded(doc,30,pLabel,per,depth);doc.fillColor(C.amber).font('Helvetica').fontSize(9).text(text(lang,'noUnits'),{width:W(doc)})}
- if(total===0){pageIfNeeded(doc,25,pLabel,per,depth);doc.fillColor(C.muted).font('Helvetica').fontSize(9).text(text(lang,'empty'),{width:W(doc)})}
- const range=doc.bufferedPageRange();for(let i=0;i<range.count;i++){doc.switchToPage(range.start+i);footer(doc,lang,range.start+i+1)}await new Promise<void>((resolve,reject)=>{doc.on('end',resolve);doc.on('error',reject);doc.end()});const buf=Buffer.concat(chunks);if(buf.length<100||buf.subarray(0,5).toString()!=='%PDF-')throw new Error('PDF gerado inválido.');return buf
+const LANGS: Lang[] = ['pt-BR', 'en-US', 'es-ES', 'fr-FR', 'de-DE', 'it-IT', 'zh-CN'];
+const L: Record<Lang, Record<string, string>> = {
+  'pt-BR': { period: 'Período', plan: 'Plano', summary: 'Resumo executivo', volume: 'Volume', volumeSub: 'Avaliações válidas', avg: 'Nota média', avgSub: 'Escala de 1 a 5', critical: 'Críticas', criticalSub: 'Notas 1–3', positive: 'Positivas', distribution: 'Distribuição de notas', compare: 'Positivas (4–5 estrelas): {p} ({pp}) • Críticas (1–3 estrelas): {c} ({cp})', sentiment: 'Sentimento', pos: 'Positivo', neu: 'Neutro', neg: 'Negativo', themes: 'Principais temas', ranking: 'Ranking de unidades', branch: 'Detalhes da unidade', noUnits: 'Nenhuma unidade com avaliações no período.', empty: 'Nenhuma avaliação válida foi registrada neste período.', page: 'Página', thisPeriod: 'Neste período' },
+  'en-US': { period: 'Period', plan: 'Plan', summary: 'Executive summary', volume: 'Volume', volumeSub: 'Valid reviews', avg: 'Average rating', avgSub: 'Scale 1 to 5', critical: 'Critical', criticalSub: 'Ratings 1–3', positive: 'Positive', distribution: 'Rating distribution', compare: 'Positive (4–5 stars): {p} ({pp}) • Critical (1–3 stars): {c} ({cp})', sentiment: 'Sentiment', pos: 'Positive', neu: 'Neutral', neg: 'Negative', themes: 'Top themes', ranking: 'Unit ranking', branch: 'Unit details', noUnits: 'No units with reviews in this period.', empty: 'No valid reviews were recorded for this period.', page: 'Page', thisPeriod: 'This period' },
+  'es-ES': { period: 'Período', plan: 'Plan', summary: 'Resumen ejecutivo', volume: 'Volumen', volumeSub: 'Reseñas válidas', avg: 'Calificación media', avgSub: 'Escala de 1 a 5', critical: 'Críticas', criticalSub: 'Notas 1–3', positive: 'Positivas', distribution: 'Distribución', compare: 'Positivas (4–5 estrellas): {p} ({pp}) • Críticas (1–3 estrellas): {c} ({cp})', sentiment: 'Sentimiento', pos: 'Positivo', neu: 'Neutro', neg: 'Negativo', themes: 'Temas principales', ranking: 'Ranking de unidades', branch: 'Detalles de la unidad', noUnits: 'No hay unidades con reseñas en este período.', empty: 'No se registraron reseñas válidas en este período.', page: 'Página', thisPeriod: 'En este período' },
+  'fr-FR': { period: 'Période', plan: 'Plan', summary: 'Résumé', volume: 'Volume', volumeSub: 'Avis valides', avg: 'Note moyenne', avgSub: 'Échelle de 1 à 5', critical: 'Critiques', criticalSub: 'Notes 1–3', positive: 'Positifs', distribution: 'Répartition', compare: 'Positifs (4–5 étoiles) : {p} ({pp}) • Critiques (1–3 étoiles) : {c} ({cp})', sentiment: 'Sentiment', pos: 'Positif', neu: 'Neutre', neg: 'Négatif', themes: 'Thèmes principaux', ranking: 'Classement des unités', branch: 'Détails de l’unité', noUnits: 'Aucune unité avec des avis sur cette période.', empty: 'Aucun avis valide sur cette période.', page: 'Page', thisPeriod: 'Sur cette période' },
+  'de-DE': { period: 'Zeitraum', plan: 'Plan', summary: 'Zusammenfassung', volume: 'Volumen', volumeSub: 'Gültige Bewertungen', avg: 'Durchschnitt', avgSub: 'Skala 1 bis 5', critical: 'Kritisch', criticalSub: 'Bewertungen 1–3', positive: 'Positiv', distribution: 'Bewertungsverteilung', compare: 'Positiv (4–5 Sterne): {p} ({pp}) • Kritisch (1–3 Sterne): {c} ({cp})', sentiment: 'Stimmung', pos: 'Positiv', neu: 'Neutral', neg: 'Negativ', themes: 'Wichtigste Themen', ranking: 'Einheiten-Ranking', branch: 'Einheitsdetails', noUnits: 'Keine Einheiten mit Bewertungen in diesem Zeitraum.', empty: 'Keine gültigen Bewertungen in diesem Zeitraum.', page: 'Seite', thisPeriod: 'In diesem Zeitraum' },
+  'it-IT': { period: 'Periodo', plan: 'Piano', summary: 'Riepilogo', volume: 'Volume', volumeSub: 'Recensioni valide', avg: 'Valutazione media', avgSub: 'Scala da 1 a 5', critical: 'Critiche', criticalSub: 'Voti 1–3', positive: 'Positive', distribution: 'Distribuzione', compare: 'Positive (4–5 stelle): {p} ({pp}) • Critiche (1–3 stelle): {c} ({cp})', sentiment: 'Sentiment', pos: 'Positivo', neu: 'Neutro', neg: 'Negativo', themes: 'Temi principali', ranking: 'Classifica unità', branch: 'Dettagli unità', noUnits: 'Nessuna unità con recensioni nel periodo.', empty: 'Nessuna recensione valida nel periodo.', page: 'Pagina', thisPeriod: 'Nel periodo' },
+  'zh-CN': { period: '分析期间', plan: '套餐', summary: '执行摘要', volume: '评价数量', volumeSub: '有效评价', avg: '平均评分', avgSub: '1 至 5 分', critical: '负面评价', criticalSub: '1–3 分', positive: '正面评价', distribution: '评分分布', compare: '正面评价（4–5 分）：{p}（{pp}） • 负面评价（1–3 分）：{c}（{cp}）', sentiment: '情感', pos: '正面', neu: '中性', neg: '负面', themes: '主要主题', ranking: '门店排名', branch: '门店详情', noUnits: '该期间没有包含评价的门店。', empty: '该期间没有有效评价记录。', page: '页', thisPeriod: '该期间' }
+};
+const MONTHS: Record<Lang, string[]> = {
+  'pt-BR': ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'],
+  'en-US': ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'],
+  'es-ES': ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'],
+  'fr-FR': ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'],
+  'de-DE': ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'],
+  'it-IT': ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'],
+  'zh-CN': ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月']
+};
+function langOf(v?: string | null): Lang { return LANGS.includes(String(v || 'pt-BR') as Lang) ? String(v || 'pt-BR') as Lang : 'pt-BR'; }
+function text(l: Lang, k: string, v: Record<string, string | number> = {}): string { let s = L[l][k] || L['en-US'][k] || k; for (const [k2, val] of Object.entries(v)) s = s.replace(new RegExp(`\\{${k2}\\}`, 'g'), String(val)); return s; }
+function period(m: string, l: Lang): string { const x = /^(\d{4})-(\d{2})$/.exec(m); if (!x) return m; const month = MONTHS[l][Number(x[2]) - 1] || x[2]; return l === 'zh-CN' ? `${x[1]}年${month}` : `${month} / ${x[1]}`; }
+function depthForPlan(plan: string, trial: boolean): PdfDepth { if (trial) return 'ultra'; const p = String(plan || '').toLowerCase(); if (p === 'rei') return 'rei'; if (p === 'corporativo' || p === 'corporate') return 'corp'; if (p === 'ultra') return 'ultra'; return 'pro'; }
+export function depthForPlanPublic(plan: string, trial: boolean): PdfDepth { return depthForPlan(plan, trial); }
+export async function ensureUnidadesSchema(db: Database): Promise<void> { try { await db.exec(`CREATE TABLE IF NOT EXISTS unidades (id TEXT PRIMARY KEY, empresa_id TEXT NOT NULL, nome TEXT NOT NULL, slug TEXT, ativo INTEGER DEFAULT 1, criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP)`); } catch {} }
+function isTest(r: Review): boolean { return Number(r.is_test) === 1 || r.is_test === true; }
+function dateOf(r: Review): string | Date | null { return r.createdAt ?? r.createdat ?? r.created_at ?? null; }
+function monthOk(r: Review, m: string): boolean { const d = dateOf(r); if (!d) return true; const s = typeof d === 'string' ? d : new Date(d).toISOString(); return s.slice(0, 7) === m; }
+async function loadReviews(db: Database, id: string, m: string): Promise<Review[]> { const qs = ['SELECT * FROM reviews WHERE empresa_id=?', 'SELECT rating,is_test,ai_tags,sentiment,unidade_id,origin,createdAt FROM reviews WHERE empresa_id=?']; for (const q of qs) { try { const rows = await db.all(q, [id]) as unknown[]; return rows.filter((r: any) => !isTest(r) && monthOk(r, m) && Number(r.rating) >= 1 && Number(r.rating) <= 5) as Review[]; } catch {} } return []; }
+async function loadUnits(db: Database, id: string): Promise<Unit[]> { try { const rows = await db.all('SELECT id,nome,slug FROM unidades WHERE empresa_id=? AND ativo=1 ORDER BY nome', [id]) as unknown[]; return rows as Unit[]; } catch { return []; } }
+function average(rs: Review[]): number { return rs.length ? rs.reduce((s, r) => s + Number(r.rating), 0) / rs.length : 0; }
+function percent(n: number, t: number): string { return t ? `${Math.round(n / t * 100)}%` : '0%'; }
+function distribution(rs: Review[]): number[] { const a = [0, 0, 0, 0, 0]; for (const r of rs) { const n = Number(r.rating); if (n >= 1 && n <= 5) a[n - 1]++; } return a; }
+function sentiments(rs: Review[]): { p: number; n: number; u: number } { let p = 0, n = 0, u = 0; for (const r of rs) { const s = String(r.sentiment || '').toLowerCase(); if (s.includes('pos')) p++; else if (s.includes('neg')) n++; else if (s.includes('neu')) u++; else { const x = Number(r.rating); if (x >= 4) p++; else if (x <= 2) n++; else u++; } } return { p, n, u }; }
+function topics(rs: Review[]): [string, number][] { const m = new Map<string, number>(); for (const r of rs) { if (!r.ai_tags) continue; try { const a = JSON.parse(String(r.ai_tags)); if (Array.isArray(a)) for (const x of a) { const k = String(x || '').trim(); if (k) m.set(k, (m.get(k) || 0) + 1); } } catch {} } return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8); }
+function W(doc: PDFKit.PDFDocument): number { return doc.page.width - M.left - M.right; }
+function header(doc: PDFKit.PDFDocument, plan: string, per: string, depth: PdfDepth): void { doc.rect(0, 0, doc.page.width, 72).fill(C.navy); doc.rect(0, 72, doc.page.width, 3).fill(C.indigo); doc.fillColor(C.white).font('Helvetica-Bold').fontSize(15).text('Filtra.AI', M.left, 18, { lineBreak: false }); doc.fillColor('#a5b4fc').font('Helvetica').fontSize(8).text(plan, M.left, 42, { lineBreak: false }); doc.fillColor(C.white).font('Helvetica-Bold').fontSize(9).text(depth.toUpperCase(), doc.page.width - 160, 18, { width: 112, align: 'right', lineBreak: false }); doc.fillColor('#cbd5e1').font('Helvetica').fontSize(8).text(per, doc.page.width - 160, 38, { width: 112, align: 'right', lineBreak: false }); doc.y = M.top; }
+function footer(doc: PDFKit.PDFDocument, lang: Lang, pageNumber: number): void { const y = doc.page.height - 30; doc.strokeColor(C.line).lineWidth(0.6).moveTo(M.left, y - 5).lineTo(doc.page.width - M.right, y - 5).stroke(); doc.fillColor(C.muted).font('Helvetica').fontSize(7).text('Filtra.AI', M.left, y, { lineBreak: false }); doc.text(`${text(lang, 'page')} ${pageNumber}`, doc.page.width - M.right - 100, y, { width: 100, align: 'right', lineBreak: false }); }
+function title(doc: PDFKit.PDFDocument, s: string): void { doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(12).text(s, { width: W(doc) }); doc.moveDown(0.35); }
+function cards(doc: PDFKit.PDFDocument, items: { l: string; v: string; s: string; c?: string }[]): void { const gap = 8, w = W(doc), bw = (w - gap * 3) / 4, y = doc.y; items.forEach((it, i) => { const x = M.left + i * (bw + gap); doc.roundedRect(x, y, bw, 68, 6).fillAndStroke(C.pale, C.line); doc.rect(x, y, 3, 68).fill(it.c || C.indigo); doc.fillColor(C.muted).font('Helvetica-Bold').fontSize(6.5).text(it.l.toUpperCase(), x + 9, y + 9, { width: bw - 15, lineBreak: false }); doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(18).text(it.v, x + 9, y + 25, { width: bw - 15, lineBreak: false }); doc.fillColor(C.muted).font('Helvetica').fontSize(7).text(it.s, x + 9, y + 49, { width: bw - 15, lineBreak: false }); }); doc.y = y + 82; }
+function bars(doc: PDFKit.PDFDocument, d: number[]): void { const y0 = doc.y, w = W(doc), h = 150, g = 12, bw = (w - g * 6) / 5, max = Math.max(...d, 1), usable = 88; doc.roundedRect(M.left, y0, w, h, 6).fillAndStroke(C.white, C.line); d.forEach((v, i) => { const bh = v / max * usable, x = M.left + g + i * (bw + g), y = y0 + 28 + usable - bh; doc.roundedRect(x, y, bw, Math.max(2, bh), 3).fill(C.star[i]); doc.fillColor(C.ink).font('Helvetica-Bold').fontSize(9).text(String(v), x, y - 13, { width: bw, align: 'center', lineBreak: false }); doc.fillColor(C.muted).font('Helvetica').fontSize(8).text(`${i + 1}*`, x, y0 + 123, { width: bw, align: 'center', lineBreak: false }); }); doc.y = y0 + h + 12; }
+function pageIfNeeded(doc: PDFKit.PDFDocument, n: number, plan: string, per: string, depth: PdfDepth): void { if (doc.y + n > doc.page.height - M.bottom) { doc.addPage(); header(doc, plan, per, depth); } }
+
+export async function gerarRelatorioMensalPDF(db: Database, empresaId: string, mesAno: string, _callGroq?: (system: string, user: string) => Promise<string>, langRaw?: string | null): Promise<Buffer> {
+  let empresa: any;
+  try { empresa = await db.get('SELECT id,nome_empresa,plan,status,locale,idioma,language FROM empresas WHERE id=?', [empresaId]); }
+  catch { empresa = await db.get('SELECT id,nome_empresa,plan,status FROM empresas WHERE id=?', [empresaId]); }
+  if (!empresa) throw new Error('Empresa não encontrada.');
+  const planRaw = String(empresa.plan || empresa.status || 'trial').trim().toLowerCase();
+  const trial = isTrialPlan(planRaw) || isTrialPlan(String(empresa.status || ''));
+  if (!planTemPdf(planRaw) && !trial) throw new Error('Plano não elegível para relatório mensal.');
+  const lang = langOf(langRaw || empresa.locale || empresa.idioma || empresa.language);
+  const depth = depthForPlan(planRaw, trial);
+  const reviews = await loadReviews(db, empresaId, mesAno);
+  const units = depth === 'corp' || depth === 'rei' ? await loadUnits(db, empresaId) : [];
+  const total = reviews.length;
+  const avg = average(reviews);
+  const d = distribution(reviews);
+  const pos = reviews.filter((r: Review) => Number(r.rating) >= 4).length;
+  const crit = reviews.filter((r: Review) => Number(r.rating) <= 3).length;
+  const sen = sentiments(reviews);
+  const top = topics(reviews);
+  const per = period(mesAno, lang);
+  const pLabel = trial ? 'Trial' : String(planRaw || '').toUpperCase();
+  const name = String(empresa.nome_empresa || 'Empresa');
+
+  const doc = new PDFDocument({ size: 'A4', margin: M.left, bufferPages: true, compress: true, info: { Title: `${name} - ${mesAno}`, Author: 'Filtra.AI', Subject: `${pLabel} | ${lang} | ${PDF_LAYOUT_VERSION}` } });
+  const chunks: Buffer[] = [];
+  doc.on('data', (chunk: unknown) => { chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array)); });
+
+  header(doc, pLabel, per, depth);
+  doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(19).text(name, { width: W(doc) });
+  doc.moveDown(0.15);
+  doc.fillColor(C.muted).font('Helvetica').fontSize(9).text(`${text(lang, 'period')}: ${per} | ${text(lang, 'plan')}: ${pLabel}`, { width: W(doc) });
+  doc.moveDown(0.7);
+  title(doc, text(lang, 'summary'));
+  cards(doc, [
+    { l: text(lang, 'volume'), v: String(total), s: text(lang, 'volumeSub') },
+    { l: text(lang, 'avg'), v: total ? avg.toFixed(1) : '-', s: text(lang, 'avgSub') },
+    { l: text(lang, 'critical'), v: String(crit), s: text(lang, 'criticalSub'), c: C.red },
+    { l: text(lang, 'positive'), v: String(pos), s: percent(pos, total), c: C.green }
+  ]);
+  title(doc, text(lang, 'distribution'));
+  bars(doc, d);
+  doc.fillColor(C.ink).font('Helvetica').fontSize(9).text(text(lang, 'compare', { p: pos, pp: percent(pos, total), c: crit, cp: percent(crit, total) }), { width: W(doc) });
+  doc.moveDown(0.7);
+
+  if (depth !== 'pro') {
+    pageIfNeeded(doc, 110, pLabel, per, depth);
+    title(doc, text(lang, 'sentiment'));
+    cards(doc, [
+      { l: text(lang, 'pos'), v: String(sen.p), s: percent(sen.p, total), c: C.green },
+      { l: text(lang, 'neu'), v: String(sen.u), s: percent(sen.u, total), c: C.amber },
+      { l: text(lang, 'neg'), v: String(sen.n), s: percent(sen.n, total), c: C.red },
+      { l: 'TOTAL', v: String(total), s: text(lang, 'thisPeriod') }
+    ]);
+    if (top.length) {
+      pageIfNeeded(doc, 35 + top.length * 16, pLabel, per, depth);
+      title(doc, text(lang, 'themes'));
+      for (const [k, v] of top) doc.fillColor(C.ink).font('Helvetica').fontSize(9).text(`- ${k} (${v})`, { width: W(doc) });
+      doc.moveDown(0.6);
+    }
+  }
+
+  if (depth === 'corp' || depth === 'rei') {
+    const groups: Group[] = units
+      .map((u: Unit): Group => ({
+        u,
+        list: reviews.filter((r: Review) => String(r.unidade_id || '') === String(u.id) || (u.slug !== null && u.slug !== undefined && String(r.origin || '') === String(u.slug)))
+      }))
+      .filter((g: Group): boolean => g.list.length > 0);
+
+    if (groups.length) {
+      doc.addPage();
+      header(doc, pLabel, per, depth);
+      title(doc, text(lang, 'ranking'));
+      for (const g of groups.sort((a: Group, b: Group): number => average(b.list) - average(a.list))) {
+        const y = doc.y;
+        doc.roundedRect(M.left, y, W(doc), 42, 5).fillAndStroke(C.pale, C.line);
+        doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(9).text(String(g.u.nome), M.left + 10, y + 8, { width: W(doc) - 20, lineBreak: false });
+        doc.fillColor(C.muted).font('Helvetica').fontSize(8).text(`${text(lang, 'volume')}: ${g.list.length} | ${text(lang, 'avg')}: ${average(g.list).toFixed(1)} | ${text(lang, 'critical')}: ${g.list.filter((r: Review) => Number(r.rating) <= 3).length}`, M.left + 10, y + 23, { width: W(doc) - 20, lineBreak: false });
+        doc.y = y + 52;
+      }
+      for (const g of groups) {
+        doc.addPage();
+        header(doc, pLabel, per, depth);
+        title(doc, `${text(lang, 'branch')}: ${String(g.u.nome)}`);
+        const unitPositive = g.list.filter((r: Review) => Number(r.rating) >= 4).length;
+        const unitCritical = g.list.filter((r: Review) => Number(r.rating) <= 3).length;
+        cards(doc, [
+          { l: text(lang, 'volume'), v: String(g.list.length), s: text(lang, 'thisPeriod') },
+          { l: text(lang, 'avg'), v: average(g.list).toFixed(1), s: text(lang, 'avgSub') },
+          { l: text(lang, 'critical'), v: String(unitCritical), s: text(lang, 'criticalSub'), c: C.red },
+          { l: text(lang, 'positive'), v: String(unitPositive), s: percent(unitPositive, g.list.length), c: C.green }
+        ]);
+        title(doc, text(lang, 'distribution'));
+        bars(doc, distribution(g.list));
+        if (depth === 'rei') {
+          const lt = topics(g.list);
+          if (lt.length) {
+            title(doc, text(lang, 'themes'));
+            for (const [k, v] of lt.slice(0, 6)) doc.fillColor(C.ink).font('Helvetica').fontSize(9).text(`- ${k} (${v})`);
+          }
+        }
+      }
+    } else {
+      pageIfNeeded(doc, 30, pLabel, per, depth);
+      doc.fillColor(C.amber).font('Helvetica').fontSize(9).text(text(lang, 'noUnits'), { width: W(doc) });
+    }
+  }
+
+  if (total === 0) {
+    pageIfNeeded(doc, 25, pLabel, per, depth);
+    doc.fillColor(C.muted).font('Helvetica').fontSize(9).text(text(lang, 'empty'), { width: W(doc) });
+  }
+
+  const range = doc.bufferedPageRange();
+  for (let i = 0; i < range.count; i++) {
+    doc.switchToPage(range.start + i);
+    footer(doc, lang, range.start + i + 1);
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    doc.on('end', () => resolve());
+    doc.on('error', (err: Error) => reject(err));
+    doc.end();
+  });
+
+  const buf = Buffer.concat(chunks);
+  if (buf.length < 100 || buf.subarray(0, 5).toString() !== '%PDF-') throw new Error('PDF gerado inválido.');
+  return buf;
 }
