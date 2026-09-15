@@ -49,6 +49,20 @@ export async function buildN8nMonthlyReport(
     );
   }
 
+  let savedRecipients: Array<{ channel?: string; destination?: string; canal?: string; destino?: string }> = [];
+  try {
+    const saved = await db.get<{ relatorio_destinatarios?: string }>(
+      'SELECT relatorio_destinatarios FROM empresas WHERE id = ?',
+      [empresaId]
+    );
+    if (saved?.relatorio_destinatarios) {
+      const parsed = JSON.parse(saved.relatorio_destinatarios);
+      if (Array.isArray(parsed)) savedRecipients = parsed;
+    }
+  } catch {
+    /* Compatibilidade com bancos anteriores à coluna de destinatários. */
+  }
+
   const recipient = await db.get(
     `SELECT email
        FROM usuarios
@@ -59,6 +73,17 @@ export async function buildN8nMonthlyReport(
       LIMIT 1`,
     [empresaId]
   );
+
+  const destinatarios = savedRecipients
+    .map((item) => ({
+      channel: String(item.channel || item.canal || '').trim().toLowerCase(),
+      destination: String(item.destination || item.destino || '').trim(),
+    }))
+    .filter((item) => item.channel && item.destination);
+
+  if (destinatarios.length === 0 && recipient?.email) {
+    destinatarios.push({ channel: 'email', destination: String(recipient.email).trim() });
+  }
 
   const comentarios = rows
     .map((r: any) => String(r.comment || '').trim())
@@ -97,8 +122,6 @@ export async function buildN8nMonthlyReport(
       },
       comentarios,
     },
-    destinatarios: recipient?.email
-      ? [{ channel: 'email', destination: String(recipient.email).trim() }]
-      : [],
+    destinatarios,
   };
 }
