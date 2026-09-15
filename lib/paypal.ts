@@ -150,6 +150,9 @@ export async function createPayPalOrder(opts: {
       debug_id: data?.debug_id || null,
       details,
     };
+    // JSON.stringify is intentional: Render's structured logger otherwise
+    // renders nested arrays/objects as [Object], hiding PayPal's real issue.
+    console.error('[paypal create-order]', JSON.stringify((error as any).body));
     throw error;
   }
 
