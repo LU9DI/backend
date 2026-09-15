@@ -28,11 +28,31 @@ export function planTemPdf(plan: string | null | undefined): boolean {
   return false;
 }
 
+/** Relatório inteligente (texto → n8n). Inicial NÃO tem. Trial e Pro+ sim. */
+export function planTemRelatorio(plan: string | null | undefined): boolean {
+  const p = String(plan || '').toLowerCase().trim();
+  if (!p) return false;
+  if (p === 'inicial') return false;
+  if (isTrialPlan(p)) return true;
+  if (['pro', 'ultra', 'corporativo', 'rei'].includes(p)) return true;
+  return false;
+}
+
 export function empresaTemPdf(empresa: {
   plan?: string | null;
   status?: string | null;
 }): boolean {
   if (planTemPdf(empresa?.plan)) return true;
+  const st = String(empresa?.status || '').toLowerCase().trim();
+  if (st === 'trial' || st === 'teste' || st === 'test') return true;
+  return false;
+}
+
+export function empresaTemRelatorio(empresa: {
+  plan?: string | null;
+  status?: string | null;
+}): boolean {
+  if (planTemRelatorio(empresa?.plan)) return true;
   const st = String(empresa?.status || '').toLowerCase().trim();
   if (st === 'trial' || st === 'teste' || st === 'test') return true;
   return false;
