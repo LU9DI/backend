@@ -5,7 +5,7 @@ import rateLimit from 'express-rate-limit';
 import { getDb, findEmpresa } from '../lib/db.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validateReportMonth } from '../lib/dateValidation.js';
-import { empresaTemPdf, empresaTemRelatorio, planLabel } from '../lib/plans.js';
+import { empresaTemPdf, empresaTemRelatorio, planLabel, planTemPdf } from '../lib/plans.js';
 import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
 import { notifyN8nAsync, n8nConfigured } from '../lib/n8n.js';
 import { enqueueRetry } from '../lib/retryQueue.js';
@@ -13,6 +13,7 @@ import {
   buildRelatorioInteligente,
   normalizeDestinatarios,
 } from '../services/relatorioInteligente.js';
+import { gerarRelatorioInteligentePDF } from '../relatorioInteligentePdf.js';
 
 const sendLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -23,6 +24,20 @@ const sendLimiter = rateLimit({
 function podeAcessarEmpresa(req: AuthRequest, empresaId: string): boolean {
   if (isAdminUser(req.user)) return true;
   return Boolean(req.user?.empresa_id && req.user.empresa_id === empresaId);
+}
+
+function dateOnly(value: unknown): string | null {
+  const s = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(`${s}T00:00:00Z`);
+  return Number.isFinite(d.getTime()) ? s : null;
+}
+
+function tomorrowUtc(): string {
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
 }
 
 async function ensureDestinatariosColumn() {
@@ -273,6 +288,34 @@ export function mountRelatorioRoutes(app: Express) {
   app.post('/api/empresa/:ref/relatorio/enviar', autenticarToken, sendLimiter, sendHandler);
   app.post('/api/empresa/:ref/relatorio/inteligente', autenticarToken, sendLimiter, sendHandler);
   app.post('/api/empresa/:ref/relatorio/send', autenticarToken, sendLimiter, sendHandler);
+
+  app.get('/api/empresa/:ref/relatorio-inteligente.pdf', autenticarToken, asyncHandler(async (req: AuthRequest, res: Response) => {
+    const empresa: any = await findEmpresa(req.params.ref);
+    if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
+    if (!podeAcessarEmpresa(req, String(empresa.id))) return res.status(403).json({ error: 'Sem permissão.' });
+
+    if (!planTemPdf(String(empresa.plan || empresa.status || ''))) {
+      return res.status(403).json({ error: 'PDF não disponível neste plano.' });
+    }
+
+    const inicioParam = dateOnly(req.query.inicio);
+    const fimParam = dateOnly(req.query.fim);
+    const inicio = inicioParam || '1970-01-01';
+    const fim = fimParam || tomorrowUtc();
+    if (new Date(`${inicio}T00:00:00Z`) >= new Date(`${fim}T00:00:00Z`)) {
+      return res.status(400).json({ error: 'Período do ciclo inválido.' });
+    }
+
+    const langRaw = String(req.query.lang || 'pt').toLowerCase();
+    const lang = ['pt', 'en', 'es', 'zh'].includes(langRaw) ? langRaw : 'pt';
+    const pdf = await gerarRelatorioInteligentePDF(getDb(), String(empresa.id), inicio, fim, lang);
+    const slug = String(empresa.slug || empresa.id).replace(/[^a-z0-9_-]+/gi, '-');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="relatorio-inteligente-${slug}-${fim}.pdf"`);
+    res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate');
+    res.setHeader('X-PDF-Cache', 'MISS');
+    return res.send(pdf);
+  }));
 
   app.get(
     '/api/empresa/:ref/relatorio.pdf',
