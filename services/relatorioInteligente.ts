@@ -3,7 +3,7 @@ import type { Database } from 'sqlite';
 import { planLabel } from '../lib/plans.js';
 
 export type RelatorioDestino = {
-  canal: 'email' | 'whatsapp' | 'sms' | 'wechat';
+  canal: 'email' | 'telegram' | 'sms' | 'wechat';
   destino: string;
 };
 
@@ -121,12 +121,10 @@ export function normalizeDestinatarios(body: any): RelatorioDestino[] {
   const out: RelatorioDestino[] = [];
   const seen = new Set<string>();
   const push = (canal: string, destino: string) => {
-    const c0 = String(canal || '').toLowerCase().trim();
+    const c = String(canal || '').toLowerCase().trim();
     const d = String(destino || '').trim();
     if (!d) return;
-    const c =
-      c0 === 'wpp' ? 'whatsapp' : c0;
-    if (!['email', 'whatsapp', 'sms', 'wechat'].includes(c)) return;
+    if (!['email', 'telegram', 'sms', 'wechat'].includes(c)) return;
     const key = `${c}|${d.toLowerCase()}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -137,14 +135,14 @@ export function normalizeDestinatarios(body: any): RelatorioDestino[] {
     for (const item of list) {
       if (typeof item === 'string') {
         if (item.includes('@')) push('email', item);
-        else push('whatsapp', item);
+        else push('telegram', item);
       } else if (item && typeof item === 'object') {
         push(item.canal || item.channel || item.tipo, item.destino || item.to || item.value);
       }
     }
   }
   if (body?.email) push('email', String(body.email));
-  if (body?.whatsapp) push('whatsapp', String(body.whatsapp));
+  if (body?.telegram) push('telegram', String(body.telegram));
   if (body?.sms) push('sms', String(body.sms));
   if (body?.wechat) push('wechat', String(body.wechat));
   return out.slice(0, 20);
