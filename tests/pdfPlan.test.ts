@@ -9,8 +9,8 @@ function pdfDepth(plan: string): 'none' | 'pro' | 'ultra' | 'corp' | 'rei' {
   if (p === 'rei') return 'rei';
   if (p === 'corporativo') return 'corp';
   if (p === 'ultra') return 'ultra';
-  // pro + trial usam relatório base elegível
-  return 'pro';
+  // trial usa a profundidade Ultra; os demais planos elegíveis usam Pro como base
+  return p === 'trial' || p === 'teste' || p === 'test' ? 'ultra' : 'pro';
 }
 
 describe('PDF por plano', () => {
