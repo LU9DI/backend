@@ -1,4 +1,5 @@
 /** Relatório inteligente (texto → n8n) + reentrega via retry queue. */
+import { randomUUID } from 'node:crypto';
 import type { Express, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { getDb, findEmpresa } from '../lib/db.js';
@@ -186,6 +187,7 @@ export function mountRelatorioRoutes(app: Express) {
 
     const rel = await buildRelatorioInteligente(getDb(), empresa, mesAno);
     const requestId = (req as any).requestId || null;
+    const idempotencyKey = `report:${empresa.id}:${mesAno}:${requestId || randomUUID()}`;
 
     const payload = {
       event: 'report.generated',
@@ -206,13 +208,14 @@ export function mountRelatorioRoutes(app: Express) {
       modelo_ia: 'none',
       tokens: 0,
       request_id: requestId,
+      idempotency_key: idempotencyKey,
     };
 
     if (!n8nConfigured()) {
       try {
         await enqueueRetry({
           jobType: 'n8n_dispatch',
-          dedupeKey: `report:${empresa.id}:${rel.periodo}:${destinatarios.map((d) => d.destino).join(',')}`,
+          dedupeKey: idempotencyKey,
           payload: { event: 'report.generated', body: payload },
           delayMs: 60_000,
         });
@@ -235,7 +238,7 @@ export function mountRelatorioRoutes(app: Express) {
       try {
         jobId = await enqueueRetry({
           jobType: 'n8n_dispatch',
-          dedupeKey: `report:${empresa.id}:${rel.periodo}:${Date.now()}`,
+          dedupeKey: idempotencyKey,
           payload: { event: 'report.generated', body: payload },
           delayMs: 20_000,
         });
