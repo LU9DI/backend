@@ -179,7 +179,7 @@ export function mountRelatorioRoutes(app: Express) {
     }
     if (destinatarios.length === 0) {
       return res.status(400).json({
-        error: 'Informe email, whatsapp, sms ou destinatarios[{canal,destino}].',
+        error: 'Informe email, telegram, sms ou destinatarios[{canal,destino}].',
         code: 'NO_DESTINATARIO',
       });
     }
