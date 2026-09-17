@@ -1,8 +1,9 @@
 /**
  * Trial 7 dias — SQLite + Postgres.
- * CNPJ/Tax ID opcional: estrangeiros entram só com e-mail + nome + senha.
+ * E-mail obrigatório, formato válido, uso único; CNPJ/Tax ID opcional.
  */
 import crypto from 'crypto';
+import dns from 'dns/promises';
 import type { Database } from 'sqlite';
 import type { Response } from 'express';
 import { getDb, slugify, slugUnico } from '../lib/db.js';
@@ -15,6 +16,27 @@ import { normalizarTaxId, taxIdValido } from '../lib/cnpj.js';
 const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(
   /\/$/,
   ''
+);
+
+/** Domínios descartáveis comuns — bloqueados no trial. */
+const DISPOSABLE_DOMAINS = new Set(
+  [
+    'mailinator.com',
+    'guerrillamail.com',
+    'guerrillamail.org',
+    '10minutemail.com',
+    'tempmail.com',
+    'temp-mail.org',
+    'throwaway.email',
+    'yopmail.com',
+    'sharklasers.com',
+    'trashmail.com',
+    'fakeinbox.com',
+    'getnada.com',
+    'maildrop.cc',
+    'dispostable.com',
+    'mailnesia.com',
+  ].map((d) => d.toLowerCase())
 );
 
 export type TrialInput = {
@@ -69,9 +91,43 @@ function isUniqueViolation(e: any): boolean {
   );
 }
 
-/** Gera identificador interno quando o cliente não informa Tax ID/CNPJ. */
 function syntheticTaxId(): string {
   return `INTL${crypto.randomUUID().replace(/-/g, '').slice(0, 12).toUpperCase()}`;
+}
+
+function isEmailFormat(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(email);
+}
+
+async function assertEmailUsable(email: string): Promise<void> {
+  if (!isEmailFormat(email)) {
+    throw new TrialValidationError('E-mail inválido.');
+  }
+  const domain = email.split('@')[1]?.toLowerCase() || '';
+  if (!domain || domain.length < 3) {
+    throw new TrialValidationError('E-mail inválido.');
+  }
+  if (DISPOSABLE_DOMAINS.has(domain)) {
+    throw new TrialValidationError(
+      'Use um e-mail permanente (não temporário) para ativar o período de teste.'
+    );
+  }
+  // Verifica se o domínio aceita e-mail (registro MX ou A).
+  try {
+    const mx = await dns.resolveMx(domain);
+    if (Array.isArray(mx) && mx.length > 0) return;
+  } catch {
+    /* tenta A */
+  }
+  try {
+    const a = await dns.resolve4(domain);
+    if (Array.isArray(a) && a.length > 0) return;
+  } catch {
+    /* */
+  }
+  throw new TrialValidationError(
+    'Este e-mail não parece existir (domínio sem servidor de e-mail). Use um e-mail válido.'
+  );
 }
 
 export async function ativarTrial(
@@ -97,9 +153,8 @@ export async function ativarTrial(
   if (!nome || nome.length < 2) {
     throw new TrialValidationError('Nome da empresa inválido.');
   }
-  if (!email.includes('@')) {
-    throw new TrialValidationError('E-mail inválido.');
-  }
+
+  await assertEmailUsable(email);
 
   if (input.whatsapp && String(input.whatsapp).trim() && !wpp) {
     throw new TrialValidationError(
@@ -107,10 +162,25 @@ export async function ativarTrial(
     );
   }
 
-  // Unicidade: e-mail (principal) e Tax ID quando informado pelo usuário
-  const emailExistente = await db.get(`SELECT id FROM usuarios WHERE email = ?`, [email]);
+  // Um e-mail = um trial/conta (usuarios + empresas.email se existir)
+  const emailExistente = await db.get(`SELECT id FROM usuarios WHERE lower(trim(email)) = ?`, [
+    email,
+  ]);
   if (emailExistente) {
-    throw new TrialConflictError('Este e-mail já está cadastrado.');
+    throw new TrialConflictError('Este e-mail já utilizou o período de teste ou já está cadastrado.');
+  }
+
+  try {
+    const empEmail = await db.get(
+      `SELECT id FROM empresas WHERE lower(trim(COALESCE(email, ''))) = ? LIMIT 1`,
+      [email]
+    );
+    if (empEmail) {
+      throw new TrialConflictError('Este e-mail já utilizou o período de teste ou já está cadastrado.');
+    }
+  } catch (e: any) {
+    if (e instanceof TrialConflictError) throw e;
+    // coluna email pode não existir em schemas antigos
   }
 
   if (rawTax) {
@@ -172,8 +242,8 @@ export async function ativarTrial(
     } catch {
       /* */
     }
-    if (/e-mail já está em uso|email already/i.test(String(e?.message || ''))) {
-      throw new TrialConflictError('Este e-mail já está cadastrado.');
+    if (/e-mail já está em uso|email already|já utilizou/i.test(String(e?.message || ''))) {
+      throw new TrialConflictError('Este e-mail já utilizou o período de teste ou já está cadastrado.');
     }
     throw new TrialValidationError(e?.message || 'Falha ao criar usuário.');
   }
