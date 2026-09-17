@@ -1,4 +1,4 @@
-/** Relatório inteligente (texto → n8n) + reentrega via retry queue. */
+/** Relatório inteligente (texto → n8n) + PDF profissional por plano. */
 import { randomUUID } from 'node:crypto';
 import type { Express, Response } from 'express';
 import rateLimit from 'express-rate-limit';
@@ -14,6 +14,7 @@ import {
   normalizeDestinatarios,
 } from '../services/relatorioInteligente.js';
 import { gerarRelatorioInteligentePDF } from '../relatorioInteligentePdf.js';
+import { gerarRelatorioMensalPDF } from '../relatorioPdf.js';
 
 const sendLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -289,6 +290,7 @@ export function mountRelatorioRoutes(app: Express) {
   app.post('/api/empresa/:ref/relatorio/inteligente', autenticarToken, sendLimiter, sendHandler);
   app.post('/api/empresa/:ref/relatorio/send', autenticarToken, sendLimiter, sendHandler);
 
+  // PDF profissional (layout sample: teal, benefícios, logo, marca d'água)
   app.get('/api/empresa/:ref/relatorio-inteligente.pdf', autenticarToken, asyncHandler(async (req: AuthRequest, res: Response) => {
     const empresa: any = await findEmpresa(req.params.ref);
     if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
@@ -311,9 +313,9 @@ export function mountRelatorioRoutes(app: Express) {
     const pdf = await gerarRelatorioInteligentePDF(getDb(), String(empresa.id), inicio, fim, lang);
     const slug = String(empresa.slug || empresa.id).replace(/[^a-z0-9_-]+/gi, '-');
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="relatorio-inteligente-${slug}-${fim}.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename="relatorio-${slug}-${fim}.pdf"`);
     res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate');
-    res.setHeader('X-PDF-Cache', 'MISS');
+    res.setHeader('X-PDF-Layout', 'v8-professional');
     return res.send(pdf);
   }));
 
@@ -328,14 +330,27 @@ export function mountRelatorioRoutes(app: Express) {
       }
       if (!empresaTemPdf(empresa)) {
         return res.status(403).json({
-          error: 'PDF não disponível. Use o relatório inteligente.',
-          code: 'USE_RELATORIO_INTELIGENTE',
+          error: 'PDF não disponível neste plano.',
+          code: 'PLAN_NO_PDF',
         });
       }
-      return res.status(410).json({
-        error: 'PDF descontinuado. Use POST /api/empresa/:ref/relatorio/enviar',
-        code: 'PDF_GONE',
+
+      const mesCheck = validateReportMonth(req.query.mes, {
+        defaultToCurrent: true,
+        minYear: 2020,
+        allowFutureMonths: 0,
       });
+      const mesAno = mesCheck.ok ? mesCheck.value : new Date().toISOString().slice(0, 7);
+      const langRaw = String(req.query.lang || 'pt').toLowerCase();
+      const lang = ['pt', 'en', 'es', 'zh'].includes(langRaw) ? langRaw : 'pt';
+
+      const pdf = await gerarRelatorioMensalPDF(getDb(), String(empresa.id), mesAno, undefined, lang);
+      const slug = String(empresa.slug || empresa.id).replace(/[^a-z0-9_-]+/gi, '-');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="relatorio-${slug}-${mesAno}.pdf"`);
+      res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate');
+      res.setHeader('X-PDF-Layout', 'v8-professional');
+      return res.send(pdf);
     })
   );
 }
