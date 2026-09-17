@@ -2,6 +2,7 @@
  * Relatório PDF (legado) + Relatório inteligente (texto → n8n).
  */
 import type { Express, Response } from 'express';
+import { randomUUID } from 'node:crypto';
 import rateLimit from 'express-rate-limit';
 import { getDb, findEmpresa } from '../lib/db.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
@@ -180,6 +181,7 @@ export function mountRelatorioRoutes(app: Express) {
     }
 
     const rel = await buildRelatorioInteligente(getDb(), empresa, mesAno);
+    const idempotencyKey = `report:${empresa.id}:${mesAno}:${randomUUID()}`;
 
     if (!n8nConfigured()) {
       return res.status(503).json({
@@ -208,6 +210,7 @@ export function mountRelatorioRoutes(app: Express) {
       destinatarios,
       channels: [...new Set(destinatarios.map((d) => d.canal))],
       email: destinatarios.find((d) => d.canal === 'email')?.destino || null,
+      idempotency_key: idempotencyKey,
       modelo_ia: 'none',
       tokens: 0,
     });
