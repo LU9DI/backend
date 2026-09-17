@@ -13,7 +13,6 @@ import {
   buildRelatorioInteligente,
   normalizeDestinatarios,
 } from '../services/relatorioInteligente.js';
-import { gerarRelatorioInteligentePDF } from '../relatorioInteligentePdf.js';
 import { gerarRelatorioMensalPDF } from '../relatorioPdf.js';
 
 const sendLimiter = rateLimit({
@@ -310,7 +309,8 @@ export function mountRelatorioRoutes(app: Express) {
 
     const langRaw = String(req.query.lang || 'pt').toLowerCase();
     const lang = ['pt', 'en', 'es', 'zh'].includes(langRaw) ? langRaw : 'pt';
-    const pdf = await gerarRelatorioInteligentePDF(getDb(), String(empresa.id), inicio, fim, lang);
+    const mesAno = fim.slice(0, 7) || inicio.slice(0, 7) || new Date().toISOString().slice(0, 7);
+    const pdf = await gerarRelatorioMensalPDF(getDb(), String(empresa.id), mesAno, undefined, lang);
     const slug = String(empresa.slug || empresa.id).replace(/[^a-z0-9_-]+/gi, '-');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="relatorio-${slug}-${fim}.pdf"`);
