@@ -11,13 +11,7 @@ import {
   ReviewValidationError,
 } from '../services/reviewService.js';
 import { clientIp } from '../lib/reviewFraud.js';
-import {
-  autenticarToken,
-  extrairToken,
-  isAdminUser,
-  verifyAccessToken,
-  type AuthRequest,
-} from '../lib/auth.js';
+import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
 import { findEmpresa, getDb } from '../lib/db.js';
 import { ensureReviewTreatmentColumns } from '../lib/lgpd.js';
 
@@ -45,29 +39,8 @@ const treatLimiter = rateLimit({
   message: { error: 'Muitas marcações. Aguarde.' },
 });
 
-/** Conta da empresa/admin não pode enviar avaliação (anti-fraude). */
-function rejectEmpresaSubmittingReview(req: Request, empresaId: string | undefined): string | null {
-  const token = extrairToken(req);
-  if (!token) return null;
-  try {
-    const user = verifyAccessToken(token);
-    if (isAdminUser(user)) {
-      return 'Contas internas não podem enviar avaliações públicas.';
-    }
-    if (user.empresa_id && empresaId && user.empresa_id === empresaId) {
-      return 'A conta da empresa não pode enviar avaliações. O formulário é exclusivo do cliente final.';
-    }
-    if (user.empresa_id && !isAdminUser(user)) {
-      // Qualquer sessão de empresário autenticado não deve postar review público
-      return 'A conta da empresa não pode enviar avaliações. O formulário é exclusivo do cliente final.';
-    }
-  } catch {
-    /* token inválido = trata como anônimo */
-  }
-  return null;
-}
-
 export function mountReviewRoutes(app: Express) {
+  // Público: link e QR do painel do cliente devem funcionar sem bloqueio por sessão.
   app.post(
     '/api/reviews',
     reviewsLimiter,
@@ -75,20 +48,6 @@ export function mountReviewRoutes(app: Express) {
     validateBody(schemaReview),
     asyncHandler(async (req: Request, res: Response) => {
       try {
-        const ref =
-          (req.body.empresa_id ? String(req.body.empresa_id) : '') ||
-          (req.body.empresa_ref ? String(req.body.empresa_ref) : '');
-        let empresaUuid: string | undefined;
-        if (ref) {
-          const emp = await findEmpresa(ref);
-          empresaUuid = emp?.id ? String(emp.id) : undefined;
-        }
-
-        const blocked = rejectEmpresaSubmittingReview(req, empresaUuid);
-        if (blocked) {
-          return res.status(403).json({ error: blocked });
-        }
-
         const result = await criarReview({
           name: req.body.name ? String(req.body.name) : undefined,
           comment: req.body.comment ? String(req.body.comment) : undefined,
