@@ -1,49 +1,34 @@
-# Relatórios PDF por plano
+# Relatório PDF oficial — Filtra.AI
 
-## O que mudou
+## Fonte oficial
 
-Os PDFs deixam de ser só caixas de KPI e passam a ter **gráficos nativos (PDFKit)** e, nos planos multi-unidade, **quebra de página por filial**.
+O gerador oficial é `relatorioPdf.ts`, exportando `gerarRelatorioMensalPDF`.
 
-| Plano | Gráficos | Filiais |
+Os antigos geradores PDF duplicados foram removidos. As duas rotas PDF existentes continuam apontando para a mesma implementação para preservar compatibilidade:
 
-| **Pro / Ultra** | Barras de distribuição 1★–5★ + bloco IA simples | Não |
-| **Corporativo** | Distribuição + **ranking de unidades** + **1 página por filial** (KPIs + barras) | Sim |
-| **Rei** | Tudo do Corporativo + **donut** positivas/críticas + **barras horizontais de gargalos** + donut também em cada filial | Sim |
+- `/api/empresa/:ref/relatorio.pdf`
+- `/api/empresa/:ref/relatorio-inteligente.pdf`
 
-## Arquivos
+## Profundidade por plano
 
-- `backend/relatorioPdf.ts` — geração completa
-- `ensureUnidadesSchema(db)` — cria tabela `unidades` e colunas `reviews.unidade_id` / `reviews.origin`
+| Plano | Conteúdo principal |
+|---|---|
+| Trial/Teste | Base Ultra |
+| Pro | KPIs + distribuição 1★–5★ |
+| Ultra | Pro + sentimento + temas/tags |
+| Corporativo | Ultra + ranking por unidade |
+| Rei | Corporativo + recursos avançados previstos pelo layout oficial |
 
-## Como ligar no server.ts
+A elegibilidade do PDF é definida por `planTemPdf/empresaTemPdf` em `lib/plans.ts`.
 
-```ts
-import { gerarRelatorioMensalPDF, ensureUnidadesSchema } from './relatorioPdf.js';
+## Multiunidades
 
-// dentro de initDB(), após criar tabelas:
-await ensureUnidadesSchema(db);
+A inicialização de unidades é responsabilidade de `lib/unidades.ts`. O servidor executa `ensureUnidadesSchema(getDb())` no bootstrap.
 
-// substituir a função antiga gerarRelatorioMensalPDF por:
-// (ou no endpoint /api/relatorio/mensal)
-const pdf = await gerarRelatorioMensalPDF(db, empresaId, mesAno, callGroq);
-res.type('application/pdf').send(pdf);
-```
+O PDF apenas consulta as unidades quando necessário; ele não cria nem migra o schema.
 
-Remova a implementação antiga inline em `server.ts` para evitar conflito de nomes.
+## Observação importante
 
-## Cadastro de filiais (Corporativo / Rei)
+O PDF mensal recebe um `mesAno` (`YYYY-MM`) e usa as avaliações reais do período, ignorando registros marcados como teste.
 
-```sql
-INSERT INTO unidades (id, empresa_id, nome, slug, ativo)
-VALUES ('uuid-aqui', 'empresa_id', 'Filial Centro', 'filial-centro', 1);
-```
-
-Nas avaliações, grave `unidade_id` (ou `origin` como fallback de canal/unidade).
-
-Se não houver filiais cadastradas, o relatório Corporativo/Rei ainda gera a página **Matriz / Geral** com os dados agregados e o ranking com uma linha.
-
-## Elegibilidade
-
-`pro`, `ultra`, `corporativo`, `rei`.
-
-(Inicial e teste continuam sem PDF mensal.)
+Para alterações futuras no visual ou nos indicadores, editar primeiro `relatorioPdf.ts` e manter os demais módulos independentes.
