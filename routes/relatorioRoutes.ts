@@ -14,7 +14,7 @@ import {
   buildRelatorioInteligente,
   normalizeDestinatarios,
 } from '../services/relatorioInteligente.js';
-import { gerarRelatorioInteligentePDF } from '../relatorioInteligentePdf.js';
+import { gerarRelatorioMensalPDF } from '../relatorioPdf.js';
 
 const sendLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -137,7 +137,7 @@ export function mountRelatorioRoutes(app: Express) {
   app.post('/api/empresa/:ref/relatorio/inteligente', autenticarToken, sendLimiter, sendHandler);
   app.post('/api/empresa/:ref/relatorio/send', autenticarToken, sendLimiter, sendHandler);
 
-  // PDF atual do painel: usa todos os dados até o momento do download, sem cache e sem seletor mensal.
+  // PDF atual do painel: mantém compatibilidade do endpoint, mas usa o gerador oficial mensal.
   app.get('/api/empresa/:ref/relatorio-inteligente.pdf', autenticarToken, asyncHandler(async (req: AuthRequest, res: Response) => {
     const empresa: any = await findEmpresa(req.params.ref);
     if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
@@ -150,12 +150,13 @@ export function mountRelatorioRoutes(app: Express) {
     if (new Date(`${inicio}T00:00:00Z`) >= new Date(`${fim}T00:00:00Z`)) return res.status(400).json({ error: 'Período do ciclo inválido.' });
     const langRaw = String(req.query.lang || 'pt').toLowerCase();
     const lang = ['pt', 'en', 'es', 'zh'].includes(langRaw) ? langRaw : 'pt';
-    const pdf = await gerarRelatorioInteligentePDF(getDb(), String(empresa.id), inicio, fim, lang);
+    const mesAno = fim.slice(0, 7) || inicio.slice(0, 7) || new Date().toISOString().slice(0, 7);
+    const pdf = await gerarRelatorioMensalPDF(getDb(), String(empresa.id), mesAno, undefined, lang);
     const slug = String(empresa.slug || empresa.id).replace(/[^a-z0-9_-]+/gi, '-');
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="relatorio-inteligente-${slug}-${fim}.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename="relatorio-inteligente-${slug}-${mesAno}.pdf"`);
     res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate');
-    return res.send(pdf);
+    return res.send(pdf.buffer);
   }));
 
   app.get('/api/empresa/:ref/relatorio.pdf', autenticarToken, asyncHandler(async (req: AuthRequest, res: Response) => {
