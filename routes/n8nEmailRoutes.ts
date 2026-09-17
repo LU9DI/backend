@@ -12,7 +12,9 @@ export function mountN8nEmailRoutes(app: Express) {
   const router = Router();
 
   router.post('/email', async (req, res) => {
-    const expected = String(process.env.N8N_EMAIL_TOKEN || '').trim();
+    // Prefer a dedicated token; keep JOBS_SECRET as a compatibility fallback
+    // because the current n8n workflow already uses that internal secret.
+    const expected = String(process.env.N8N_EMAIL_TOKEN || process.env.JOBS_SECRET || '').trim();
     if (!expected || tokenFrom(req) !== expected) {
       return res.status(401).json({ ok: false, error: 'não autorizado' });
     }
