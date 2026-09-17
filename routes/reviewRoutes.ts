@@ -11,7 +11,7 @@ import {
   ReviewValidationError,
 } from '../services/reviewService.js';
 import { clientIp } from '../lib/reviewFraud.js';
-import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
+import { autenticarToken, isAdminUser, extrairToken, verifyAccessToken, type AuthRequest } from '../lib/auth.js';
 import { findEmpresa, getDb } from '../lib/db.js';
 import { ensureReviewTreatmentColumns } from '../lib/lgpd.js';
 
@@ -48,6 +48,32 @@ export function mountReviewRoutes(app: Express) {
     validateBody(schemaReview),
     asyncHandler(async (req: Request, res: Response) => {
       try {
+        const empresaRef = String(req.body.empresa_id || req.body.empresa_ref || '').trim();
+        if (!empresaRef) {
+          return res.status(400).json({ error: 'Empresa não informada.' });
+        }
+
+        const requestedTest = Boolean(req.body.is_test);
+        if (requestedTest) {
+          const token = extrairToken(req);
+          if (!token) {
+            return res.status(403).json({ error: 'Avaliação de teste exige sessão autenticada.' });
+          }
+          let actor: any;
+          try {
+            actor = verifyAccessToken(token);
+          } catch {
+            return res.status(401).json({ error: 'Sessão inválida.' });
+          }
+          const empresa = await findEmpresa(empresaRef);
+          const allowed =
+            Boolean(actor?.empresa_id && empresa?.id && actor.empresa_id === empresa.id) ||
+            isAdminUser(actor);
+          if (!allowed) {
+            return res.status(403).json({ error: 'Sem permissão para avaliação de teste.' });
+          }
+        }
+
         const result = await criarReview({
           name: req.body.name ? String(req.body.name) : undefined,
           comment: req.body.comment ? String(req.body.comment) : undefined,
