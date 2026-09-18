@@ -62,6 +62,16 @@ export async function claimReportGeneration(
   }
 ): Promise<boolean> {
   try {
+    const stale = await db.get<{ id?: string; created_at?: string }>(
+      "SELECT id, created_at FROM report_pdf_documents WHERE empresa_id = ? AND cycle_key = ? AND status = 'processing'",
+      [input.empresaId, input.cycleKey]
+    );
+    if (stale?.id && stale.created_at) {
+      const age = Date.now() - new Date(stale.created_at).getTime();
+      if (Number.isFinite(age) && age > 15 * 60 * 1000) {
+        await db.run("DELETE FROM report_pdf_documents WHERE id = ? AND status = 'processing'", [stale.id]);
+      }
+    }
     await db.run(
       `INSERT INTO report_pdf_documents
        (id, empresa_id, cycle_key, cycle_start, cycle_end, mes_ano, lang, status)
