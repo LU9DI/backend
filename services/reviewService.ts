@@ -26,6 +26,7 @@ import {
   hashIp,
   softFraudFlags,
   ReviewFraudError,
+  reviewLimitsDisabled,
 } from '../lib/reviewFraud.js';
 import { notifyCrisisReview } from '../lib/push.js';
 import { normalizarWhatsapp } from '../lib/whatsapp.js';
@@ -153,7 +154,7 @@ export async function criarReview(
     plan = String(emp.plan || emp.status || 'trial').toLowerCase();
     slugOrId = emp.slug || emp.id;
 
-    if (!isTest) {
+    if (!isTest && !reviewLimitsDisabled()) {
       checkMemoryRate(ip, empresaId!);
       await checkDbRateByIp(db, empresaId!, ipHash);
       if (comment) await checkDuplicateComment(db, empresaId!, comment);
