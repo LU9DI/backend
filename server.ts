@@ -142,6 +142,7 @@ app.get('/api/health', async (_req, res) => {
     push: pushConfigured(),
     smtp: smtpConfigured(),
     n8n: n8nConfigured(),
+    fiscal: fiscalConfigured(),
     pdf_engine: 'puppeteer',
     ai_latency: {
       groq: ai.stats.groq.latency,
