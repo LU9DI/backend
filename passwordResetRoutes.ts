@@ -239,9 +239,20 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
       }
 
       const hash = await bcrypt.hash(nova, 12);
-      await db.run('UPDATE usuarios SET senha_hash = ? WHERE id = ?', [hash, row.usuario_id]);
 
-      await db.run('UPDATE password_resets SET usado = 1 WHERE id = ?', [row.id]);
+      // Consumo atômico do token: duas requisições simultâneas não podem
+      // reutilizar o mesmo link antes de ele ser marcado como usado.
+      const consumed = await db.run(
+        `UPDATE password_resets
+         SET usado = 1
+         WHERE id = ? AND usado = 0 AND expira_em >= ?`,
+        [row.id, new Date().toISOString()]
+      );
+      if (Number(consumed.changes || 0) !== 1) {
+        return res.status(400).json({ error: 'Link inválido ou já utilizado.' });
+      }
+
+      await db.run('UPDATE usuarios SET senha_hash = ? WHERE id = ?', [hash, row.usuario_id]);
       await invalidatePasswordResetTokens(db, row.usuario_id);
 
       res.json({ success: true, message: 'Senha atualizada com sucesso. Você já pode entrar.' });
