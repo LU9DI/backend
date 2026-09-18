@@ -19,6 +19,7 @@ import { resolvePlano } from '../stripeBilling.js';
 import { activatePlan, blockEmpresa } from '../services/billingService.js';
 import { enqueueRetry } from '../lib/retryQueue.js';
 import { empresaInformadaPertenceAoToken } from '../lib/auth.js';
+import { createFiscalDocumentForPayment } from '../lib/fiscal.js';
 import { claimPaymentCaptureOnce, completePaymentCapture, releasePaymentCapture } from '../lib/paymentEvents.js';
 
 async function ensurePaypalTables(db: Database) {
@@ -65,6 +66,7 @@ async function activateFromPayment(
     planoKey: string | null;
     captureId?: string | null;
     orderId?: string | null;
+    amount?: string | number | null;
   }
 ) {
   const plano = resolvePlano(opts.planoKey || 'pro');
@@ -72,14 +74,23 @@ async function activateFromPayment(
   const exp = new Date();
   exp.setDate(exp.getDate() + days);
 
+  const paymentReference = `paypal:${opts.captureId || opts.orderId || 'unknown'}`;
   await activatePlan(
     db,
     opts.empresaId,
     plano?.planDb || 'pro',
     null,
-    `paypal:${opts.captureId || opts.orderId || 'unknown'}`,
+    paymentReference,
     exp.toISOString()
   );
+  if (opts.captureId || opts.orderId) {
+    await createFiscalDocumentForPayment(
+      db,
+      opts.empresaId,
+      paymentReference,
+      Number((opts as any).amount || 0)
+    );
+  }
 
   await db.run(`UPDATE empresas SET payment_gateway = 'paypal', billing_cycle = ? WHERE id = ?`, [
     plano?.interval === 'year' ? 'year' : 'month',
