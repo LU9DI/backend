@@ -20,6 +20,7 @@ import { activatePlan, blockEmpresa } from '../services/billingService.js';
 import { enviarEmail } from './mailer.js';
 import { logWebhookEvent } from './opsLog.js';
 import { notifyN8nAsync, n8nConfigured } from './n8n.js';
+import { claimPaymentCaptureOnce, completePaymentCapture, releasePaymentCapture } from './paymentEvents.js';
 
 async function activatePayPal(
   empresaId: string,
@@ -32,21 +33,31 @@ async function activatePayPal(
   const days = plano?.interval === 'year' ? 365 : 30;
   const exp = new Date();
   exp.setDate(exp.getDate() + days);
-  await activatePlan(
-    db,
-    empresaId,
-    plano?.planDb || 'pro',
-    null,
-    `paypal:${captureId || orderId || 'retry'}`,
-    exp.toISOString()
-  );
+  if (!captureId) throw new Error('paypal: capture_id ausente');
+  const claimed = await claimPaymentCaptureOnce(db, 'paypal', String(captureId));
+  if (!claimed) return;
+
   try {
-    await db.run(`UPDATE empresas SET payment_gateway = 'paypal', billing_cycle = ? WHERE id = ?`, [
-      plano?.interval === 'year' ? 'year' : 'month',
+    await activatePlan(
+      db,
       empresaId,
-    ]);
-  } catch {
-    /* */
+      plano?.planDb || 'pro',
+      null,
+      `paypal:${captureId}`,
+      exp.toISOString()
+    );
+    try {
+      await db.run(`UPDATE empresas SET payment_gateway = 'paypal', billing_cycle = ? WHERE id = ?`, [
+        plano?.interval === 'year' ? 'year' : 'month',
+        empresaId,
+      ]);
+    } catch {
+      /* */
+    }
+    await completePaymentCapture(db, 'paypal', String(captureId));
+  } catch (e) {
+    await releasePaymentCapture(db, 'paypal', String(captureId));
+    throw e;
   }
 }
 
