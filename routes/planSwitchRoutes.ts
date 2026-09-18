@@ -79,3 +79,5 @@ export function mountPlanSwitchRoutes(app: Express) {
         mensagem: `Plano alterado para ${planLabel(raw)} (modo teste — sem cobrança Stripe).`,
       });
     })
+  );
+}
