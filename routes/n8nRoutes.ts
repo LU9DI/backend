@@ -236,6 +236,49 @@ export function mountN8nRoutes(app: Express) {
     })
   );
 
+  /** Resultado da sincronização/automação processada pelo n8n. */
+  app.post(
+    '/api/n8n/inbound/automation-result',
+    limiter,
+    asyncHandler(async (req: Request, res: Response) => {
+      if (!requireInbound(req, res)) return;
+
+      const body = req.body || {};
+      const leadId = String(body.lead_id || '').trim();
+      const action = String(body.action || '').trim();
+      const status = String(body.status || '').trim().toLowerCase();
+      const crmId = String(body.crm_id || '').trim();
+      const error = String(body.error || '').trim().slice(0, 500);
+
+      if (!leadId || !action || !['success', 'failed', 'pending'].includes(status)) {
+        return res.status(400).json({
+          error: 'lead_id, action e status (success|failed|pending) são obrigatórios.',
+        });
+      }
+
+      const db = getDb();
+      const lead = await db.get('SELECT id FROM leads WHERE id = ?', [leadId]);
+      if (!lead) return res.status(404).json({ error: 'Lead não encontrado.' });
+
+      const now = new Date().toISOString();
+      if (action === 'hubspot_sync') {
+        await db.run(
+          'UPDATE leads SET crm_status = ?, crm_id = COALESCE(NULLIF(?, \'\'), crm_id), updated_at = ? WHERE id = ?',
+          [status === 'success' ? 'synced' : status, crmId, now, leadId]
+        );
+      } else if (action === 'followup') {
+        await db.run(
+          'UPDATE leads SET followup_status = ?, updated_at = ? WHERE id = ?',
+          [status === 'success' ? 'created' : status, now, leadId]
+        );
+      } else {
+        return res.status(400).json({ error: 'Ação não suportada.' });
+      }
+
+      res.json({ success: true, lead_id: leadId, action, status, error: error || null });
+    })
+  );
+
   /** Review vinda do n8n (scraping / outro canal) */
   app.post(
     '/api/n8n/inbound/review',
