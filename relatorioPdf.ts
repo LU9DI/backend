@@ -1,7 +1,7 @@
 /**
- * Relatório mensal PDF — layout profissional por plano (estilo sample Filtra.AI).
+ * Relatório mensal PDF — layout profissional por plano (nível do sample Filtra.AI).
  * Pro / Ultra / Corporativo / Rei (+ Trial = Ultra)
- * Logo Filtra.AI, marca d'água e rodapé com direitos reservados.
+ * Logo, marca d'água FILTRA.AI e rodapé com direitos reservados.
  */
 import type { Database } from 'sqlite';
 import PDFDocument from 'pdfkit';
@@ -31,13 +31,12 @@ type ReviewRow = {
 
 type Unidade = { id: string; nome: string };
 
-export const PDF_LAYOUT_VERSION = 'v8-professional';
+export const PDF_LAYOUT_VERSION = 'v9-sample';
 
 const C = {
   teal: '#0d6e6e',
   tealDark: '#0a5555',
   navy: '#0f172a',
-  indigo: '#4f46e5',
   ink: '#1e293b',
   muted: '#64748b',
   line: '#e2e8f0',
@@ -51,7 +50,7 @@ const C = {
   star: ['#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e'] as string[],
 };
 
-const M = { left: 42, right: 42, bottom: 52 };
+const M = { left: 40, right: 40, bottom: 56 };
 
 export function depthForPlan(plan: string, trial: boolean): PdfDepth {
   if (trial) return 'ultra';
@@ -151,19 +150,14 @@ function cw(doc: PDFKit.PDFDocument) {
   return doc.page.width - M.left - M.right;
 }
 
-/** Logo textual Filtra.AI (sem asset externo). */
-function drawLogo(doc: PDFKit.PDFDocument, x: number, y: number, size = 11) {
-  doc.fillColor(C.white).font('Helvetica-Bold').fontSize(size).text('Filtra.AI', x, y, { lineBreak: false });
-}
-
 function drawWatermark(doc: PDFKit.PDFDocument, lang: PdfLang) {
   const cx = doc.page.width / 2;
   const cy = doc.page.height / 2;
   doc.save();
-  doc.opacity(0.045);
-  doc.fillColor(C.tealDark).font('Helvetica-Bold').fontSize(48);
-  doc.rotate(-32, { origin: [cx, cy] });
-  doc.text(t(lang, 'watermark'), cx - 160, cy - 20, { width: 320, align: 'center', lineBreak: false });
+  doc.opacity(0.06);
+  doc.fillColor(C.tealDark).font('Helvetica-Bold').fontSize(52);
+  doc.rotate(-28, { origin: [cx, cy] });
+  doc.text(t(lang, 'watermark'), cx - 170, cy - 24, { width: 340, align: 'center', lineBreak: false });
   doc.restore();
   doc.opacity(1);
 }
@@ -173,21 +167,33 @@ function drawFooter(
   page: number,
   total: number,
   empresaNome: string,
+  depth: PdfDepth,
   lang: PdfLang
 ) {
-  const y = doc.page.height - 40;
-  doc.strokeColor(C.line).lineWidth(0.7).moveTo(M.left, y - 8).lineTo(doc.page.width - M.right, y - 8).stroke();
-  doc.fillColor(C.muted).font('Helvetica').fontSize(6.5).text(
-    t(lang, 'rights', { empresa: empresaNome.slice(0, 48) }),
+  const y = doc.page.height - 48;
+  doc.strokeColor(C.line).lineWidth(0.6).moveTo(M.left, y - 10).lineTo(doc.page.width - M.right, y - 10).stroke();
+
+  // Linha principal no estilo do sample
+  const planKey = depth === 'corp' ? 'CORPORATIVO' : depth.toUpperCase();
+  doc.fillColor(C.muted).font('Helvetica').fontSize(7.5).text(
+    t(lang, 'footer_line', { plano: planKey }),
     M.left,
-    y - 2,
-    { width: cw(doc) - 70, lineBreak: false }
+    y - 4,
+    { width: cw(doc), align: 'center', lineBreak: false }
   );
-  doc.fillColor(C.muted).font('Helvetica').fontSize(7).text(
+
+  // Direitos + página
+  doc.fillColor(C.muted).font('Helvetica').fontSize(6).text(
+    t(lang, 'rights', { empresa: empresaNome.slice(0, 42) }),
+    M.left,
+    y + 10,
+    { width: cw(doc) - 60, lineBreak: false }
+  );
+  doc.fillColor(C.muted).font('Helvetica').fontSize(6.5).text(
     t(lang, 'page', { n: page, t: total }),
-    doc.page.width - M.right - 70,
-    y - 2,
-    { width: 70, align: 'right', lineBreak: false }
+    doc.page.width - M.right - 56,
+    y + 10,
+    { width: 56, align: 'right', lineBreak: false }
   );
 }
 
@@ -195,10 +201,11 @@ function sectionTitle(doc: PDFKit.PDFDocument, text: string) {
   doc.x = M.left;
   doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(11).text(text, M.left, doc.y, { width: cw(doc) });
   const yLine = doc.y + 2;
-  doc.strokeColor(C.teal).lineWidth(1.5).moveTo(M.left, yLine).lineTo(M.left + 48, yLine).stroke();
-  doc.moveDown(0.55);
+  doc.strokeColor(C.teal).lineWidth(1.8).moveTo(M.left, yLine).lineTo(M.left + 52, yLine).stroke();
+  doc.moveDown(0.5);
 }
 
+/** Hero teal no estilo do sample: título do plano + empresa + ciclo dentro do card. */
 function drawPlanHero(
   doc: PDFKit.PDFDocument,
   depth: PdfDepth,
@@ -208,27 +215,34 @@ function drawPlanHero(
   contaLabel: string
 ) {
   const w = cw(doc);
-  const y0 = doc.y;
-  const h = 78;
-  doc.roundedRect(M.left, y0, w, h, 10).fill(C.teal);
-  drawLogo(doc, M.left + 16, y0 + 12, 10);
-  doc.fillColor('#a7f3d0').font('Helvetica').fontSize(7).text(t(lang, 'tagline'), M.left + 16, y0 + 26, {
+  const y0 = 36;
+  const h = 96;
+  doc.roundedRect(M.left, y0, w, h, 12).fill(C.teal);
+
+  // Marca discreta no canto
+  doc.fillColor('#99f6e4').font('Helvetica-Bold').fontSize(8).text('Filtra.AI', M.left + 18, y0 + 12, {
     lineBreak: false,
   });
-  doc.fillColor(C.white).font('Helvetica-Bold').fontSize(16).text(planTitle(depth, lang), M.left + 16, y0 + 40, {
-    width: w - 32,
+
+  doc.fillColor(C.white).font('Helvetica-Bold').fontSize(20).text(planTitle(depth, lang), M.left + 18, y0 + 28, {
+    width: w - 36,
     lineBreak: false,
   });
-  doc.fillColor('#d1fae5').font('Helvetica').fontSize(8).text(planSubtitle(depth, lang), M.left + 16, y0 + 60, {
-    width: w - 32,
+  doc.fillColor('#d1fae5').font('Helvetica').fontSize(9).text(planSubtitle(depth, lang), M.left + 18, y0 + 52, {
+    width: w - 36,
     lineBreak: false,
   });
+  doc.fillColor(C.white).font('Helvetica-Bold').fontSize(10).text(empresaNome.slice(0, 48), M.left + 18, y0 + 68, {
+    width: w - 36,
+    lineBreak: false,
+  });
+  doc.fillColor('#a7f3d0').font('Helvetica').fontSize(8).text(`${cicloLabel} · ${contaLabel}`, M.left + 18, y0 + 82, {
+    width: w - 36,
+    lineBreak: false,
+  });
+
   doc.x = M.left;
-  doc.y = y0 + h + 10;
-  doc.fillColor(C.ink).font('Helvetica-Bold').fontSize(12).text(empresaNome, { width: w });
-  doc.moveDown(0.12);
-  doc.fillColor(C.muted).font('Helvetica').fontSize(8).text(`${cicloLabel}  ·  ${contaLabel}`, { width: w });
-  doc.moveDown(0.5);
+  doc.y = y0 + h + 14;
 }
 
 function drawBenefits(doc: PDFKit.PDFDocument, depth: PdfDepth, lang: PdfLang) {
@@ -236,48 +250,52 @@ function drawBenefits(doc: PDFKit.PDFDocument, depth: PdfDepth, lang: PdfLang) {
   const included = items.filter((i) => i.included);
   const excluded = items.filter((i) => !i.included);
   const w = cw(doc);
-  const gap = 10;
+  const gap = 12;
   const colW = (w - gap) / 2;
   const y0 = doc.y;
-  const rowH = 14;
-  const pad = 10;
+  const rowH = 15;
+  const pad = 12;
   const hIn = pad + 18 + included.length * rowH + pad;
   const hOut = pad + 18 + Math.max(excluded.length, 1) * rowH + pad;
-  const h = Math.max(hIn, hOut, 56);
+  const h = Math.max(hIn, hOut, 58);
 
-  doc.roundedRect(M.left, y0, colW, h, 8).fillAndStroke(C.paleTeal, C.line);
-  doc.fillColor(C.tealDark).font('Helvetica-Bold').fontSize(8).text(t(lang, 'benefits_in').toUpperCase(), M.left + pad, y0 + pad, {
-    width: colW - pad * 2,
-    lineBreak: false,
-  });
+  doc.roundedRect(M.left, y0, colW, h, 10).fillAndStroke(C.paleTeal, C.line);
+  doc.fillColor(C.tealDark).font('Helvetica-Bold').fontSize(8).text(
+    t(lang, 'benefits_in').toUpperCase(),
+    M.left + pad,
+    y0 + pad,
+    { width: colW - pad * 2, lineBreak: false }
+  );
   included.forEach((it, i) => {
     const y = y0 + pad + 18 + i * rowH;
-    doc.fillColor(C.green).font('Helvetica-Bold').fontSize(8).text('✓', M.left + pad, y, { lineBreak: false });
-    doc.fillColor(C.ink).font('Helvetica').fontSize(8).text(it.label, M.left + pad + 14, y, {
+    doc.fillColor(C.green).font('Helvetica-Bold').fontSize(9).text('✓', M.left + pad, y, { lineBreak: false });
+    doc.fillColor(C.ink).font('Helvetica').fontSize(8.5).text(it.label, M.left + pad + 14, y, {
       width: colW - pad * 2 - 14,
       lineBreak: false,
     });
   });
 
   const x2 = M.left + colW + gap;
-  doc.roundedRect(x2, y0, colW, h, 8).fillAndStroke(C.pale, C.line);
-  doc.fillColor(C.muted).font('Helvetica-Bold').fontSize(8).text(t(lang, 'benefits_out').toUpperCase(), x2 + pad, y0 + pad, {
-    width: colW - pad * 2,
-    lineBreak: false,
-  });
+  doc.roundedRect(x2, y0, colW, h, 10).fillAndStroke(C.pale, C.line);
+  doc.fillColor(C.muted).font('Helvetica-Bold').fontSize(8).text(
+    t(lang, 'benefits_out').toUpperCase(),
+    x2 + pad,
+    y0 + pad,
+    { width: colW - pad * 2, lineBreak: false }
+  );
   if (!excluded.length) {
     doc.fillColor(C.locked).font('Helvetica').fontSize(8).text('—', x2 + pad, y0 + pad + 18, { lineBreak: false });
   } else {
     excluded.forEach((it, i) => {
       const y = y0 + pad + 18 + i * rowH;
-      doc.fillColor(C.locked).font('Helvetica').fontSize(8).text('○  ' + it.label, x2 + pad, y, {
+      doc.fillColor(C.locked).font('Helvetica').fontSize(8.5).text('○  ' + it.label, x2 + pad, y, {
         width: colW - pad * 2,
         lineBreak: false,
       });
     });
   }
   doc.x = M.left;
-  doc.y = y0 + h + 12;
+  doc.y = y0 + h + 14;
 }
 
 function drawKpis(
@@ -291,40 +309,40 @@ function drawKpis(
   const y = doc.y;
   items.forEach((it, i) => {
     const x = M.left + i * (boxW + gap);
-    doc.roundedRect(x, y, boxW, 62, 8).fillAndStroke(C.white, C.line);
-    doc.fillColor(C.muted).font('Helvetica-Bold').fontSize(6.5).text(it.label.toUpperCase(), x + 8, y + 8, {
-      width: boxW - 16,
+    doc.roundedRect(x, y, boxW, 64, 10).fillAndStroke(C.white, C.line);
+    doc.fillColor(C.muted).font('Helvetica-Bold').fontSize(6.5).text(it.label.toUpperCase(), x + 10, y + 10, {
+      width: boxW - 20,
       lineBreak: false,
     });
-    doc.fillColor(it.accent || C.navy).font('Helvetica-Bold').fontSize(18).text(it.value, x + 8, y + 24, {
-      width: boxW - 16,
+    doc.fillColor(it.accent || C.navy).font('Helvetica-Bold').fontSize(20).text(it.value, x + 10, y + 26, {
+      width: boxW - 20,
       lineBreak: false,
     });
-    doc.fillColor(C.muted).font('Helvetica').fontSize(7).text(it.sub, x + 8, y + 46, {
-      width: boxW - 16,
+    doc.fillColor(C.muted).font('Helvetica').fontSize(7).text(it.sub, x + 10, y + 48, {
+      width: boxW - 20,
       lineBreak: false,
     });
   });
   doc.x = M.left;
-  doc.y = y + 74;
+  doc.y = y + 76;
 }
 
 function drawDistHorizontal(doc: PDFKit.PDFDocument, dist: number[]) {
   const w = cw(doc);
   const maxV = Math.max(...dist, 1);
-  const barMax = w - 70;
+  const barMax = w - 72;
   dist.forEach((v, i) => {
     const y = doc.y;
     doc.fillColor(C.ink).font('Helvetica').fontSize(9).text(`${i + 1}★`, M.left, y, { width: 28, lineBreak: false });
-    doc.roundedRect(M.left + 32, y + 2, barMax, 10, 4).fill(C.pale);
+    doc.roundedRect(M.left + 30, y + 2, barMax, 11, 5).fill(C.pale);
     const bw = Math.max(v > 0 ? 4 : 0, (v / maxV) * barMax);
-    if (bw > 0) doc.roundedRect(M.left + 32, y + 2, bw, 10, 4).fill(C.star[i]);
-    doc.fillColor(C.muted).font('Helvetica').fontSize(8).text(String(v), M.left + 32 + barMax + 6, y, {
+    if (bw > 0) doc.roundedRect(M.left + 30, y + 2, bw, 11, 5).fill(C.star[i]);
+    doc.fillColor(C.muted).font('Helvetica').fontSize(8).text(String(v), M.left + 30 + barMax + 6, y, {
       lineBreak: false,
     });
-    doc.y = y + 16;
+    doc.y = y + 17;
   });
-  doc.moveDown(0.3);
+  doc.moveDown(0.35);
 }
 
 export async function gerarRelatorioMensalPDF(
@@ -379,7 +397,6 @@ export async function gerarRelatorioMensalPDF(
   const pLabel = trial ? 'Trial' : planLabel(planRaw);
   const nomeEmpresa = String(empresa.nome_empresa || 'Empresa');
 
-  // Ciclo de assinatura (se houver datas)
   let cicloLabel = `${t(lang, 'period')}: ${periodo}`;
   try {
     if (empresa.criado_em && empresa.expira_em) {
@@ -402,7 +419,7 @@ export async function gerarRelatorioMensalPDF(
     autoFirstPage: true,
     compress: true,
     info: {
-      Title: `${nomeEmpresa} — ${mesAno} — ${pLabel}`,
+      Title: `${planTitle(depth, lang)} — ${nomeEmpresa}`,
       Author: 'Filtra.AI',
       Subject: `depth=${depth} | ${lang} | ${PDF_LAYOUT_VERSION}`,
       Keywords: 'Filtra.AI, reputação, relatório',
@@ -451,29 +468,29 @@ export async function gerarRelatorioMensalPDF(
     ];
     boxes.forEach((b, i) => {
       const x = M.left + i * (bw + 8);
-      doc.roundedRect(x, y, bw, 48, 8).fillAndStroke(C.white, C.line);
-      doc.fillColor(b.c).font('Helvetica-Bold').fontSize(7).text(b.t.toUpperCase(), x + 10, y + 8, {
+      doc.roundedRect(x, y, bw, 50, 10).fillAndStroke(C.white, C.line);
+      doc.fillColor(b.c).font('Helvetica-Bold').fontSize(7).text(b.t.toUpperCase(), x + 12, y + 10, {
         lineBreak: false,
       });
-      doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(16).text(String(b.v), x + 10, y + 22, {
+      doc.fillColor(C.navy).font('Helvetica-Bold').fontSize(18).text(String(b.v), x + 12, y + 24, {
         lineBreak: false,
       });
-      doc.fillColor(C.muted).font('Helvetica').fontSize(7).text(pct(b.v, total), x + 10, y + 40, {
+      doc.fillColor(C.muted).font('Helvetica').fontSize(7).text(pct(b.v, total), x + 12, y + 42, {
         lineBreak: false,
       });
     });
     doc.x = M.left;
-    doc.y = y + 58;
+    doc.y = y + 62;
   }
 
   if (depth !== 'pro') {
     sectionTitle(doc, t(lang, 'themes'));
     if (!tags.length) {
-      doc.roundedRect(M.left, doc.y, cw(doc), 36, 6).fillAndStroke(C.pale, C.line);
-      doc.fillColor(C.muted).font('Helvetica').fontSize(8).text(t(lang, 'themes_empty'), M.left + 12, doc.y + 12, {
-        width: cw(doc) - 24,
+      doc.roundedRect(M.left, doc.y, cw(doc), 40, 8).fillAndStroke(C.pale, C.line);
+      doc.fillColor(C.muted).font('Helvetica').fontSize(8).text(t(lang, 'themes_empty'), M.left + 14, doc.y + 14, {
+        width: cw(doc) - 28,
       });
-      doc.y += 48;
+      doc.y += 52;
     } else {
       for (const tg of tags) {
         doc.fillColor(C.ink).font('Helvetica').fontSize(9).text(`•  ${tg.tag}  (${tg.count})`, {
@@ -507,16 +524,16 @@ export async function gerarRelatorioMensalPDF(
 
     const tableY = doc.y;
     const rowH = 16;
-    doc.roundedRect(M.left, tableY, cw(doc), 20 + groups.length * rowH, 6).fillAndStroke(C.white, C.line);
+    doc.roundedRect(M.left, tableY, cw(doc), 20 + groups.length * rowH, 8).fillAndStroke(C.white, C.line);
     doc.fillColor(C.muted).font('Helvetica-Bold').fontSize(7);
-    doc.text('UNIDADE', M.left + 10, tableY + 6, { width: 200, lineBreak: false });
+    doc.text('UNIDADE', M.left + 12, tableY + 6, { width: 200, lineBreak: false });
     doc.text('VOL', M.left + 220, tableY + 6, { width: 40, lineBreak: false });
     doc.text('MÉDIA', M.left + 270, tableY + 6, { width: 50, lineBreak: false });
     doc.text('CRÍT.', M.left + 340, tableY + 6, { width: 40, lineBreak: false });
     groups.forEach((g, i) => {
       const y = tableY + 22 + i * rowH;
       doc.fillColor(C.ink).font('Helvetica').fontSize(8);
-      doc.text(g.nome.slice(0, 36), M.left + 10, y, { width: 200, lineBreak: false });
+      doc.text(g.nome.slice(0, 36), M.left + 12, y, { width: 200, lineBreak: false });
       doc.text(String(g.volume), M.left + 220, y, { width: 40, lineBreak: false });
       doc.text(g.media ? g.media.toFixed(1) : '—', M.left + 270, y, { width: 50, lineBreak: false });
       doc.text(String(g.crit), M.left + 340, y, { width: 40, lineBreak: false });
@@ -534,7 +551,7 @@ export async function gerarRelatorioMensalPDF(
     const range = doc.bufferedPageRange();
     for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
-      drawFooter(doc, i - range.start + 1, range.count, nomeEmpresa, lang);
+      drawFooter(doc, i - range.start + 1, range.count, nomeEmpresa, depth, lang);
     }
     doc.end();
   });
