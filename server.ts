@@ -154,10 +154,10 @@ app.get('/api/health', async (_req, res) => {
 });
 
 app.get('/api/metrics', (req, res) => {
-  const secret = process.env.JOBS_SECRET?.trim();
-  if (process.env.NODE_ENV === 'production' && secret) {
-    const got = String(req.headers['x-jobs-secret'] || '');
-    if (got !== secret) {
+  if (process.env.NODE_ENV === 'production') {
+    const secret = (process.env.METRICS_TOKEN || process.env.JOBS_SECRET || '').trim();
+    const got = String(req.headers['x-metrics-token'] || req.headers['x-jobs-secret'] || '');
+    if (!secret || got !== secret) {
       return res.status(401).json({ error: 'Não autorizado.' });
     }
   }
