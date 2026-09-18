@@ -46,6 +46,15 @@ export function mountAdminTecnicoRoutes(app: Express) {
     asyncHandler(async (req: Request, res: Response) => {
       const db = getDb();
       const secret = process.env.N8N_WEBHOOK_SECRET?.trim();
+      if (!secret && process.env.NODE_ENV === 'production') {
+        await logWebhookEvent(db, {
+          source: 'n8n',
+          event_type: 'auth_failed',
+          status: 'error',
+          detail: 'N8N_WEBHOOK_SECRET não configurado em produção',
+        });
+        return res.status(503).json({ error: 'Webhook n8n não configurado.' });
+      }
       if (secret) {
         const hdr =
           String(req.headers['x-n8n-secret'] || '') ||
