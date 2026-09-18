@@ -1,5 +1,6 @@
 /**
  * i18n + benefícios por plano para o PDF mensal Filtra.AI
+ * Textos alinhados ao sample visual (HTML→PDF de referência).
  */
 
 export type PdfLang = 'pt' | 'en' | 'es' | 'zh';
@@ -28,14 +29,17 @@ const DICT: Record<PdfLang, Record<string, string>> = {
     sent_neu: 'Neutro',
     sent_neg: 'Negativo',
     themes: 'Temas da IA (benefício Ultra+)',
-    themes_empty: 'Nenhum tema neste ciclo — a seção faz parte do seu plano e aparece assim que houver tags de IA.',
+    themes_empty:
+      'Nenhum tema neste ciclo ainda — a seção faz parte do seu plano e aparece assim que houver tags de IA.',
     ranking: 'Ranking de unidades',
     branch: 'Filial',
     empty: 'Nenhuma avaliação registrada neste ciclo.',
-    rights: '© Filtra.AI — Todos os direitos reservados. Uso exclusivo de {{empresa}}. Documento confidencial.',
+    rights:
+      '© Filtra.AI — Todos os direitos reservados. Uso exclusivo de {{empresa}}. Documento confidencial.',
     brand: 'Filtra.AI',
     watermark: 'FILTRA.AI',
     tagline: 'Online Reputation',
+    footer_line: 'Filtra.AI · PDF {{plano}} · benefícios do plano · ciclo de assinatura',
   },
   en: {
     subtitle: 'Intelligent reputation report',
@@ -59,7 +63,8 @@ const DICT: Record<PdfLang, Record<string, string>> = {
     sent_neu: 'Neutral',
     sent_neg: 'Negative',
     themes: 'AI themes (Ultra+ benefit)',
-    themes_empty: 'No themes in this cycle — this section is part of your plan and appears when AI tags exist.',
+    themes_empty:
+      'No themes in this cycle yet — this section is part of your plan and appears when AI tags exist.',
     ranking: 'Unit ranking',
     branch: 'Branch',
     empty: 'No reviews recorded in this cycle.',
@@ -67,6 +72,7 @@ const DICT: Record<PdfLang, Record<string, string>> = {
     brand: 'Filtra.AI',
     watermark: 'FILTRA.AI',
     tagline: 'Online Reputation',
+    footer_line: 'Filtra.AI · PDF {{plano}} · plan benefits · subscription cycle',
   },
   es: {
     subtitle: 'Informe de reputación inteligente',
@@ -90,14 +96,17 @@ const DICT: Record<PdfLang, Record<string, string>> = {
     sent_neu: 'Neutro',
     sent_neg: 'Negativo',
     themes: 'Temas de IA (beneficio Ultra+)',
-    themes_empty: 'Ningún tema en este ciclo — la sección forma parte de tu plan y aparece con tags de IA.',
+    themes_empty:
+      'Ningún tema en este ciclo aún — la sección forma parte de tu plan y aparece con tags de IA.',
     ranking: 'Ranking de unidades',
     branch: 'Sucursal',
     empty: 'No hay reseñas en este ciclo.',
-    rights: '© Filtra.AI — Todos los derechos reservados. Uso exclusivo de {{empresa}}. Confidencial.',
+    rights:
+      '© Filtra.AI — Todos los derechos reservados. Uso exclusivo de {{empresa}}. Confidencial.',
     brand: 'Filtra.AI',
     watermark: 'FILTRA.AI',
     tagline: 'Online Reputation',
+    footer_line: 'Filtra.AI · PDF {{plano}} · beneficios del plan · ciclo de suscripción',
   },
   zh: {
     subtitle: '智能声誉报告',
@@ -121,7 +130,7 @@ const DICT: Record<PdfLang, Record<string, string>> = {
     sent_neu: '中性',
     sent_neg: '负面',
     themes: 'AI 主题（Ultra+）',
-    themes_empty: '本周期无主题 — 该板块属于您的套餐，有 AI 标签时显示。',
+    themes_empty: '本周期尚主题 — 该板块属于您的套餐，有 AI 标签时显示。',
     ranking: '门店排名',
     branch: '分店',
     empty: '本周期无评价。',
@@ -129,6 +138,7 @@ const DICT: Record<PdfLang, Record<string, string>> = {
     brand: 'Filtra.AI',
     watermark: 'FILTRA.AI',
     tagline: 'Online Reputation',
+    footer_line: 'Filtra.AI · PDF {{plano}} · 套餐权益 · 订阅周期',
   },
 };
 
@@ -145,9 +155,18 @@ export function monthPeriod(mesAno: string, lang: PdfLang): string {
   const month = Number(m) || 1;
   const year = y || String(new Date().getFullYear());
   const names: Record<PdfLang, string[]> = {
-    pt: ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'],
-    en: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'],
-    es: ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'],
+    pt: [
+      'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+      'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro',
+    ],
+    en: [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December',
+    ],
+    es: [
+      'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+      'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
+    ],
     zh: ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'],
   };
   return `${names[lang][month - 1] || month}/${year}`;
@@ -163,32 +182,35 @@ export function t(lang: PdfLang, key: string, vars?: Record<string, string | num
   return s;
 }
 
-/** Checklist de benefícios — exatamente o que o sample ULTRA mostra. */
-export function featureChecklist(depth: PdfDepth, lang: PdfLang): { label: string; included: boolean }[] {
+/** Checklist de benefícios — textos do sample ULTRA. */
+export function featureChecklist(
+  depth: PdfDepth,
+  lang: PdfLang
+): { label: string; included: boolean }[] {
   const labels: Record<PdfLang, { key: string; min: PdfDepth; text: string }[]> = {
     pt: [
-      { key: 'kpis', min: 'pro', text: 'Tudo do Pro (KPIs + distribuição)' },
+      { key: 'kpis', min: 'pro', text: 'Tudo do Pro' },
       { key: 'sent', min: 'ultra', text: 'Sentimento: positivo / neutro / negativo' },
       { key: 'themes', min: 'ultra', text: 'Temas principais detectados pela IA' },
       { key: 'rank', min: 'corp', text: 'Ranking de filiais (Corporativo+)' },
       { key: 'branch', min: 'rei', text: 'Ficha detalhada por unidade (Rei)' },
     ],
     en: [
-      { key: 'kpis', min: 'pro', text: 'Everything in Pro (KPIs + distribution)' },
+      { key: 'kpis', min: 'pro', text: 'Everything in Pro' },
       { key: 'sent', min: 'ultra', text: 'Sentiment: positive / neutral / negative' },
       { key: 'themes', min: 'ultra', text: 'Main themes detected by AI' },
       { key: 'rank', min: 'corp', text: 'Branch ranking (Corporate+)' },
       { key: 'branch', min: 'rei', text: 'Detailed page per unit (Rei)' },
     ],
     es: [
-      { key: 'kpis', min: 'pro', text: 'Todo de Pro (KPIs + distribución)' },
+      { key: 'kpis', min: 'pro', text: 'Todo de Pro' },
       { key: 'sent', min: 'ultra', text: 'Sentimiento: positivo / neutro / negativo' },
       { key: 'themes', min: 'ultra', text: 'Temas principales detectados por IA' },
       { key: 'rank', min: 'corp', text: 'Ranking de sucursales (Corporativo+)' },
       { key: 'branch', min: 'rei', text: 'Ficha detallada por unidad (Rei)' },
     ],
     zh: [
-      { key: 'kpis', min: 'pro', text: '含 Pro（KPI + 分布）' },
+      { key: 'kpis', min: 'pro', text: '含 Pro' },
       { key: 'sent', min: 'ultra', text: '情感：正面 / 中性 / 负面' },
       { key: 'themes', min: 'ultra', text: 'AI 检测的主要主题' },
       { key: 'rank', min: 'corp', text: '门店排名（企业版+）' },
