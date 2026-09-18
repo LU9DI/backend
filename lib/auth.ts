@@ -77,6 +77,19 @@ export function autenticarToken(req: AuthRequest, res: Response, next: NextFunct
   }
 }
 
+
+/** Valida vínculo quando um endpoint público recebe empresa_id explicitamente. */
+export function empresaInformadaPertenceAoToken(req: Request, empresaId: string): boolean {
+  const token = extrairToken(req);
+  if (!token) return false;
+  try {
+    const payload = verifyAccessToken(token);
+    return isAdminPayload(payload) || String(payload.empresa_id || '') === String(empresaId);
+  } catch {
+    return false;
+  }
+}
+
 export function isAdminUser(user?: { empresa_id?: string; role?: string }): boolean {
   return user?.empresa_id === 'admin' || user?.role === 'admin';
 }
