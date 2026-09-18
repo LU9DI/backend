@@ -105,7 +105,11 @@ export function mountN8nRoutes(app: Express) {
           status TEXT DEFAULT 'new',
           score INTEGER,
           qualification TEXT,
-          ai_reason TEXT
+          ai_reason TEXT,
+          crm_status TEXT DEFAULT 'pending',
+          crm_id TEXT,
+          followup_status TEXT DEFAULT 'pending',
+          updated_at TEXT
         )
       `);
       // Compatibilidade com instalações que já possuem a tabela leads.
@@ -114,15 +118,35 @@ export function mountN8nRoutes(app: Express) {
         'ALTER TABLE leads ADD COLUMN score INTEGER',
         'ALTER TABLE leads ADD COLUMN qualification TEXT',
         'ALTER TABLE leads ADD COLUMN ai_reason TEXT',
+        'ALTER TABLE leads ADD COLUMN crm_status TEXT DEFAULT \'pending\'',
+        'ALTER TABLE leads ADD COLUMN crm_id TEXT',
+        'ALTER TABLE leads ADD COLUMN followup_status TEXT DEFAULT \'pending\'',
+        'ALTER TABLE leads ADD COLUMN updated_at TEXT',
       ]) {
         try { await db.exec(stmt); } catch { /* coluna já existe */ }
+      }
+
+      // Deduplicação simples: evita cadastrar novamente o mesmo contato/empresa.
+      const duplicate = await db.get(
+        `SELECT id, nome_empresa, email, telefone, status, score, qualification, ai_reason, crm_status, crm_id, followup_status
+         FROM leads
+         WHERE (email IS NOT NULL AND email <> '' AND email = ?)
+            OR (telefone IS NOT NULL AND telefone <> '' AND telefone = ?)
+            OR (nome_empresa IS NOT NULL AND nome_empresa <> '' AND lower(nome_empresa) = lower(?) AND maps_url IS NOT NULL AND maps_url = ?)
+         ORDER BY criado_em DESC LIMIT 1`,
+        [email, telefone, nome, mapsUrl || null]
+      );
+      if (duplicate) {
+        return res.status(200).json({ success: true, duplicate: true, lead_id: duplicate.id, qualification: duplicate.score == null ? null : {
+          score: duplicate.score, qualification: duplicate.qualification, reason: duplicate.ai_reason
+        } });
       }
 
       const id = crypto.randomUUID();
       const now = new Date().toISOString();
       await db.run(
-        `INSERT INTO leads (id, nome_empresa, email, telefone, fonte, maps_url, raw_json, criado_em)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO leads (id, nome_empresa, email, telefone, fonte, maps_url, raw_json, criado_em, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           nome || null,
@@ -131,6 +155,7 @@ export function mountN8nRoutes(app: Express) {
           fonte,
           mapsUrl || null,
           JSON.stringify(body).slice(0, 4000),
+          now,
           now,
         ]
       );
@@ -157,9 +182,9 @@ export function mountN8nRoutes(app: Express) {
       if (qualification) {
         await db.run(
           `UPDATE leads
-           SET status = ?, score = ?, qualification = ?, ai_reason = ?
+           SET status = ?, score = ?, qualification = ?, ai_reason = ?, crm_status = ?, followup_status = ?, updated_at = ?
            WHERE id = ?`,
-          ['qualified', qualification.score, qualification.qualification, qualification.reason, id]
+          ['qualified', qualification.score, qualification.qualification, qualification.reason, 'pending', qualification.score >= 40 ? 'requested' : 'not_required', new Date().toISOString(), id]
         );
 
         notifyN8n('lead.qualified', {
@@ -171,6 +196,19 @@ export function mountN8nRoutes(app: Express) {
           score: qualification.score,
           qualification: qualification.qualification,
           reason: qualification.reason,
+        }).catch(() => undefined);
+
+        // O n8n recebe a solicitação de sincronização com o CRM.
+        notifyN8n('lead.crm_sync.requested', {
+          lead_id: id,
+          nome_empresa: nome,
+          email,
+          telefone,
+          fonte,
+          score: qualification.score,
+          qualification: qualification.qualification,
+          reason: qualification.reason,
+          action: 'upsert_hubspot_contact_company',
         }).catch(() => undefined);
 
         // Segundo sinal de automação: leads com potencial suficiente entram
