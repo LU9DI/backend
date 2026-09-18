@@ -166,7 +166,6 @@ export async function sendPushToEmpresa(
     gone = 0,
     errors = 0;
   for (const row of rows) {
-    // se tem empresa_id setado, só a empresa; NULL = genérico (raro)
     if (row.empresa_id && row.empresa_id !== empresaId) continue;
     const r = await sendOne(db, row, payload);
     if (r === 'ok') sent++;
@@ -178,15 +177,27 @@ export async function sendPushToEmpresa(
 
 export async function notifyCrisisReview(
   db: Database,
-  opts: { empresaId: string; rating: number; name?: string; slugOrId?: string }
+  opts: {
+    empresaId: string;
+    rating: number;
+    name?: string;
+    slugOrId?: string;
+    comment?: string;
+  }
 ) {
   if (opts.rating > 3) return;
   if (!pushConfigured()) return;
   const ref = opts.slugOrId || opts.empresaId;
+  const who = opts.name && opts.name !== 'Anônimo' ? opts.name : 'Cliente';
+  const snippet = opts.comment?.trim()
+    ? ` — ${opts.comment.trim().slice(0, 80)}`
+    : '';
+  const APP = (process.env.APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
+  const path = `/painel/${ref}`;
   await sendPushToEmpresa(db, opts.empresaId, {
-    title: 'Alerta de reputação',
-    body: `Nova avaliação ${opts.rating}★${opts.name ? ` de ${opts.name}` : ''}. Abra o painel.`,
-    url: `/painel/${ref}`,
+    title: `Alerta ${opts.rating}★ · Filtra.IA`,
+    body: `${who} enviou avaliação ${opts.rating}★${snippet}. Abra o painel para responder no WhatsApp.`,
+    url: APP ? `${APP}${path}` : path,
     tag: `crise-${opts.empresaId}`,
     empresaId: opts.empresaId,
   });
