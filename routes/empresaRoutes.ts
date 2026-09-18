@@ -33,6 +33,36 @@ function podeGerirEmpresa(req: AuthRequest, empresaId: string): boolean {
   return Boolean(uid && uid === empresaId);
 }
 
+/** Série diária dos últimos 14 dias (UTC) a partir das reviews. */
+function serieUltimos14d(reviews: { createdAt?: string; rating?: number; is_test?: boolean }[]) {
+  const map = new Map<string, { total: number; soma: number }>();
+  const hoje = new Date();
+  hoje.setUTCHours(0, 0, 0, 0);
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(hoje);
+    d.setUTCDate(hoje.getUTCDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    map.set(key, { total: 0, soma: 0 });
+  }
+  for (const r of reviews) {
+    if (r.is_test) continue;
+    const raw = r.createdAt;
+    if (!raw) continue;
+    const dt = new Date(raw);
+    if (Number.isNaN(dt.getTime())) continue;
+    const key = dt.toISOString().slice(0, 10);
+    const bucket = map.get(key);
+    if (!bucket) continue;
+    bucket.total += 1;
+    bucket.soma += Number(r.rating) || 0;
+  }
+  return Array.from(map.entries()).map(([data, v]) => ({
+    data,
+    total: v.total,
+    media: v.total ? Math.round((v.soma / v.total) * 10) / 10 : 0,
+  }));
+}
+
 export function mountEmpresaRoutes(app: Express) {
   app.get(
     '/api/empresa/:ref/validar',
@@ -175,24 +205,30 @@ export function mountEmpresaRoutes(app: Express) {
           `SELECT * FROM reviews WHERE empresa_id = ? ORDER BY id DESC LIMIT 500`,
           [empresa.id]
         );
-        reviews = (rows || []).map((r: any) => ({
-          id: r.id,
-          name: r.name,
-          rating: r.rating,
-          comment: r.comment,
-          ai_reply: r.ai_reply,
-          ai_tags: (() => {
-            try {
-              const p = JSON.parse(r.ai_tags || '[]');
-              return Array.isArray(p) ? p : [];
-            } catch {
-              return [];
-            }
-          })(),
-          createdAt: r.createdAt || r.createdat || r.created_at,
-          is_test: Number(r.is_test) === 1,
-          treated: Boolean(r.treated_at),
-        }));
+        reviews = (rows || []).map((r: any) => {
+          const clientWpp = normalizarWhatsapp(r.client_whatsapp);
+          return {
+            id: r.id,
+            name: r.name,
+            rating: r.rating,
+            comment: r.comment,
+            ai_reply: r.ai_reply,
+            ai_tags: (() => {
+              try {
+                const p = JSON.parse(r.ai_tags || '[]');
+                return Array.isArray(p) ? p : [];
+              } catch {
+                return [];
+              }
+            })(),
+            createdAt: r.createdAt || r.createdat || r.created_at,
+            is_test: Number(r.is_test) === 1,
+            treated: Boolean(r.treated_at),
+            client_whatsapp: clientWpp,
+            client_whatsapp_url: linkWhatsapp(clientWpp),
+            client_whatsapp_anon: Boolean(r.client_whatsapp && !clientWpp),
+          };
+        });
       } catch (e: any) {
         console.warn('[painel] reviews:', e?.message || e);
       }
@@ -208,6 +244,8 @@ export function mountEmpresaRoutes(app: Express) {
         const n = Number(r.rating);
         if (n >= 1 && n <= 5) dist[n - 1] += 1;
       }
+
+      const serie_14d = serieUltimos14d(reais);
 
       const APP_URL = process.env.APP_URL || process.env.FRONTEND_URL || 'https://filtraai.com';
       const base = String(APP_URL).replace(/\/$/, '');
@@ -234,14 +272,17 @@ export function mountEmpresaRoutes(app: Express) {
           media,
           negativas,
           positivas,
-          tratadas: 0,
-          pendentes_tratamento: 0,
+          tratadas: reais.filter((r: any) => r.treated).length,
+          pendentes_tratamento: Math.max(
+            0,
+            negativas - reais.filter((r: any) => r.treated && r.rating <= 3).length
+          ),
           alerta_crise: false,
           crises_24h: 0,
           distribuicao: dist,
           top_tags: [],
           taxa_positiva: total ? Math.round((positivas / total) * 100) : 0,
-          serie_14d: [],
+          serie_14d,
           testes_excluidos: reviews.filter((r) => r.is_test).length,
           sentimento_mix: { positivo: 0, neutro: 0, negativo: 0 },
           feedback_usados: total,
