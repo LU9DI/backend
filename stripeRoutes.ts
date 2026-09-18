@@ -22,6 +22,7 @@ import {
   enforcarExpiracoes,
 } from './services/billingService.js';
 import { logWebhookEvent } from './lib/opsLog.js';
+import { claimWebhookEvent, releaseWebhookEvent, updateWebhookAction } from './lib/webhookIdempotency.js';
 
 async function ensureStripeColumns(db: Database) {
   const cols = (await db.all(`PRAGMA table_info(empresas)`)).map((c: any) => c.name);
@@ -108,9 +109,20 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
 
         const type = String(event.type || '');
         eventType = type;
+        const eventId = String(event.id || '').trim();
+        (req as any).__stripeEventId = eventId;
+        const claim = await claimWebhookEvent({
+          source: 'stripe',
+          eventId,
+          eventType: type,
+        }, db);
+        if (!claim.isNew) {
+          return res.json({ ok: true, action: 'duplicate_event' });
+        }
         const obj = event.data?.object || {};
 
         const done = async (action: string, status: 'ok' | 'ignored' = 'ok') => {
+          await updateWebhookAction('stripe', eventId, action, db);
           await logWebhookEvent(db, {
             source: 'stripe',
             event_type: type,
@@ -220,6 +232,14 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
 
         return done('ignore', 'ignored');
       } catch (e: any) {
+        if (eventType !== 'unknown') {
+          try {
+            const eventId = String((req as any).__stripeEventId || '');
+            if (eventId) await releaseWebhookEvent('stripe', eventId, db);
+          } catch {
+            /* */
+          }
+        }
         console.error('Stripe webhook:', e.message || e);
         try {
           await logWebhookEvent(db, {
