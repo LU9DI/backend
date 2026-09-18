@@ -93,7 +93,7 @@ app.post(
               subscriptionId,
               periodEnd
             );
-            if (type === 'invoice.paid' || type === 'checkout.session.completed') {
+            if (type === 'invoice.paid') {
               const rawAmount = Number(obj.amount_paid ?? obj.amount_total ?? 0);
               await createFiscalDocumentForPayment(db, empresaId, eventId, rawAmount / 100);
             }
