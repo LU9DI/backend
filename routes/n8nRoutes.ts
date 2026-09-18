@@ -172,6 +172,22 @@ export function mountN8nRoutes(app: Express) {
           qualification: qualification.qualification,
           reason: qualification.reason,
         }).catch(() => undefined);
+
+        // Segundo sinal de automação: leads com potencial suficiente entram
+        // na fila de follow-up. O evento não envia mensagem por conta própria.
+        if (qualification.score >= 40) {
+          notifyN8n('lead.followup.requested', {
+            lead_id: id,
+            nome_empresa: nome,
+            email,
+            telefone,
+            fonte,
+            score: qualification.score,
+            qualification: qualification.qualification,
+            reason: qualification.reason,
+            action: 'create_crm_followup',
+          }).catch(() => undefined);
+        }
       }
 
       res.status(201).json({
