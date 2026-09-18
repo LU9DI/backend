@@ -25,6 +25,7 @@ import { activatePlan, blockEmpresa } from '../services/billingService.js';
 import { logWebhookEvent } from '../lib/opsLog.js';
 import { claimPaymentCaptureOnce, completePaymentCapture, releasePaymentCapture } from '../lib/paymentEvents.js';
 import { empresaInformadaPertenceAoToken } from '../lib/auth.js';
+import { createFiscalDocumentForPayment } from '../lib/fiscal.js';
 
 async function ensurePixTables(db: Database) {
   await db.exec(`
@@ -159,18 +160,27 @@ async function activateFromPixInternal(
   const exp = new Date();
   exp.setDate(exp.getDate() + days);
 
+  const paymentReference = opts.preapprovalId
+    ? `mp_preapproval:${opts.preapprovalId}`
+    : opts.paymentId
+      ? `mp_pix:${opts.paymentId}`
+      : `mp_pix:unknown`;
   await activatePlan(
     db,
     opts.empresaId,
     plano?.planDb || 'pro',
     null,
-    opts.preapprovalId
-      ? `mp_preapproval:${opts.preapprovalId}`
-      : opts.paymentId
-        ? `mp_pix:${opts.paymentId}`
-        : `mp_pix:unknown`,
+    paymentReference,
     exp.toISOString()
   );
+  if (opts.paymentId || opts.preapprovalId) {
+    await createFiscalDocumentForPayment(
+      db,
+      opts.empresaId,
+      paymentReference,
+      Number(planoAmountReais(plano as any) || 0)
+    );
+  }
 
   await db.run(
     `UPDATE empresas SET payment_gateway = 'mercadopago', billing_cycle = ? WHERE id = ?`,
