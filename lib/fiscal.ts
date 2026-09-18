@@ -232,15 +232,8 @@ export async function createFiscalDocumentForPayment(
   paymentReference: string,
   amount: number
 ): Promise<{ id: string; status: FiscalStatus }> {
-  if (!fiscalConfigured()) {
-    return { id: '', status: 'aguardando_dados_fiscais' };
-  }
-
   const company = await getCompany(db, empresaId);
-  const recipient = await getRecipient(db, empresaId);
-  if (!company || !recipient || !recipientReady(recipient)) {
-    return { id: '', status: 'aguardando_dados_fiscais' };
-  }
+  if (!company) return { id: '', status: 'aguardando_dados_fiscais' };
 
   const idempotencyKey = crypto
     .createHash('sha256')
@@ -252,16 +245,20 @@ export async function createFiscalDocumentForPayment(
   );
   if (existing) return existing as { id: string; status: FiscalStatus };
 
+  const recipient = await getRecipient(db, empresaId);
+  const ready = !!recipient && recipientReady(recipient);
+  const status: FiscalStatus = fiscalConfigured() && ready ? 'pending' : 'aguardando_dados_fiscais';
   const id = crypto.randomUUID();
   const providerRef = makeReference(id);
+
   await db.run(
     `INSERT INTO fiscal_documents
      (id, empresa_id, payment_reference, idempotency_key, provider, provider_ref, status, valor)
-     VALUES (?, ?, ?, ?, 'focus_nfe', ?, 'pending', ?)`,
-    [id, empresaId, paymentReference, idempotencyKey, providerRef, Number(amount) || 0]
+     VALUES (?, ?, ?, ?, 'focus_nfe', ?, ?, ?)`,
+    [id, empresaId, paymentReference, idempotencyKey, providerRef, status, Number(amount) || 0]
   );
 
-  return { id, status: 'pending' };
+  return { id, status };
 }
 
 export async function processFiscalDocument(db: Database, id: string): Promise<void> {
