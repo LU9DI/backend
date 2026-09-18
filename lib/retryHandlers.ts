@@ -72,9 +72,15 @@ async function activateFromMp(
   const days = plano?.interval === 'year' ? 365 : 30;
   const exp = new Date();
   exp.setDate(exp.getDate() + days);
-  await activatePlan(
-    db,
-    empresaId,
+
+  const paymentKey = paymentId ? String(paymentId).trim() : '';
+  const claimed = paymentKey ? await claimPaymentCaptureOnce(db, 'mercadopago', paymentKey) : true;
+  if (!claimed) return;
+
+  try {
+    await activatePlan(
+      db,
+      empresaId,
     plano?.planDb || 'pro',
     null,
     preapprovalId
@@ -97,6 +103,12 @@ async function activateFromMp(
     }
   } catch {
     /* */
+  }
+
+  if (paymentKey) await completePaymentCapture(db, 'mercadopago', paymentKey);
+  } catch (e) {
+    if (paymentKey) await releasePaymentCapture(db, 'mercadopago', paymentKey);
+    throw e;
   }
 }
 
