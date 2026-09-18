@@ -6,6 +6,7 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { wechatConfigured, wechatStatus, createWechatOrder } from '../lib/wechat.js';
 import { resolvePlano } from '../stripeBilling.js';
 import { getDb } from '../lib/db.js';
+import { empresaInformadaPertenceAoToken } from '../lib/auth.js';
 
 export function mountWechatRoutes(app: Express) {
   app.get('/api/wechat/status', (_req, res) => {
@@ -30,6 +31,9 @@ export function mountWechatRoutes(app: Express) {
       }
 
       const empresaId = req.body?.empresa_id ? String(req.body.empresa_id) : null;
+      if (empresaId && !empresaInformadaPertenceAoToken(req, empresaId)) {
+        return res.status(403).json({ error: 'empresa_id não pertence à sessão autenticada.' });
+      }
       if (empresaId) {
         const emp = await getDb().get(`SELECT id FROM empresas WHERE id = ?`, [empresaId]);
         if (!emp) return res.status(404).json({ error: 'Empresa não encontrada.' });
@@ -65,9 +69,9 @@ export function mountWechatRoutes(app: Express) {
       if (!wechatConfigured()) {
         return res.status(503).json({ code: 'FAIL', message: 'WeChat OFF' });
       }
-      // TODO: validar assinatura WeChat Pay v3 e ativar plano
-      console.log('[wechat webhook] recebido (stub)', JSON.stringify(req.body || {}).slice(0, 200));
-      res.json({ code: 'SUCCESS', message: 'OK' });
+      // Ainda não há verificação criptográfica/ativação implementada.
+      // Não confirmar SUCCESS para evitar marcar pagamentos como recebidos.
+      return res.status(503).json({ code: 'FAIL', message: 'Webhook WeChat ainda não está habilitado.' });
     })
   );
 }
