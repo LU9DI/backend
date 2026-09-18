@@ -156,8 +156,11 @@ export async function initDB(): Promise<Database> {
   const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
   const adminExiste = await _db.get('SELECT * FROM usuarios WHERE email = ?', [adminMail]);
   if (!adminExiste) {
-    const senhaPadrao = process.env.ADMIN_PASSWORD || 'MudeEstaSenha123!';
-    const hash = await bcrypt.hash(senhaPadrao, 12);
+    const senhaPadrao = process.env.ADMIN_PASSWORD?.trim();
+    if (!senhaPadrao && isProd) {
+      throw new Error('ADMIN_PASSWORD é obrigatório em produção para criar o primeiro admin.');
+    }
+    const hash = await bcrypt.hash(senhaPadrao || 'MudeEstaSenha123!', 12);
     try {
       await _db.run(
         'INSERT INTO usuarios (id, cnpj, nome_funcionario, empresa_id, senha_hash, email) VALUES (?, ?, ?, ?, ?, ?)',
