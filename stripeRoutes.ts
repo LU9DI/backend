@@ -6,6 +6,7 @@ import { stripeConfigured, criarCheckoutSession, criarPortalSession, constructSt
 import { validateBody, schemaCheckout } from './middleware/validate.js';
 import { activatePlan, markCancelAtPeriodEnd, blockEmpresa, empresaTemAcesso, enforcarExpiracoes } from './services/billingService.js';
 import { logWebhookEvent } from './lib/opsLog.js';
+import { claimWebhookEvent, releaseWebhookEvent, updateWebhookAction } from './lib/webhookIdempotency.js';
 import { autenticarToken, extrairToken, isAdminUser, verifyAccessToken, empresaInformadaPertenceAoToken, type AuthRequest } from './lib/auth.js';
 async function ensureStripeColumns(db:Database){try{const cols=(await db.all(`PRAGMA table_info(empresas)`)).map((c:any)=>c.name);if(!cols.includes('stripe_customer_id'))await db.exec(`ALTER TABLE empresas ADD COLUMN stripe_customer_id TEXT`);if(!cols.includes('stripe_subscription_id'))await db.exec(`ALTER TABLE empresas ADD COLUMN stripe_subscription_id TEXT`);if(!cols.includes('cancel_at_period_end'))await db.exec(`ALTER TABLE empresas ADD COLUMN cancel_at_period_end INTEGER DEFAULT 0`);}catch{for(const ddl of [`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT`,`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT`,`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS cancel_at_period_end INTEGER DEFAULT 0`]){try{await db.exec(ddl);}catch{}}}}
 function fromUnix(sec:unknown):string|null{const n=Number(sec);return Number.isFinite(n)&&n>0?new Date(n*1000).toISOString():null;}
