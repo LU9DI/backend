@@ -17,6 +17,7 @@ import {
   verifyInboundSecret,
 } from '../lib/n8n.js';
 import { ensureRuntimeSchema } from '../lib/schemaEnsure.js';
+import { qualifyLead } from '../services/leadAutomation.js';
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -100,9 +101,22 @@ export function mountN8nRoutes(app: Express) {
           fonte TEXT,
           maps_url TEXT,
           raw_json TEXT,
-          criado_em TEXT NOT NULL
+          criado_em TEXT NOT NULL,
+          status TEXT DEFAULT 'new',
+          score INTEGER,
+          qualification TEXT,
+          ai_reason TEXT
         )
       `);
+      // Compatibilidade com instalações que já possuem a tabela leads.
+      for (const stmt of [
+        'ALTER TABLE leads ADD COLUMN status TEXT DEFAULT \'new\'',
+        'ALTER TABLE leads ADD COLUMN score INTEGER',
+        'ALTER TABLE leads ADD COLUMN qualification TEXT',
+        'ALTER TABLE leads ADD COLUMN ai_reason TEXT',
+      ]) {
+        try { await db.exec(stmt); } catch { /* coluna já existe */ }
+      }
 
       const id = crypto.randomUUID();
       const now = new Date().toISOString();
@@ -121,7 +135,7 @@ export function mountN8nRoutes(app: Express) {
         ]
       );
 
-      // Eco opcional de volta ao workflow (não bloqueia)
+      // Primeiro evento: o lead entrou no sistema.
       notifyN8n('lead.captured', {
         lead_id: id,
         nome_empresa: nome,
@@ -130,7 +144,41 @@ export function mountN8nRoutes(app: Express) {
         fonte,
       }).catch(() => undefined);
 
-      res.status(201).json({ success: true, lead_id: id });
+      // Segundo estágio: qualificação automática pela IA.
+      // Falha de IA nunca impede a entrada do lead.
+      const qualification = await qualifyLead({
+        nome_empresa: nome,
+        email,
+        telefone,
+        fonte,
+        maps_url: mapsUrl,
+      });
+
+      if (qualification) {
+        await db.run(
+          `UPDATE leads
+           SET status = ?, score = ?, qualification = ?, ai_reason = ?
+           WHERE id = ?`,
+          ['qualified', qualification.score, qualification.qualification, qualification.reason, id]
+        );
+
+        notifyN8n('lead.qualified', {
+          lead_id: id,
+          nome_empresa: nome,
+          email,
+          telefone,
+          fonte,
+          score: qualification.score,
+          qualification: qualification.qualification,
+          reason: qualification.reason,
+        }).catch(() => undefined);
+      }
+
+      res.status(201).json({
+        success: true,
+        lead_id: id,
+        qualification: qualification || null,
+      });
     })
   );
 
