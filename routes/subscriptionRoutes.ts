@@ -6,7 +6,7 @@ import { getDb, findEmpresa } from '../lib/db.js';
 import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { markCancelAtPeriodEnd } from '../services/billingService.js';
-import { stripeConfigured, criarPortalSession } from '../stripeBilling.js';
+import { stripeConfigured, criarPortalSession, setStripeSubscriptionCancelAtPeriodEnd } from '../stripeBilling.js';
 import { mpConfigured } from '../lib/mercadopago.js';
 
 function podeGerir(req: AuthRequest, empresaId: string): boolean {
@@ -63,6 +63,14 @@ export function mountSubscriptionRoutes(app: Express) {
       }
 
       const db = getDb();
+
+      // Se a assinatura é Stripe, o cancelamento precisa ser aplicado na Stripe
+      // antes de marcar o estado local; assim "sem cobrança no próximo ciclo"
+      // corresponde ao comportamento real do gateway.
+      if (stripeConfigured() && emp.stripe_subscription_id) {
+        await setStripeSubscriptionCancelAtPeriodEnd(String(emp.stripe_subscription_id), true);
+      }
+
       await markCancelAtPeriodEnd(db, emp.id, emp.expira_em || null);
 
       // Stripe: cliente pode ir ao portal para cancelar na Stripe também
@@ -104,6 +112,9 @@ export function mountSubscriptionRoutes(app: Express) {
         });
       }
 
+      if (stripeConfigured() && emp.stripe_subscription_id) {
+        await setStripeSubscriptionCancelAtPeriodEnd(String(emp.stripe_subscription_id), false);
+      }
       await getDb().run(`UPDATE empresas SET cancel_at_period_end = 0 WHERE id = ?`, [emp.id]);
       res.json({
         success: true,
