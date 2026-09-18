@@ -354,6 +354,7 @@ export function mountEmpresaRoutes(app: Express) {
         }
 
         let rows: any[] = [];
+        let recentRows: any[] = [];
         try {
           rows = await db.all(
             `SELECT * FROM reviews WHERE empresa_id = ? ORDER BY id DESC LIMIT 500`,
@@ -362,6 +363,24 @@ export function mountEmpresaRoutes(app: Express) {
         } catch (e: any) {
           console.warn('[painel] reviews:', e?.message || e);
           rows = [];
+        }
+
+        // A série de 14 dias não pode depender do LIMIT 500 do painel.
+        // Em empresas com muito volume, as avaliações recentes precisam de
+        // uma consulta própria para que os destaques não fiquem truncados.
+        try {
+          const since14d = new Date(Date.now() - 13 * 24 * 60 * 60 * 1000).toISOString();
+          recentRows = await db.all(
+            `SELECT rating, createdAt, is_test
+             FROM reviews
+             WHERE empresa_id = ? AND createdAt >= ?
+             ORDER BY createdAt ASC
+             LIMIT 10000`,
+            [empresa.id, since14d]
+          );
+        } catch (e: any) {
+          console.warn('[painel] reviews 14d:', e?.message || e);
+          recentRows = [];
         }
 
         const reviews = (rows || []).map((r: any) => {
@@ -520,7 +539,15 @@ export function mountEmpresaRoutes(app: Express) {
             distribuicao: dist,
             top_tags: tem_ia ? top_tags : [],
             taxa_positiva: total ? Math.round((positivas / total) * 100) : 0,
-            serie_14d: serieUltimosDias(reais, 14),
+            serie_14d: serieUltimosDias(
+              recentRows
+                .filter((r: any) => Number(r.is_test) !== 1)
+                .map((r: any) => ({
+                  rating: Number(r.rating) || 0,
+                  createdAt: rowCreatedAt(r),
+                })),
+              14
+            ),
             testes_excluidos: reviews.filter((r) => r.is_test).length,
             sentimento_mix,
             sentimento_score_medio:

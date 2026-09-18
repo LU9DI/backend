@@ -38,7 +38,7 @@ export async function buildRelatorioInteligente(
 
   let rows: any[] = [];
   try {
-    rows = await db.all(`SELECT * FROM reviews WHERE empresa_id = ? LIMIT 800`, [empresa.id]);
+    rows = await db.all(`SELECT * FROM reviews WHERE empresa_id = ? ORDER BY createdAt DESC LIMIT 10000`, [empresa.id]);
   } catch {
     rows = [];
   }
