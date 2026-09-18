@@ -162,11 +162,13 @@ export function mountPayPalRoutes(app: Express) {
           });
         }
 
+        // O pedido PayPal é a fonte de verdade. Nunca permita que o cliente
+        // altere empresa/plano após o pagamento ter sido criado.
         const parsed = parseCustomId(cap.customId);
-        if (!empresaId) empresaId = parsed.empresaId;
-        if (!planoKey) planoKey = parsed.planoKey || parsePlanoFromInvoiceId(cap.invoiceId) || '';
+        empresaId = parsed.empresaId;
+        planoKey = parsed.planoKey || parsePlanoFromInvoiceId(cap.invoiceId) || '';
 
-        if (!empresaId) {
+        if (!empresaId || !planoKey) {
           return res.json({
             success: true,
             payment: cap,
