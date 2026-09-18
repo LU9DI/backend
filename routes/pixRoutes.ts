@@ -516,8 +516,7 @@ export function mountPixRoutes(app: Express) {
         status,
         status_detail: remote.status_detail,
         amount: remote.transaction_amount,
-        empresa_id: empresaId,
-        plano: planoKey,
+        // Não expor identificadores internos da empresa em endpoint público de polling.
         qr_code: poi.qr_code || null,
         copia_e_cola: poi.qr_code || null,
         approved: status === 'approved',
