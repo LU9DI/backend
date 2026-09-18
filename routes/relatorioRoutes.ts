@@ -15,6 +15,8 @@ import {
   normalizeDestinatarios,
 } from '../services/relatorioInteligente.js';
 import { gerarRelatorioMensalPDF } from '../relatorioPdf.js';
+import { subscriptionAnchorDay, cycleRangeForMonth } from '../lib/billingCycle.js';
+import { ensureReportPdfSchema, getStoredReport, claimReportGeneration, saveGeneratedReport, releaseReportClaim } from '../lib/reportPdfStore.js';
 
 const sendLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -137,44 +139,56 @@ export function mountRelatorioRoutes(app: Express) {
   app.post('/api/empresa/:ref/relatorio/inteligente', autenticarToken, sendLimiter, sendHandler);
   app.post('/api/empresa/:ref/relatorio/send', autenticarToken, sendLimiter, sendHandler);
 
-  // PDF atual do painel: mantém compatibilidade do endpoint, mas usa o gerador oficial mensal.
-  app.get('/api/empresa/:ref/relatorio-inteligente.pdf', autenticarToken, asyncHandler(async (req: AuthRequest, res: Response) => {
+  // PDF oficial: uma geração por ciclo; depois, downloads ilimitados do mesmo arquivo.
+  const serveCyclePdf = asyncHandler(async (req: AuthRequest, res: Response) => {
     const empresa: any = await findEmpresa(req.params.ref);
     if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
     if (!podeAcessarEmpresa(req, String(empresa.id))) return res.status(403).json({ error: 'Sem permissão.' });
     if (!planTemPdf(String(empresa.plan || empresa.status || ''))) return res.status(403).json({ error: 'PDF não disponível neste plano.' });
-    const inicioParam = dateOnly(req.query.inicio);
-    const fimParam = dateOnly(req.query.fim);
-    const inicio = inicioParam || '1970-01-01';
-    const fim = fimParam || tomorrowUtc();
-    if (new Date(`${inicio}T00:00:00Z`) >= new Date(`${fim}T00:00:00Z`)) return res.status(400).json({ error: 'Período do ciclo inválido.' });
+    const mesCheck = validateReportMonth(req.query.mes, { defaultToCurrent: true, minYear: 2020, allowFutureMonths: 0 });
+    if (!mesCheck.ok) return res.status(400).json({ error: mesCheck.error });
+    const range = cycleRangeForMonth(mesCheck.value, subscriptionAnchorDay(empresa));
+    if (new Date(range.startIso).getTime() > Date.now()) return res.status(400).json({ error: 'O ciclo informado ainda não começou.' });
     const langRaw = String(req.query.lang || 'pt').toLowerCase();
     const lang = ['pt', 'en', 'es', 'zh'].includes(langRaw) ? langRaw : 'pt';
-    const mesAno = fim.slice(0, 7) || inicio.slice(0, 7) || new Date().toISOString().slice(0, 7);
-    const pdf = await gerarRelatorioMensalPDF(getDb(), String(empresa.id), mesAno, undefined, lang);
+    const db = getDb();
+    await ensureReportPdfSchema(db);
     const slug = String(empresa.slug || empresa.id).replace(/[^a-z0-9_-]+/gi, '-');
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="relatorio-inteligente-${slug}-${mesAno}.pdf"`);
-    res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate');
-    return res.send(pdf.buffer);
-  }));
-
-  app.get('/api/empresa/:ref/relatorio.pdf', autenticarToken, asyncHandler(async (req: AuthRequest, res: Response) => {
-    const empresa = await findEmpresa(req.params.ref);
-    if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
-    if (!podeAcessarEmpresa(req, empresa.id)) return res.status(403).json({ error: 'Sem permissão.' });
-    if (!empresaTemPdf(empresa)) return res.status(403).json({ error: 'PDF não disponível neste plano. Use o relatório inteligente.', code: 'USE_RELATORIO_INTELIGENTE' });
-    try {
-      const mod = await import('../relatorioPdf.js').catch(() => null);
-      if (!mod?.gerarRelatorioMensalPDF) return res.status(410).json({ error: 'PDF descontinuado. Use POST /api/empresa/:ref/relatorio/enviar', code: 'PDF_GONE' });
-      const mesCheck = validateReportMonth(req.query.mes, { defaultToCurrent: true, minYear: 2020, allowFutureMonths: 0 });
-      if (!mesCheck.ok) return res.status(400).json({ error: mesCheck.error });
-      const r = await mod.gerarRelatorioMensalPDF(getDb(), empresa.id, mesCheck.value);
+    const sendCached = (base64: string) => {
+      const buffer = Buffer.from(base64, 'base64');
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="relatorio-${empresa.slug || 'emp'}-${mesCheck.value}.pdf"`);
-      return res.send(r.buffer);
-    } catch (e: any) {
-      return res.status(500).json({ error: 'Falha ao gerar PDF. Prefira o relatório inteligente.', detail: String(e?.message || e).slice(0, 160) });
+      res.setHeader('Content-Disposition', 'attachment; filename="relatorio-' + slug + '-' + range.cycleKey + '.pdf"');
+      res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+      res.setHeader('X-PDF-Generation', 'cached');
+      res.setHeader('X-PDF-Cycle', range.cycleKey);
+      return res.send(buffer);
+    };
+    const existing = await getStoredReport(db, String(empresa.id), range.cycleKey);
+    if (existing?.status === 'ready' && existing.pdf_base64) return sendCached(existing.pdf_base64);
+    const id = randomUUID();
+    const claimed = await claimReportGeneration(db, { id, empresaId: String(empresa.id), cycleKey: range.cycleKey, cycleStart: range.startIso, cycleEnd: range.endIso, mesAno: mesCheck.value, lang });
+    if (!claimed) {
+      const afterClaim = await getStoredReport(db, String(empresa.id), range.cycleKey);
+      if (afterClaim?.status === 'ready' && afterClaim.pdf_base64) return sendCached(afterClaim.pdf_base64);
+      return res.status(409).json({ error: 'O relatório deste ciclo está sendo gerado. Tente novamente em instantes.', code: 'PDF_PROCESSING', cycle: range.cycleKey });
     }
-  }));
+    try {
+      const pdf = await gerarRelatorioMensalPDF(db, String(empresa.id), mesCheck.value, undefined, lang);
+      await saveGeneratedReport(db, id, pdf.buffer, lang);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'attachment; filename="relatorio-' + slug + '-' + range.cycleKey + '.pdf"');
+      res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+      res.setHeader('X-PDF-Generation', 'new');
+      res.setHeader('X-PDF-Cycle', range.cycleKey);
+      return res.send(pdf.buffer);
+    } catch (e) {
+      await releaseReportClaim(db, id);
+      throw e;
+    }
+  });
+
+  app.get('/api/empresa/:ref/relatorio-inteligente.pdf', autenticarToken, serveCyclePdf);
+
+  app.get('/api/empresa/:ref/relatorio.pdf', autenticarToken, serveCyclePdf);
+
 }

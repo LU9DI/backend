@@ -43,6 +43,7 @@ import { mountAdminLoginRoute } from './adminLoginRoute.js';
 import { mountAdminPasswordResetRoutes } from './adminPasswordReset.js';
 import { mountMfaRoutes } from './mfa.js';
 import { mountStripeRoutes } from './stripeRoutes.js';
+import { mountFiscalRoutes } from './routes/fiscalRoutes.js';
 import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
 import { paypalConfigured } from './lib/paypal.js';
 import { mpConfigured } from './lib/mercadopago.js';
@@ -60,6 +61,8 @@ import { ensurePlanPricingSchema } from './lib/planPricing.js';
 import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
 import { n8nConfigured } from './lib/n8n.js';
+import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
+import { ensureReportPdfSchema } from './lib/reportPdfStore.js';
 import {
   anonymizeOldClientWhatsapp,
   ensureReviewTreatmentColumns,
@@ -140,6 +143,7 @@ app.get('/api/health', async (_req, res) => {
     push: pushConfigured(),
     smtp: smtpConfigured(),
     n8n: n8nConfigured(),
+    fiscal: fiscalConfigured(),
     pdf_engine: 'puppeteer',
     ai_latency: {
       groq: ai.stats.groq.latency,
@@ -154,10 +158,10 @@ app.get('/api/health', async (_req, res) => {
 });
 
 app.get('/api/metrics', (req, res) => {
-  const secret = process.env.JOBS_SECRET?.trim();
-  if (process.env.NODE_ENV === 'production' && secret) {
-    const got = String(req.headers['x-jobs-secret'] || '');
-    if (got !== secret) {
+  if (process.env.NODE_ENV === 'production') {
+    const secret = (process.env.METRICS_TOKEN || process.env.JOBS_SECRET || '').trim();
+    const got = String(req.headers['x-metrics-token'] || req.headers['x-jobs-secret'] || '');
+    if (!secret || got !== secret) {
       return res.status(401).json({ error: 'Não autorizado.' });
     }
   }
@@ -255,6 +259,16 @@ async function main() {
     console.warn('ensureAuditSchema:', e);
   }
   try {
+    await ensureFiscalSchema(getDb());
+  } catch (e) {
+    console.warn('ensureFiscalSchema:', e);
+  }
+  try {
+    await ensureReportPdfSchema(getDb());
+  } catch (e) {
+    console.warn('ensureReportPdfSchema:', e);
+  }
+  try {
     await ensurePlanPricingSchema(getDb());
     await refreshPlanPricesFromDb(getDb());
   } catch (e) {
@@ -299,6 +313,7 @@ async function main() {
   mountAuditRoutes(app);
   mountSmtpTestRoutes(app);
   mountN8nRoutes(app);
+  mountFiscalRoutes(app);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
@@ -315,6 +330,7 @@ async function main() {
   );
   console.log(`📧 SMTP: ${smtpConfigured() ? 'configurado' : 'OFF'}`);
   console.log(`🔗 n8n: ${n8nConfigured() ? 'webhook ON' : 'OFF'}`);
+  console.log(`🧾 NFS-e: ${fiscalConfigured() ? 'configurado' : 'OFF'}`);
   console.log('📄 PDF: puppeteer');
   if (!wechatConfigured()) {
     console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');

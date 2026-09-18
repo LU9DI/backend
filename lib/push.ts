@@ -124,8 +124,22 @@ export async function saveSubscription(db: Database, input: PushSubInput) {
   return id;
 }
 
-export async function removeSubscription(db: Database, endpoint: string) {
-  await db.run(`DELETE FROM push_subscriptions WHERE endpoint = ?`, [endpoint]);
+export async function removeSubscription(
+  db: Database,
+  endpoint: string,
+  owner?: { userId?: string | null; empresaId?: string | null }
+) {
+  if (!owner?.userId && !owner?.empresaId) {
+    await db.run(`DELETE FROM push_subscriptions WHERE endpoint = ?`, [endpoint]);
+    return;
+  }
+  const clauses = ['endpoint = ?'];
+  const params: any[] = [endpoint];
+  const owners: string[] = [];
+  if (owner.userId) { owners.push('user_id = ?'); params.push(owner.userId); }
+  if (owner.empresaId) { owners.push('empresa_id = ?'); params.push(owner.empresaId); }
+  clauses.push(`(${owners.join(' OR ')})`);
+  await db.run(`DELETE FROM push_subscriptions WHERE ${clauses.join(' AND ')}`, params);
 }
 
 export type PushPayload = {

@@ -77,6 +77,14 @@ export function mountJobsRoutes(app: Express) {
 
   app.post('/api/jobs/backup', async (req: Request, res: Response) => {
     if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
+    // Em produção, o banco oficial é PostgreSQL. Este helper copia apenas um arquivo SQLite
+    // e portanto não pode ser tratado como backup do banco de produção.
+    if (process.env.NODE_ENV === 'production' && /^postgres(ql)?:\/\//i.test(process.env.DATABASE_URL || '')) {
+      return res.status(503).json({
+        error: 'BACKUP_NOT_AVAILABLE',
+        message: 'Backup SQLite não é aplicável ao PostgreSQL de produção.',
+      });
+    }
     const result = await createSqliteBackup();
     if (!result.ok) return res.status(500).json(result);
     res.json({ success: true, ...result });

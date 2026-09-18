@@ -23,6 +23,9 @@ import {
 import { resolvePlano } from '../stripeBilling.js';
 import { activatePlan, blockEmpresa } from '../services/billingService.js';
 import { logWebhookEvent } from '../lib/opsLog.js';
+import { claimPaymentCaptureOnce, completePaymentCapture, releasePaymentCapture } from '../lib/paymentEvents.js';
+import { empresaInformadaPertenceAoToken } from '../lib/auth.js';
+import { createFiscalDocumentForPayment } from '../lib/fiscal.js';
 
 async function ensurePixTables(db: Database) {
   await db.exec(`
@@ -130,23 +133,54 @@ async function activateFromPix(
     preapprovalId?: string | null;
   }
 ) {
+  if (!opts.paymentId) return activateFromPixInternal(db, opts);
+  const claimed = await claimPaymentCaptureOnce(db, 'mercadopago', String(opts.paymentId));
+  if (!claimed) return { plan: resolvePlano(opts.planoKey || 'pro')?.planDb, duplicate: true };
+  try {
+    const result = await activateFromPixInternal(db, opts);
+    await completePaymentCapture(db, 'mercadopago', String(opts.paymentId));
+    return result;
+  } catch (error) {
+    await releasePaymentCapture(db, 'mercadopago', String(opts.paymentId));
+    throw error;
+  }
+}
+
+async function activateFromPixInternal(
+  db: Database,
+  opts: {
+    empresaId: string;
+    planoKey: string | null;
+    paymentId?: string | null;
+    preapprovalId?: string | null;
+  }
+) {
   const plano = resolvePlano(opts.planoKey || 'pro');
   const days = plano?.interval === 'year' ? 365 : 30;
   const exp = new Date();
   exp.setDate(exp.getDate() + days);
 
+  const paymentReference = opts.preapprovalId
+    ? `mp_preapproval:${opts.preapprovalId}`
+    : opts.paymentId
+      ? `mp_pix:${opts.paymentId}`
+      : `mp_pix:unknown`;
   await activatePlan(
     db,
     opts.empresaId,
     plano?.planDb || 'pro',
     null,
-    opts.preapprovalId
-      ? `mp_preapproval:${opts.preapprovalId}`
-      : opts.paymentId
-        ? `mp_pix:${opts.paymentId}`
-        : `mp_pix:unknown`,
+    paymentReference,
     exp.toISOString()
   );
+  if (opts.paymentId || opts.preapprovalId) {
+    await createFiscalDocumentForPayment(
+      db,
+      opts.empresaId,
+      paymentReference,
+      Number(planoAmountReais(plano as any) || 0)
+    );
+  }
 
   await db.run(
     `UPDATE empresas SET payment_gateway = 'mercadopago', billing_cycle = ? WHERE id = ?`,
@@ -220,6 +254,9 @@ export function mountPixRoutes(app: Express) {
       }
 
       const empresaId = req.body?.empresa_id ? String(req.body.empresa_id) : null;
+      if (empresaId && !empresaInformadaPertenceAoToken(req, empresaId)) {
+        return res.status(403).json({ error: 'empresa_id não pertence à sessão autenticada.' });
+      }
       if (empresaId) {
         const emp = await getDb().get(`SELECT id FROM empresas WHERE id = ?`, [empresaId]);
         if (!emp) return res.status(404).json({ error: 'Empresa não encontrada.' });
@@ -290,6 +327,9 @@ export function mountPixRoutes(app: Express) {
       if (!resolvePlano(plano)) return res.status(400).json({ error: 'Plano inválido.' });
 
       const empresaId = req.body?.empresa_id ? String(req.body.empresa_id) : null;
+      if (empresaId && !empresaInformadaPertenceAoToken(req, empresaId)) {
+        return res.status(403).json({ error: 'empresa_id não pertence à sessão autenticada.' });
+      }
       if (empresaId) {
         const emp = await getDb().get(`SELECT id FROM empresas WHERE id = ?`, [empresaId]);
         if (!emp) return res.status(404).json({ error: 'Empresa não encontrada.' });
@@ -358,6 +398,9 @@ export function mountPixRoutes(app: Express) {
       }
 
       const empresaId = req.body?.empresa_id ? String(req.body.empresa_id) : null;
+      if (empresaId && !empresaInformadaPertenceAoToken(req, empresaId)) {
+        return res.status(403).json({ error: 'empresa_id não pertence à sessão autenticada.' });
+      }
       try {
         const created = await createPixAgendado({
           planoKey: plano,
@@ -420,6 +463,9 @@ export function mountPixRoutes(app: Express) {
       }
 
       const empresaId = req.body?.empresa_id ? String(req.body.empresa_id) : null;
+      if (empresaId && !empresaInformadaPertenceAoToken(req, empresaId)) {
+        return res.status(403).json({ error: 'empresa_id não pertence à sessão autenticada.' });
+      }
       try {
         const created = await createPixRecorrente({
           planoKey: plano,
@@ -516,8 +562,6 @@ export function mountPixRoutes(app: Express) {
         status,
         status_detail: remote.status_detail,
         amount: remote.transaction_amount,
-        empresa_id: empresaId,
-        plano: planoKey,
         qr_code: poi.qr_code || null,
         copia_e_cola: poi.qr_code || null,
         approved: status === 'approved',
@@ -538,7 +582,14 @@ export function mountPixRoutes(app: Express) {
       const xSig = (req.headers['x-signature'] as string) || '';
       const xReq = (req.headers['x-request-id'] as string) || '';
 
-      if (process.env.MP_WEBHOOK_SECRET?.trim() && xSig) {
+      const webhookSecret = process.env.MP_WEBHOOK_SECRET?.trim();
+      if (process.env.NODE_ENV === 'production' && !webhookSecret) {
+        return res.status(503).json({ error: 'Webhook Mercado Pago não configurado.' });
+      }
+      if (webhookSecret && !xSig) {
+        return res.status(401).json({ error: 'Assinatura ausente' });
+      }
+      if (webhookSecret && xSig) {
         const okSig = verifyMpWebhookSignature({
           xSignature: xSig,
           xRequestId: xReq,

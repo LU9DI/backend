@@ -18,6 +18,9 @@ import {
 import { resolvePlano } from '../stripeBilling.js';
 import { activatePlan, blockEmpresa } from '../services/billingService.js';
 import { enqueueRetry } from '../lib/retryQueue.js';
+import { empresaInformadaPertenceAoToken } from '../lib/auth.js';
+import { createFiscalDocumentForPayment } from '../lib/fiscal.js';
+import { claimPaymentCaptureOnce, completePaymentCapture, releasePaymentCapture } from '../lib/paymentEvents.js';
 
 async function ensurePaypalTables(db: Database) {
   await db.exec(`
@@ -63,6 +66,7 @@ async function activateFromPayment(
     planoKey: string | null;
     captureId?: string | null;
     orderId?: string | null;
+    amount?: string | number | null;
   }
 ) {
   const plano = resolvePlano(opts.planoKey || 'pro');
@@ -70,14 +74,23 @@ async function activateFromPayment(
   const exp = new Date();
   exp.setDate(exp.getDate() + days);
 
+  const paymentReference = `paypal:${opts.captureId || opts.orderId || 'unknown'}`;
   await activatePlan(
     db,
     opts.empresaId,
     plano?.planDb || 'pro',
     null,
-    `paypal:${opts.captureId || opts.orderId || 'unknown'}`,
+    paymentReference,
     exp.toISOString()
   );
+  if (opts.captureId || opts.orderId) {
+    await createFiscalDocumentForPayment(
+      db,
+      opts.empresaId,
+      paymentReference,
+      Number((opts as any).amount || 0)
+    );
+  }
 
   await db.run(`UPDATE empresas SET payment_gateway = 'paypal', billing_cycle = ? WHERE id = ?`, [
     plano?.interval === 'year' ? 'year' : 'month',
@@ -110,6 +123,9 @@ export function mountPayPalRoutes(app: Express) {
       }
       const empresaId = req.body?.empresa_id ? String(req.body.empresa_id) : null;
       if (empresaId) {
+        if (!empresaInformadaPertenceAoToken(req, empresaId)) {
+          return res.status(403).json({ error: 'empresa_id não pertence à sessão autenticada.' });
+        }
         const emp = await getDb().get(`SELECT id FROM empresas WHERE id = ?`, [empresaId]);
         if (!emp) return res.status(404).json({ error: 'Empresa não encontrada.' });
       }
@@ -162,11 +178,13 @@ export function mountPayPalRoutes(app: Express) {
           });
         }
 
+        // O pedido PayPal é a fonte de verdade. Nunca permita que o cliente
+        // altere empresa/plano após o pagamento ter sido criado.
         const parsed = parseCustomId(cap.customId);
-        if (!empresaId) empresaId = parsed.empresaId;
-        if (!planoKey) planoKey = parsed.planoKey || parsePlanoFromInvoiceId(cap.invoiceId) || '';
+        empresaId = parsed.empresaId;
+        planoKey = parsed.planoKey || parsePlanoFromInvoiceId(cap.invoiceId) || '';
 
-        if (!empresaId) {
+        if (!empresaId || !planoKey) {
           return res.json({
             success: true,
             payment: cap,
@@ -174,19 +192,34 @@ export function mountPayPalRoutes(app: Express) {
           });
         }
 
-        const result = await activateFromPayment(db, {
-          empresaId,
-          planoKey: planoKey || 'pro',
-          captureId: cap.captureId,
-          orderId,
-        });
+        if (!cap.captureId) {
+          return res.status(502).json({ error: 'Pagamento concluído sem capture_id válido.', retry: true });
+        }
 
-        res.json({
-          success: true,
-          gateway: 'paypal',
-          payment: cap,
-          ...result,
-        });
+        const claimed = await claimPaymentCaptureOnce(db, 'paypal', String(cap.captureId));
+        if (!claimed) {
+          return res.json({ success: true, gateway: 'paypal', payment: cap, already_processed: true });
+        }
+
+        try {
+          const result = await activateFromPayment(db, {
+            empresaId,
+            planoKey: planoKey || 'pro',
+            captureId: cap.captureId,
+            orderId,
+            amount: cap.amount,
+          });
+          await completePaymentCapture(db, 'paypal', String(cap.captureId));
+          res.json({
+            success: true,
+            gateway: 'paypal',
+            payment: cap,
+            ...result,
+          });
+        } catch (e) {
+          await releasePaymentCapture(db, 'paypal', String(cap.captureId));
+          throw e;
+        }
       } catch (e: any) {
         await enqueueRetry({
           jobType: 'capture_paypal',
@@ -279,16 +312,31 @@ export function mountPayPalRoutes(app: Express) {
             return res.json({ ok: true, action: 'no_empresa' });
           }
 
-          const result = await activateFromPayment(db, {
-            empresaId,
-            planoKey,
-            captureId,
-            orderId: orderId ? String(orderId) : null,
-          });
+          if (!captureId) {
+            return res.status(200).json({ ok: false, error: 'PAYMENT.CAPTURE.COMPLETED sem capture_id.', retry: true });
+          }
 
-          await markProcessed(db, eventId, eventType, 'activate', `${empresaId} ${result.plan}`);
-          console.log(`[paypal webhook] ativado empresa=${empresaId} plan=${result.plan}`);
-          return res.json({ ok: true, action: 'activate', ...result });
+          const claimed = await claimPaymentCaptureOnce(db, 'paypal', String(captureId));
+          if (!claimed) {
+            await markProcessed(db, eventId, eventType, 'duplicate_capture', empresaId + ' ' + captureId);
+            return res.json({ ok: true, action: 'duplicate_capture' });
+          }
+
+          try {
+            const result = await activateFromPayment(db, {
+              empresaId,
+              planoKey,
+              captureId,
+              orderId: orderId ? String(orderId) : null,
+            });
+            await completePaymentCapture(db, 'paypal', String(captureId));
+            await markProcessed(db, eventId, eventType, 'activate', empresaId + ' ' + result.plan);
+            console.log(`[paypal webhook] ativado empresa=${empresaId} plan=${result.plan}`);
+            return res.json({ ok: true, action: 'activate', ...result });
+          } catch (e) {
+            await releasePaymentCapture(db, 'paypal', String(captureId));
+            throw e;
+          }
         }
 
         if (
@@ -303,12 +351,27 @@ export function mountPayPalRoutes(app: Express) {
               const planoKey =
                 parsed.planoKey || parsePlanoFromInvoiceId(cap.invoiceId) || null;
               if (parsed.empresaId) {
-                const result = await activateFromPayment(db, {
-                  empresaId: parsed.empresaId,
-                  planoKey,
-                  captureId: cap.captureId,
-                  orderId: String(orderId),
-                });
+                if (!cap.captureId) throw new Error('Auto-capture concluído sem capture_id válido.');
+
+                const claimed = await claimPaymentCaptureOnce(db, 'paypal', String(cap.captureId));
+                if (!claimed) {
+                  await markProcessed(db, eventId, eventType, 'duplicate_capture', parsed.empresaId + ' ' + cap.captureId);
+                  return res.json({ ok: true, action: 'duplicate_capture' });
+                }
+
+                let result;
+                try {
+                  result = await activateFromPayment(db, {
+                    empresaId: parsed.empresaId,
+                    planoKey,
+                    captureId: cap.captureId,
+                    orderId: String(orderId),
+                  });
+                  await completePaymentCapture(db, 'paypal', String(cap.captureId));
+                } catch (e) {
+                  await releasePaymentCapture(db, 'paypal', String(cap.captureId));
+                  throw e;
+                }
                 await markProcessed(
                   db,
                   eventId,

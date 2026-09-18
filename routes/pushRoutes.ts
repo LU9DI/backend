@@ -1,7 +1,7 @@
 import type { Express, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { getDb } from '../lib/db.js';
-import { autenticarToken, type AuthRequest } from '../lib/auth.js';
+import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import {
   ensurePushSchema,
@@ -67,7 +67,10 @@ export function mountPushRoutes(app: Express) {
       if (!endpoint) return res.status(400).json({ error: 'endpoint obrigatório.' });
       const db = getDb();
       await ensurePushSchema(db);
-      await removeSubscription(db, endpoint);
+      await removeSubscription(db, endpoint, {
+        userId: req.user?.id,
+        empresaId: isAdminUser(req.user) ? null : req.user?.empresa_id,
+      });
       res.json({ success: true });
     })
   );
