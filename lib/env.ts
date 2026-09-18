@@ -36,6 +36,10 @@ export function validateEnv(): EnvReport {
     }
   }
 
+  if (isProd && !String(process.env.ADMIN_PASSWORD || '').trim()) {
+    errors.push('ADMIN_PASSWORD é obrigatório em produção para criar o primeiro admin.');
+  }
+
   if (isProd) {
     const cors =
       (process.env.CORS_ORIGINS || '').trim() ||
