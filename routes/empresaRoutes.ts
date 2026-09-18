@@ -47,6 +47,21 @@ function nivelDashboard(plan: string): 'basico' | 'pro' | 'ultra' | 'executivo' 
   return 'basico';
 }
 
+function normalizeReviewDate(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) return date.toISOString();
+  }
+  const text = String(value ?? '').trim();
+  if (text) {
+    const date = new Date(text);
+    if (!Number.isNaN(date.getTime())) return date.toISOString();
+    return text;
+  }
+  return new Date().toISOString();
+}
+
 function serieUltimosDias(
   reviews: { rating: number; createdAt: string }[],
   dias = 14
@@ -356,6 +371,21 @@ export function mountEmpresaRoutes(app: Express) {
         }
 
         const rows = await loadReviewsSafe(db, empresa.id);
+        let recentRows: any[] = [];
+        try {
+          const since14d = new Date(Date.now() - 13 * 24 * 60 * 60 * 1000).toISOString();
+          recentRows = await db.all(
+            `SELECT rating, "createdAt", is_test
+             FROM reviews
+             WHERE empresa_id = ? AND "createdAt" >= ?
+             ORDER BY "createdAt" ASC
+             LIMIT 10000`,
+            [empresa.id, since14d]
+          );
+        } catch (e: any) {
+          console.warn('[painel] reviews 14d:', e?.message || e);
+          recentRows = [];
+        }
 
         const reviews = (rows || []).map((r: any) => {
           let tags: string[] = [];
@@ -367,9 +397,9 @@ export function mountEmpresaRoutes(app: Express) {
               tags = [];
             }
           }
-          const createdAt = String(
-            r.createdAt || r.createdat || r.created_at || ''
-          ) || new Date().toISOString();
+          const createdAt = normalizeReviewDate(
+            r.createdAt ?? r.createdat ?? r.created_at
+          );
           const clientWpp =
             r.client_whatsapp === '[anonimizado]'
               ? null
@@ -506,7 +536,15 @@ export function mountEmpresaRoutes(app: Express) {
             distribuicao: dist,
             top_tags: tem_ia ? top_tags : [],
             taxa_positiva: total ? Math.round((positivas / total) * 100) : 0,
-            serie_14d: serieUltimosDias(reais, 14),
+            serie_14d: serieUltimosDias(
+              recentRows
+                .filter((r: any) => Number(r.is_test) !== 1)
+                .map((r: any) => ({
+                  rating: Number(r.rating) || 0,
+                  createdAt: normalizeReviewDate(r.createdAt ?? r.createdat ?? r.created_at),
+                })),
+              14
+            ),
             testes_excluidos: reviews.filter((r) => r.is_test).length,
             sentimento_mix,
             sentimento_score_medio:
