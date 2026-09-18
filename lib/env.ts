@@ -1,6 +1,6 @@
 /**
  * Validação de variáveis de ambiente na subida.
- * Em produção: JWT forte + DATABASE_URL Postgres (exceto SQLITE_ALLOW_PROD=1).
+ * Em produção: JWT forte + DATABASE_URL Postgres + ADMIN_PASSWORD.
  */
 
 export type EnvReport = {
@@ -34,6 +34,10 @@ export function validateEnv(): EnvReport {
     } else if (!/^postgres(ql)?:\/\//i.test(dbUrl)) {
       errors.push('DATABASE_URL deve ser uma URL postgres:// ou postgresql://.');
     }
+  }
+
+  if (isProd && !String(process.env.ADMIN_PASSWORD || '').trim()) {
+    errors.push('ADMIN_PASSWORD é obrigatório em produção para criar o primeiro admin.');
   }
 
   if (isProd) {
