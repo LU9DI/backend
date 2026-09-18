@@ -100,6 +100,7 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
     async (req: Request, res: Response) => {
       const db = getDb();
       let eventType = 'unknown';
+      let stripeEventId = '';
       try {
         const sig = req.headers['stripe-signature'] as string | undefined;
         const raw = req.body as Buffer;
@@ -110,7 +111,7 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
         const type = String(event.type || '');
         eventType = type;
         const eventId = String(event.id || '').trim();
-        (req as any).__stripeEventId = eventId;
+        stripeEventId = eventId;
         const claim = await claimWebhookEvent({
           source: 'stripe',
           eventId,
@@ -234,8 +235,7 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
       } catch (e: any) {
         if (eventType !== 'unknown') {
           try {
-            const eventId = String((req as any).__stripeEventId || '');
-            if (eventId) await releaseWebhookEvent('stripe', eventId, db);
+            if (stripeEventId) await releaseWebhookEvent('stripe', stripeEventId, db);
           } catch {
             /* */
           }
