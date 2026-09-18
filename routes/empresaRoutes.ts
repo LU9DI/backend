@@ -52,7 +52,19 @@ function nivelDashboard(plan: string): 'basico' | 'pro' | 'ultra' | 'executivo' 
 }
 
 function rowCreatedAt(r: any): string {
-  return String(r.createdAt || r.createdat || r.created_at || '') || new Date().toISOString();
+  const value = r.createdAt ?? r.createdat ?? r.created_at ?? '';
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) return date.toISOString();
+  }
+  const text = String(value || '').trim();
+  if (text) {
+    const date = new Date(text);
+    if (!Number.isNaN(date.getTime())) return date.toISOString();
+    return text;
+  }
+  return new Date().toISOString();
 }
 
 function serieUltimosDias(
