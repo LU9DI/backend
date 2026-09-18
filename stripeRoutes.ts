@@ -8,6 +8,7 @@ import { activatePlan, markCancelAtPeriodEnd, blockEmpresa, empresaTemAcesso, en
 import { logWebhookEvent } from './lib/opsLog.js';
 import { claimWebhookEvent, releaseWebhookEvent, updateWebhookAction } from './lib/webhookIdempotency.js';
 import { autenticarToken, isAdminUser, empresaInformadaPertenceAoToken, type AuthRequest } from './lib/auth.js';
+import { createFiscalDocumentForPayment } from './lib/fiscal.js';
 async function ensureStripeColumns(db:Database){try{const cols=(await db.all(`PRAGMA table_info(empresas)`)).map((c:any)=>c.name);if(!cols.includes('stripe_customer_id'))await db.exec(`ALTER TABLE empresas ADD COLUMN stripe_customer_id TEXT`);if(!cols.includes('stripe_subscription_id'))await db.exec(`ALTER TABLE empresas ADD COLUMN stripe_subscription_id TEXT`);if(!cols.includes('cancel_at_period_end'))await db.exec(`ALTER TABLE empresas ADD COLUMN cancel_at_period_end INTEGER DEFAULT 0`);}catch{for(const ddl of [`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT`,`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT`,`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS cancel_at_period_end INTEGER DEFAULT 0`]){try{await db.exec(ddl);}catch{}}}}
 function fromUnix(sec:unknown):string|null{const n=Number(sec);return Number.isFinite(n)&&n>0?new Date(n*1000).toISOString():null;}
 function periodEndFromStripe(obj:any):string|null{return fromUnix(obj?.current_period_end)||fromUnix(obj?.items?.data?.[0]?.current_period_end)||null;}
@@ -92,6 +93,10 @@ app.post(
               subscriptionId,
               periodEnd
             );
+            if (type === 'invoice.paid' || type === 'checkout.session.completed') {
+              const rawAmount = Number(obj.amount_paid ?? obj.amount_total ?? 0);
+              await createFiscalDocumentForPayment(db, empresaId, eventId, rawAmount / 100);
+            }
             return done('activate');
           }
         }
