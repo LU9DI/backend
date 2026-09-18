@@ -21,6 +21,12 @@ const MAX_PER_DAY = 12;
 const COMPLAINT_WINDOW_DAYS = Number(process.env.COMPLAINT_ONCE_DAYS || 30);
 const DUPLICATE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/** Modo temporário de testes: permite múltiplos feedbacks do mesmo usuário/IP. */
+export function reviewLimitsDisabled(): boolean {
+  const value = String(process.env.REVIEW_LIMITS_DISABLED || '').trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'on';
+}
+
 export class ReviewFraudError extends Error {
   status = 429;
   constructor(message: string, status = 429) {
@@ -53,6 +59,7 @@ function prune(ts: number[], windowMs: number, now: number) {
 
 /** Rate limit em memória (rápido) */
 export function checkMemoryRate(ip: string, empresaId: string): void {
+  if (reviewLimitsDisabled()) return;
   const key = `${ip}|${empresaId}`;
   const now = Date.now();
   let list = recentHits.get(key) || [];
@@ -98,6 +105,7 @@ export async function checkDuplicateComment(
   empresaId: string,
   comment: string
 ): Promise<void> {
+  if (reviewLimitsDisabled()) return;
   const n = normalizeComment(comment);
   if (n.length < 12) return;
 
@@ -123,6 +131,7 @@ export async function checkDbRateByIp(
   empresaId: string,
   ipHash: string
 ): Promise<void> {
+  if (reviewLimitsDisabled()) return;
   const sinceHour = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   const sinceDay = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
