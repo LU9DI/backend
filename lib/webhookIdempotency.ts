@@ -70,6 +70,22 @@ export async function claimWebhookEvent(
   }
 }
 
+export async function releaseWebhookEvent(
+  source: string,
+  eventId: string,
+  db: Database = getDb()
+) {
+  if (!eventId) return;
+  try {
+    await db.run(
+      `DELETE FROM webhook_dedupe WHERE source = ? AND event_id = ?`,
+      [String(source).slice(0, 40), String(eventId).trim().slice(0, 120)]
+    );
+  } catch {
+    /* ok */
+  }
+}
+
 export async function updateWebhookAction(
   source: string,
   eventId: string,
