@@ -125,6 +125,83 @@ export async function markWebhookResult(
   }
 }
 
+/**
+ * Idempotência de captura/pagamento.
+ *
+ * A mesma captura pode chegar pelo endpoint de capture e pelo webhook.
+ * "completed" bloqueia definitivamente a reutilização; uma marca
+ * "processing" abandonada há mais de 5 minutos pode ser retomada.
+ */
+export async function claimPaymentCaptureOnce(
+  db: Database,
+  source: string,
+  captureId: string
+): Promise<boolean> {
+  await ensurePaymentTables(db);
+  const key = `${source}:capture:${captureId}`.slice(0, 200);
+  const now = new Date();
+  const stale = new Date(now.getTime() - 5 * 60 * 1000).toISOString();
+
+  try {
+    await db.run(
+      `INSERT INTO webhook_processed (idempotency_key, source, processed_at, result)
+       VALUES (?, ?, ?, ?)`,
+      [key, source, now.toISOString(), 'processing']
+    );
+    return true;
+  } catch {
+    const row = await db.get(
+      `SELECT result, processed_at FROM webhook_processed WHERE idempotency_key = ?`,
+      [key]
+    );
+    if (row?.result === 'completed') return false;
+    if (row?.result === 'processing' && String(row.processed_at || '') < stale) {
+      const result = await db.run(
+        `UPDATE webhook_processed
+         SET processed_at = ?, result = 'processing'
+         WHERE idempotency_key = ? AND result = 'processing' AND processed_at < ?`,
+        [now.toISOString(), key, stale]
+      );
+      return Number(result?.changes || 0) === 1;
+    }
+    return false;
+  }
+}
+
+export async function completePaymentCapture(
+  db: Database,
+  source: string,
+  captureId: string,
+  result = 'completed'
+): Promise<void> {
+  const key = `${source}:capture:${captureId}`.slice(0, 200);
+  try {
+    await db.run(
+      `UPDATE webhook_processed SET processed_at = ?, result = ?
+       WHERE idempotency_key = ?`,
+      [new Date().toISOString(), String(result).slice(0, 200), key]
+    );
+  } catch {
+    /* ok */
+  }
+}
+
+export async function releasePaymentCapture(
+  db: Database,
+  source: string,
+  captureId: string
+): Promise<void> {
+  const key = `${source}:capture:${captureId}`.slice(0, 200);
+  try {
+    await db.run(
+      `DELETE FROM webhook_processed
+       WHERE idempotency_key = ? AND result = 'processing'`,
+      [key]
+    );
+  } catch {
+    /* ok */
+  }
+}
 export async function recentPaymentEvents(db: Database, limit = 40) {
   await ensurePaymentTables(db);
   return db.all(
