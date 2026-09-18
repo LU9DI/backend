@@ -52,7 +52,10 @@ export async function qualifyLead(input: LeadInput): Promise<LeadQualification |
     const parsed = safeJson(result.text);
     if (!parsed) return null;
 
-    const score = Math.max(0, Math.min(100, Math.round(Number(parsed.score))));
+    const rawScore = Number(parsed.score);
+    const score = Number.isFinite(rawScore)
+      ? Math.max(0, Math.min(100, Math.round(rawScore)))
+      : 0;
     const qualification =
       parsed.qualification === 'alta' || parsed.qualification === 'media' || parsed.qualification === 'baixa'
         ? parsed.qualification
