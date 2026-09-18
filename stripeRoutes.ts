@@ -330,6 +330,16 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
       const db = getDb();
       const emp = await db.get('SELECT * FROM empresas WHERE id = ?', [empresaId]);
       if (!emp) return res.status(404).json({ error: 'Empresa não encontrada.' });
+
+      // O portal Stripe dá acesso a dados de cobrança da empresa.
+      // Exigir autenticação e impedir acesso cruzado entre empresas.
+      const auth = req as any;
+      const actor = auth.user;
+      const isAdmin = actor?.empresa_id === 'admin' || actor?.role === 'admin';
+      if (!actor || (!isAdmin && String(actor.empresa_id || '') !== empresaId)) {
+        return res.status(403).json({ error: 'Acesso negado.' });
+      }
+
       if (!emp.stripe_customer_id) {
         return res.status(400).json({
           error: 'Esta empresa ainda não possui assinatura Stripe. Conclua um checkout primeiro.',
