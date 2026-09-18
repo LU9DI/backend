@@ -23,6 +23,7 @@ import {
 import { resolvePlano } from '../stripeBilling.js';
 import { activatePlan, blockEmpresa } from '../services/billingService.js';
 import { logWebhookEvent } from '../lib/opsLog.js';
+import { claimPaymentCaptureOnce, completePaymentCapture, releasePaymentCapture } from '../lib/paymentEvents.js';
 import { empresaInformadaPertenceAoToken } from '../lib/auth.js';
 
 async function ensurePixTables(db: Database) {
@@ -131,7 +132,29 @@ async function activateFromPix(
     preapprovalId?: string | null;
   }
 ) {
-  const plano = resolvePlano(opts.planoKey || 'pro');
+  if (!opts.paymentId) return activateFromPixInternal(db, opts);
+  const claimed = await claimPaymentCaptureOnce(db, 'mercadopago', String(opts.paymentId));
+  if (!claimed) return { plan: resolvePlano(opts.planoKey || 'pro')?.planDb, duplicate: true };
+  try {
+    const result = await activateFromPixInternal(db, opts);
+    await completePaymentCapture(db, 'mercadopago', String(opts.paymentId));
+    return result;
+  } catch (error) {
+    await releasePaymentCapture(db, 'mercadopago', String(opts.paymentId));
+    throw error;
+  }
+}
+
+async function activateFromPixInternal(
+  db: Database,
+  opts: {
+    empresaId: string;
+    planoKey: string | null;
+    paymentId?: string | null;
+    preapprovalId?: string | null;
+  }
+) {
+
   const days = plano?.interval === 'year' ? 365 : 30;
   const exp = new Date();
   exp.setDate(exp.getDate() + days);
