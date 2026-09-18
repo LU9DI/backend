@@ -23,6 +23,7 @@ import {
 import { resolvePlano } from '../stripeBilling.js';
 import { activatePlan, blockEmpresa } from '../services/billingService.js';
 import { logWebhookEvent } from '../lib/opsLog.js';
+import { claimPaymentCaptureOnce, completePaymentCapture, releasePaymentCapture } from '../lib/paymentEvents.js';
 
 async function ensurePixTables(db: Database) {
   await db.exec(`
@@ -130,14 +131,19 @@ async function activateFromPix(
     preapprovalId?: string | null;
   }
 ) {
+  const paymentKey = opts.paymentId ? String(opts.paymentId).trim() : '';
+  const claimed = paymentKey ? await claimPaymentCaptureOnce(db, 'mercadopago', paymentKey) : true;
+  if (!claimed) return { plan: resolvePlano(opts.planoKey || 'pro')?.planDb, duplicate: true };
+
   const plano = resolvePlano(opts.planoKey || 'pro');
   const days = plano?.interval === 'year' ? 365 : 30;
   const exp = new Date();
   exp.setDate(exp.getDate() + days);
 
-  await activatePlan(
-    db,
-    opts.empresaId,
+  try {
+    await activatePlan(
+      db,
+      opts.empresaId,
     plano?.planDb || 'pro',
     null,
     opts.preapprovalId
@@ -145,21 +151,26 @@ async function activateFromPix(
       : opts.paymentId
         ? `mp_pix:${opts.paymentId}`
         : `mp_pix:unknown`,
-    exp.toISOString()
-  );
+      exp.toISOString()
+    );
 
-  await db.run(
-    `UPDATE empresas SET payment_gateway = 'mercadopago', billing_cycle = ? WHERE id = ?`,
+    await db.run(
+      `UPDATE empresas SET payment_gateway = 'mercadopago', billing_cycle = ? WHERE id = ?`,
     [plano?.interval === 'year' ? 'year' : 'month', opts.empresaId]
   );
-  if (opts.preapprovalId) {
-    await db.run(`UPDATE empresas SET mp_preapproval_id = ? WHERE id = ?`, [
-      opts.preapprovalId,
-      opts.empresaId,
-    ]);
-  }
+    if (opts.preapprovalId) {
+      await db.run(`UPDATE empresas SET mp_preapproval_id = ? WHERE id = ?`, [
+        opts.preapprovalId,
+        opts.empresaId,
+      ]);
+    }
 
-  return { plan: plano?.planDb, expira_em: exp.toISOString() };
+    if (paymentKey) await completePaymentCapture(db, 'mercadopago', paymentKey);
+    return { plan: plano?.planDb, expira_em: exp.toISOString(), duplicate: false };
+  } catch (e) {
+    if (paymentKey) await releasePaymentCapture(db, 'mercadopago', paymentKey);
+    throw e;
+  }
 }
 
 export function mountPixRoutes(app: Express) {
