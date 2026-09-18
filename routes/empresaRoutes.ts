@@ -1,6 +1,8 @@
 import type { Express, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
+import rateLimit from 'express-rate-limit';
 import { getDb, findEmpresa } from '../lib/db.js';
+import { normalizarWhatsapp, linkWhatsapp } from '../lib/whatsapp.js';
 import {
   normalizarWhatsapp,
   linkWhatsapp,
@@ -97,6 +99,14 @@ function serieUltimosDias(
     media: b.total ? Math.round((b.soma / b.total) * 10) / 10 : 0,
   }));
 }
+
+const whatsappPatchLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas alterações de WhatsApp. Aguarde.' },
+});
 
 function podeGerirEmpresa(req: AuthRequest, empresaId: string): boolean {
   if (isAdminUser(req.user)) return true;
@@ -344,6 +354,43 @@ export function mountEmpresaRoutes(app: Express) {
     })
   );
 
+  app.patch(
+    '/api/empresa/:ref/whatsapp',
+    whatsappPatchLimiter,
+    autenticarToken,
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+      const empresa = await findEmpresa(req.params.ref);
+      if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
+      if (!podeGerirEmpresa(req, empresa.id)) {
+        return res.status(403).json({ error: 'Sem permissão para alterar o WhatsApp desta empresa.' });
+      }
+
+      const raw = String(req.body?.whatsapp ?? req.body?.whatsapp_suporte ?? '').trim();
+      if (!raw) {
+        await getDb().run('UPDATE empresas SET whatsapp_suporte = NULL WHERE id = ?', [empresa.id]);
+        return res.json({ success: true, whatsapp: null, whatsapp_url: null });
+      }
+
+      const normalizado = normalizarWhatsapp(raw);
+      if (!normalizado) {
+        return res.status(400).json({
+          error: 'WhatsApp inválido. Use DDD + número (ex: 11999998888 ou +55 11 99999-8888).',
+        });
+      }
+
+      await getDb().run('UPDATE empresas SET whatsapp_suporte = ? WHERE id = ?', [
+        normalizado,
+        empresa.id,
+      ]);
+
+      return res.json({
+        success: true,
+        whatsapp: normalizado,
+        whatsapp_url: linkWhatsapp(normalizado),
+      });
+    })
+  );
+
   app.get(
     '/api/empresa/:ref/painel',
     autenticarToken,
@@ -532,6 +579,8 @@ export function mountEmpresaRoutes(app: Express) {
                   : String(empresa.status || '—').toUpperCase(),
             plan: empresa.plan,
             expira_em: empresa.expira_em,
+          whatsapp: normalizarWhatsapp(empresa.whatsapp_suporte),
+          whatsapp_url: linkWhatsapp(empresa.whatsapp_suporte),
             cancel_at_period_end: Number(empresa.cancel_at_period_end) === 1,
             google_review_url: empresa.google_review_url || null,
             whatsapp: wpp,
