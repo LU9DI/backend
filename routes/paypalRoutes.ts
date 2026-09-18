@@ -18,6 +18,7 @@ import {
 import { resolvePlano } from '../stripeBilling.js';
 import { activatePlan, blockEmpresa } from '../services/billingService.js';
 import { enqueueRetry } from '../lib/retryQueue.js';
+import { empresaInformadaPertenceAoToken } from '../lib/auth.js';
 
 async function ensurePaypalTables(db: Database) {
   await db.exec(`
@@ -110,6 +111,9 @@ export function mountPayPalRoutes(app: Express) {
       }
       const empresaId = req.body?.empresa_id ? String(req.body.empresa_id) : null;
       if (empresaId) {
+        if (!empresaInformadaPertenceAoToken(req, empresaId)) {
+          return res.status(403).json({ error: 'empresa_id não pertence à sessão autenticada.' });
+        }
         const emp = await getDb().get(`SELECT id FROM empresas WHERE id = ?`, [empresaId]);
         if (!emp) return res.status(404).json({ error: 'Empresa não encontrada.' });
       }
