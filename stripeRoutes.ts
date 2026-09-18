@@ -33,6 +33,9 @@ app.post(
         const type = String(event.type || '');
         eventType = type;
         const eventId = String(event.id || '').trim();
+        if (!eventId) {
+          throw new Error('Evento Stripe sem id');
+        }
         stripeEventId = eventId;
         const claim = await claimWebhookEvent({
           source: 'stripe',
@@ -118,70 +121,3 @@ app.post(
               empresaId,
               resolved?.planDb || planDb || 'pro',
               customerId,
-              subscriptionId,
-              periodEnd
-            );
-            return done('activate');
-          }
-        }
-
-        if (type === 'customer.subscription.deleted') {
-          let { empresaId, customerId } = extractFromStripeObject(obj);
-          empresaId = await resolveEmpresaId(db, empresaId, customerId);
-          const periodEnd = periodEndFromStripe(obj);
-          if (empresaId) {
-            if (periodEnd && new Date(periodEnd).getTime() > Date.now()) {
-              await markCancelAtPeriodEnd(db, empresaId, periodEnd);
-              return done('grace_until_period_end');
-            }
-            const emp = await db.get('SELECT expira_em FROM empresas WHERE id = ?', [empresaId]);
-            if (emp?.expira_em && new Date(emp.expira_em).getTime() > Date.now()) {
-              await markCancelAtPeriodEnd(db, empresaId, emp.expira_em);
-              return done('grace_db_expira_em');
-            }
-            await blockEmpresa(db, empresaId);
-            return done('block_period_ended');
-          }
-        }
-
-        if (type === 'charge.refunded') {
-          let { empresaId, customerId } = extractFromStripeObject(obj);
-          empresaId = await resolveEmpresaId(db, empresaId, customerId);
-          if (empresaId) {
-            await blockEmpresa(db, empresaId);
-            return done('block_refund');
-          }
-        }
-
-        return done('ignore', 'ignored');
-      } catch (e: any) {
-        if (eventType !== 'unknown') {
-          try {
-            if (stripeEventId) await releaseWebhookEvent('stripe', stripeEventId, db);
-          } catch {
-            /* */
-          }
-        }
-        console.error('Stripe webhook:', e.message || e);
-        try {
-          await logWebhookEvent(db, {
-            source: 'stripe',
-            event_type: eventType,
-            status: 'error',
-            detail: e?.message || 'Webhook error',
-          });
-        } catch {
-          /* */
-        }
-        res.status(400).json({ error: e.message || 'Webhook error' });
-      }
-    }
-  );
-
-  app.get('/api/planos',(_req,res)=>res.json({stripe:stripeConfigured(),planos:listPlanosPublicos(),politica_cancelamento:'A assinatura mensal poderá ser cancelada a qualquer momento. Em caso de cancelamento antes do término do ciclo, o acesso permanece ativo até o último dia do período já pago — sem cobrança adicional no mês seguinte.'}));
-app.get('/api/empresa/:ref/assinatura',autenticarToken,async(req:AuthRequest,res:Response)=>{try{const db=getDb();await ensureStripeColumns(db);await enforcarExpiracoes(db);let empresa=await db.get('SELECT * FROM empresas WHERE id=?',[req.params.ref]);if(!empresa)empresa=await db.get('SELECT * FROM empresas WHERE slug=?',[req.params.ref]);if(!empresa)return res.status(404).json({error:'Empresa não encontrada.'});if(!isAdminUser(req.user)&&req.user?.empresa_id!==empresa.id)return res.status(403).json({error:'Sem permissão.'});const temAcesso=empresaTemAcesso(empresa);const cancelado=Number(empresa.cancel_at_period_end)===1;const msg=mensagemAcesso(empresa);res.json({status:empresa.status,plan:empresa.plan,expira_em:empresa.expira_em,expira_em_formatado:formatarDataBR(empresa.expira_em),cancel_at_period_end:cancelado,tem_acesso:temAcesso,mensagem:msg,aviso_cancelamento:cancelado?`Você solicitou o cancelamento. O uso permanece liberado até ${formatarDataBR(empresa.expira_em)||'o fim do período já pago'}. O bloqueio será automático após essa data.`:null});}catch(e:any){console.error('assinatura:',e.message||e);res.status(500).json({error:'Erro interno do servidor.'});}});
-app.post('/api/checkout',validateBody(schemaCheckout),async(req:Request,res:Response)=>{try{if(!stripeConfigured())return res.status(503).json({error:'Pagamentos não configurados (STRIPE_SECRET_KEY).'});const plano=String(req.body.plano);const empresaId=req.body.empresa_id?String(req.body.empresa_id):null;const db=getDb();await ensureStripeColumns(db);let nomeEmpresa:string|null=null;if(empresaId){if(!empresaInformadaPertenceAoToken(req,empresaId))return res.status(403).json({error:'empresa_id não pertence à sessão autenticada.'});const emp=await db.get('SELECT * FROM empresas WHERE id=?',[empresaId]);if(!emp)return res.status(404).json({error:'Empresa não encontrada.'});nomeEmpresa=emp.nome_empresa;}
-const session=await criarCheckoutSession({planoKey:plano,empresaId,email:req.body.email?String(req.body.email):null,nomeEmpresa});res.json({success:true,checkout_url:session.checkoutUrl,session_id:session.sessionId,plano:session.label,value:session.value});}catch(e:any){console.error('Checkout:',e.message||e);res.status(500).json({error:e.message||'Erro no checkout'});}});
-app.post('/api/billing-portal',autenticarToken,async(req:AuthRequest,res:Response)=>{try{if(!stripeConfigured())return res.status(503).json({error:'Pagamentos não configurados.'});const empresaId=String(req.body.empresa_id||req.user?.empresa_id||'').trim();if(!empresaId)return res.status(400).json({error:'empresa_id obrigatório.'});if(!isAdminUser(req.user)&&req.user?.empresa_id!==empresaId)return res.status(403).json({error:'Sem permissão.'});const db=getDb();const emp=await db.get('SELECT * FROM empresas WHERE id=?',[empresaId]);if(!emp)return res.status(404).json({error:'Empresa não encontrada.'});if(!emp.stripe_customer_id)return res.status(400).json({error:'Esta empresa ainda não possui assinatura Stripe. Conclua um checkout primeiro.'});const portal=await criarPortalSession(emp.stripe_customer_id);res.json({success:true,url:portal.url});}catch(e:any){console.error('Portal:',e.message||e);res.status(500).json({error:e.message||'Erro no portal'});}});
-const timer=setInterval(()=>{try{enforcarExpiracoes(getDb()).catch(()=>{});}catch{}},60*60*1000);if(typeof timer==='object'&&timer&&'unref'in timer)(timer as NodeJS.Timeout).unref();
-}
