@@ -9,7 +9,7 @@ import {
   syncFiscalDocument,
 } from '../lib/fiscal.js';
 import { autenticarToken, empresaInformadaPertenceAoToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
-import { findEmpresa } from '../lib/empresa.js';
+import { findEmpresa } from '../lib/db.js';
 
 function canManage(req: AuthRequest, empresaId: string): boolean {
   return isAdminUser(req.user) || empresaInformadaPertenceAoToken(req, empresaId);
