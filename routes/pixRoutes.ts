@@ -560,7 +560,12 @@ export function mountPixRoutes(app: Express) {
       const xSig = (req.headers['x-signature'] as string) || '';
       const xReq = (req.headers['x-request-id'] as string) || '';
 
-      if (process.env.MP_WEBHOOK_SECRET?.trim() && xSig) {
+      const mpWebhookSecret = process.env.MP_WEBHOOK_SECRET?.trim() || '';
+      if (process.env.NODE_ENV === 'production' && !mpWebhookSecret) {
+        return res.status(503).json({ error: 'MP_WEBHOOK_SECRET obrigatório em produção.' });
+      }
+      if (mpWebhookSecret) {
+        if (!xSig) return res.status(401).json({ error: 'Assinatura ausente.' });
         const okSig = verifyMpWebhookSignature({
           xSignature: xSig,
           xRequestId: xReq,
