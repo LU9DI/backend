@@ -197,8 +197,11 @@ export function mountMfaRoutes(
     try {
       const db = getDb();
       await ensureMfaColumns(db);
-      const usuario = await db.get('SELECT mfa_enabled FROM usuarios WHERE id = ?', [req.user?.id]);
-      return res.json({ enabled: !!(usuario && usuario.mfa_enabled) });
+      const usuario = await db.get('SELECT * FROM usuarios WHERE id = ?', [req.user?.id]);
+      if (!usuario || !isAdminUser(usuario)) {
+        return res.status(403).json({ error: 'Acesso negado.' });
+      }
+      return res.json({ enabled: !!usuario.mfa_enabled });
     } catch {
       return res.status(500).json({ error: 'Erro interno.' });
     }
