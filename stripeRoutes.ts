@@ -23,6 +23,7 @@ import {
 } from './services/billingService.js';
 import { logWebhookEvent } from './lib/opsLog.js';
 import { claimWebhookEvent, releaseWebhookEvent, updateWebhookAction } from './lib/webhookIdempotency.js';
+import { autenticarToken, empresaInformadaPertenceAoToken, type AuthRequest } from './lib/auth.js';
 
 async function ensureStripeColumns(db: Database) {
   const cols = (await db.all(`PRAGMA table_info(empresas)`)).map((c: any) => c.name);
@@ -312,6 +313,10 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
       const db = getDb();
       await ensureStripeColumns(db);
 
+      if (empresaId && !empresaInformadaPertenceAoToken(req, empresaId)) {
+        return res.status(403).json({ error: 'empresa_id não pertence à sessão autenticada.' });
+      }
+
       let nomeEmpresa: string | null = null;
       if (empresaId) {
         const emp = await db.get('SELECT * FROM empresas WHERE id = ?', [empresaId]);
@@ -339,7 +344,7 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
     }
   });
 
-  app.post('/api/billing-portal', async (req: Request, res: Response) => {
+  app.post('/api/billing-portal', autenticarToken, async (req: AuthRequest, res: Response) => {
     try {
       if (!stripeConfigured()) {
         return res.status(503).json({ error: 'Pagamentos não configurados.' });
