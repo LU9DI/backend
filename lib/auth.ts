@@ -84,7 +84,7 @@ export function empresaInformadaPertenceAoToken(req: Request, empresaId: string)
   if (!token) return false;
   try {
     const payload = verifyAccessToken(token);
-    return isAdminPayload(payload) || String(payload.empresa_id || '') === String(empresaId);
+    return payload.empresa_id === 'admin' || payload.role === 'admin' || String(payload.empresa_id || '') === String(empresaId);
   } catch {
     return false;
   }
