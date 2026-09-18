@@ -189,22 +189,6 @@ export function mountRelatorioRoutes(app: Express) {
 
   app.get('/api/empresa/:ref/relatorio-inteligente.pdf', autenticarToken, serveCyclePdf);
 
-  app.get('/api/empresa/:ref/relatorio.pdf', autenticarToken, asyncHandler(async (req: AuthRequest, res: Response) => {
-    const empresa = await findEmpresa(req.params.ref);
-    if (!empresa) return res.status(404).json({ error: 'Empresa não encontrada.' });
-    if (!podeAcessarEmpresa(req, empresa.id)) return res.status(403).json({ error: 'Sem permissão.' });
-    if (!empresaTemPdf(empresa)) return res.status(403).json({ error: 'PDF não disponível neste plano. Use o relatório inteligente.', code: 'USE_RELATORIO_INTELIGENTE' });
-    try {
-      const mod = await import('../relatorioPdf.js').catch(() => null);
-      if (!mod?.gerarRelatorioMensalPDF) return res.status(410).json({ error: 'PDF descontinuado. Use POST /api/empresa/:ref/relatorio/enviar', code: 'PDF_GONE' });
-      const mesCheck = validateReportMonth(req.query.mes, { defaultToCurrent: true, minYear: 2020, allowFutureMonths: 0 });
-      if (!mesCheck.ok) return res.status(400).json({ error: mesCheck.error });
-      const r = await mod.gerarRelatorioMensalPDF(getDb(), empresa.id, mesCheck.value);
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="relatorio-${empresa.slug || 'emp'}-${mesCheck.value}.pdf"`);
-      return res.send(r.buffer);
-    } catch (e: any) {
-      return res.status(500).json({ error: 'Falha ao gerar PDF. Prefira o relatório inteligente.', detail: String(e?.message || e).slice(0, 160) });
-    }
-  }));
+  app.get('/api/empresa/:ref/relatorio.pdf', autenticarToken, serveCyclePdf);
+
 }
