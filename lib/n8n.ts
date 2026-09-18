@@ -15,6 +15,9 @@ export type N8nEvent =
   | 'review.created'
   | 'payment.activated'
   | 'lead.captured'
+  | 'lead.qualified'
+  | 'lead.followup.requested'
+  | 'lead.crm_sync.requested'
   | 'report.generated'
   | 'ping';
 
