@@ -552,8 +552,6 @@ export function mountPixRoutes(app: Express) {
         status,
         status_detail: remote.status_detail,
         amount: remote.transaction_amount,
-        empresa_id: empresaId,
-        plano: planoKey,
         qr_code: poi.qr_code || null,
         copia_e_cola: poi.qr_code || null,
         approved: status === 'approved',
@@ -574,7 +572,14 @@ export function mountPixRoutes(app: Express) {
       const xSig = (req.headers['x-signature'] as string) || '';
       const xReq = (req.headers['x-request-id'] as string) || '';
 
-      if (process.env.MP_WEBHOOK_SECRET?.trim() && xSig) {
+      const webhookSecret = process.env.MP_WEBHOOK_SECRET?.trim();
+      if (process.env.NODE_ENV === 'production' && !webhookSecret) {
+        return res.status(503).json({ error: 'Webhook Mercado Pago não configurado.' });
+      }
+      if (webhookSecret && !xSig) {
+        return res.status(401).json({ error: 'Assinatura ausente' });
+      }
+      if (webhookSecret && xSig) {
         const okSig = verifyMpWebhookSignature({
           xSignature: xSig,
           xRequestId: xReq,
