@@ -23,6 +23,7 @@ import {
 import { resolvePlano } from '../stripeBilling.js';
 import { activatePlan, blockEmpresa } from '../services/billingService.js';
 import { logWebhookEvent } from '../lib/opsLog.js';
+import { empresaInformadaPertenceAoToken } from '../lib/auth.js';
 
 async function ensurePixTables(db: Database) {
   await db.exec(`
@@ -220,6 +221,9 @@ export function mountPixRoutes(app: Express) {
       }
 
       const empresaId = req.body?.empresa_id ? String(req.body.empresa_id) : null;
+      if (empresaId && !empresaInformadaPertenceAoToken(req, empresaId)) {
+        return res.status(403).json({ error: 'empresa_id não pertence à sessão autenticada.' });
+      }
       if (empresaId) {
         const emp = await getDb().get(`SELECT id FROM empresas WHERE id = ?`, [empresaId]);
         if (!emp) return res.status(404).json({ error: 'Empresa não encontrada.' });
@@ -290,6 +294,9 @@ export function mountPixRoutes(app: Express) {
       if (!resolvePlano(plano)) return res.status(400).json({ error: 'Plano inválido.' });
 
       const empresaId = req.body?.empresa_id ? String(req.body.empresa_id) : null;
+      if (empresaId && !empresaInformadaPertenceAoToken(req, empresaId)) {
+        return res.status(403).json({ error: 'empresa_id não pertence à sessão autenticada.' });
+      }
       if (empresaId) {
         const emp = await getDb().get(`SELECT id FROM empresas WHERE id = ?`, [empresaId]);
         if (!emp) return res.status(404).json({ error: 'Empresa não encontrada.' });
@@ -358,6 +365,9 @@ export function mountPixRoutes(app: Express) {
       }
 
       const empresaId = req.body?.empresa_id ? String(req.body.empresa_id) : null;
+      if (empresaId && !empresaInformadaPertenceAoToken(req, empresaId)) {
+        return res.status(403).json({ error: 'empresa_id não pertence à sessão autenticada.' });
+      }
       try {
         const created = await createPixAgendado({
           planoKey: plano,
@@ -420,6 +430,9 @@ export function mountPixRoutes(app: Express) {
       }
 
       const empresaId = req.body?.empresa_id ? String(req.body.empresa_id) : null;
+      if (empresaId && !empresaInformadaPertenceAoToken(req, empresaId)) {
+        return res.status(403).json({ error: 'empresa_id não pertence à sessão autenticada.' });
+      }
       try {
         const created = await createPixRecorrente({
           planoKey: plano,
