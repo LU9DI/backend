@@ -207,6 +207,7 @@ export function mountPayPalRoutes(app: Express) {
             planoKey: planoKey || 'pro',
             captureId: cap.captureId,
             orderId,
+            amount: cap.amount,
           });
           await completePaymentCapture(db, 'paypal', String(cap.captureId));
           res.json({
