@@ -154,7 +154,7 @@ async function activateFromPixInternal(
     preapprovalId?: string | null;
   }
 ) {
-
+  const plano = resolvePlano(opts.planoKey || 'pro');
   const days = plano?.interval === 'year' ? 365 : 30;
   const exp = new Date();
   exp.setDate(exp.getDate() + days);
