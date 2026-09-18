@@ -62,6 +62,7 @@ import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
 import { n8nConfigured } from './lib/n8n.js';
 import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
+import { ensureReportPdfSchema } from './lib/reportPdfStore.js';
 import {
   anonymizeOldClientWhatsapp,
   ensureReviewTreatmentColumns,
@@ -261,6 +262,11 @@ async function main() {
     await ensureFiscalSchema(getDb());
   } catch (e) {
     console.warn('ensureFiscalSchema:', e);
+  }
+  try {
+    await ensureReportPdfSchema(getDb());
+  } catch (e) {
+    console.warn('ensureReportPdfSchema:', e);
   }
   try {
     await ensurePlanPricingSchema(getDb());
