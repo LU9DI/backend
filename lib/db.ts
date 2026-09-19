@@ -120,6 +120,14 @@ export async function initDB(): Promise<Database> {
     )
   `);
   await _db.exec(`
+    CREATE TABLE IF NOT EXISTS trial_registrations (
+      id TEXT PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      ip_hash TEXT UNIQUE NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await _db.exec(`
     CREATE TABLE IF NOT EXISTS ai_usage (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       empresa_id TEXT,
