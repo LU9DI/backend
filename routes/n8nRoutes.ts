@@ -200,7 +200,31 @@ export function mountN8nRoutes(app: Express) {
       if (action === 'hubspot_sync') {
         await db.run('UPDATE leads SET crm_status = ?, crm_id = COALESCE(NULLIF(?, \'\'), crm_id) WHERE id = ?', [status === 'success' ? 'synced' : status, crmId, leadId]);
       } else {
-        await db.run('UPDATE leads SET followup_status = ? WHERE id = ?', [status === 'success' ? 'created' : status, leadId]);
+        const followupStatus = status === 'success' ? 'created' : status;
+        await db.run('UPDATE leads SET followup_status = ? WHERE id = ?', [followupStatus, leadId]);
+
+        // n8n gera o rascunho; o backend passa a ser a fonte de verdade
+        // para aprovação e histórico. Nunca marca como aprovado aqui.
+        if (status === 'pending' && String(body.draft || '').trim()) {
+          await ensureFollowupSchema(db);
+          const existing = await db.get(
+            `SELECT id FROM lead_followups
+             WHERE lead_id = ? AND status IN ('pending','approved','sending')`
+            , [leadId]
+          );
+          if (!existing) {
+            await db.run(
+              `INSERT INTO lead_followups
+               (id, lead_id, channel, draft, status, approval_required)
+               VALUES (?, ?, 'email', ?, 'pending', 1)`,
+              [
+                crypto.randomUUID(),
+                leadId,
+                String(body.draft).trim().slice(0, 10000),
+              ]
+            );
+          }
+        }
       }
       res.json({ success: true, lead_id: leadId, action, status });
     })

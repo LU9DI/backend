@@ -1,5 +1,5 @@
 /**
- * Fila de retry persistente (SQLite) com backoff exponencial.
+ * Fila de retry persistente (SQLite/PostgreSQL via adapter) com backoff exponencial.
  *
  * Tipos comuns:
  *   paypal_webhook | email | capture_paypal | generic
@@ -85,9 +85,12 @@ export async function enqueueRetry(
     if (existing?.id) return Number(existing.id);
   }
 
-  const r = await db.run(
+  // Use INSERT ... RETURNING so the queue works with both SQLite and
+  // PostgreSQL. The PostgreSQL adapter intentionally does not expose lastID.
+  const inserted = await db.get<{ id: number | string }>(
     `INSERT INTO retry_queue (job_type, payload, attempts, max_attempts, next_run_at, status, dedupe_key)
-     VALUES (?, ?, 0, ?, ?, 'pending', ?)`,
+     VALUES (?, ?, 0, ?, ?, 'pending', ?)
+     RETURNING id`,
     [
       opts.jobType,
       JSON.stringify(opts.payload),
@@ -96,7 +99,10 @@ export async function enqueueRetry(
       opts.dedupeKey || null,
     ]
   );
-  return Number(r.lastID);
+  if (!inserted?.id) {
+    throw new Error('retry_queue: não foi possível obter o id do job inserido');
+  }
+  return Number(inserted.id);
 }
 
 type Handler = (payload: any, job: any) => Promise<void>;
