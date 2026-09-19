@@ -177,6 +177,39 @@ const PORT = Number(process.env.PORT || 5000);
 let server: Server | null = null;
 let shuttingDown = false;
 
+async function runOneTimeTestAccountCleanup() {
+  if (process.env.CLEANUP_TEST_ACCOUNTS_ONCE !== '1') return;
+  const db = getDb();
+  const keepName = 'empresa 3';
+  const normalize = (value: unknown) =>
+    String(value || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\\u0300-\\u036f]/g, '')
+      .replace(/\\s+/g, ' ')
+      .trim();
+  const keep = normalize(keepName);
+  const rows = await db.all(
+    `SELECT id, nome_empresa, slug
+     FROM empresas
+     WHERE LOWER(COALESCE(plan,'')) IN ('trial','teste','test')
+        OR LOWER(COALESCE(status,'')) IN ('trial','teste','test')`
+  );
+  let removed = 0;
+  for (const e of rows || []) {
+    const nome = normalize(e.nome_empresa);
+    const slug = normalize(e.slug);
+    if (nome === keep || nome.includes(keep) || keep.includes(nome) || slug === keep || slug.includes(keep) || keep.includes(slug)) continue;
+    for (const table of ['reviews','ai_usage','push_subscriptions','unidades','webauthn_credentials']) {
+      try { await db.run(`DELETE FROM ${table} WHERE empresa_id = ?`, [e.id]); } catch {}
+    }
+    try { await db.run(`DELETE FROM usuarios WHERE empresa_id = ?`, [e.id]); } catch {}
+    await db.run('DELETE FROM empresas WHERE id = ?', [e.id]);
+    removed += 1;
+  }
+  console.log(`🧹 Limpeza única de contas de teste: ${removed} removida(s); empresa 3 preservada.`);
+}
+
 async function runSentimentBackfillOnBoot() {
   if (process.env.BACKFILL_SENTIMENT !== '1') return;
   try {
@@ -287,6 +320,7 @@ async function main() {
     console.warn('treatment columns:', e);
   }
 
+  await runOneTimeTestAccountCleanup();
   await runSentimentBackfillOnBoot();
   await runLgpdSweepOnBoot();
 
