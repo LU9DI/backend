@@ -179,6 +179,34 @@ export function mountN8nRoutes(app: Express) {
   );
 
   app.post(
+    '/api/n8n/inbound/automation-result',
+    limiter,
+    asyncHandler(async (req: Request, res: Response) => {
+      if (!requireInbound(req, res)) return;
+      const body = req.body || {};
+      const leadId = String(body.lead_id || '').trim();
+      const action = String(body.action || '').trim();
+      const status = String(body.status || '').trim().toLowerCase();
+      const crmId = String(body.crm_id || '').trim();
+      if (!leadId || !['hubspot_sync', 'followup'].includes(action) || !['success', 'failed', 'pending'].includes(status)) {
+        return res.status(400).json({ error: 'lead_id, action e status inválidos.' });
+      }
+      const db = getDb();
+      const lead = await db.get('SELECT id FROM leads WHERE id = ?', [leadId]);
+      if (!lead) return res.status(404).json({ error: 'Lead não encontrado.' });
+      try { await db.exec('ALTER TABLE leads ADD COLUMN crm_status TEXT DEFAULT \'pending\''); } catch {}
+      try { await db.exec('ALTER TABLE leads ADD COLUMN crm_id TEXT'); } catch {}
+      try { await db.exec('ALTER TABLE leads ADD COLUMN followup_status TEXT DEFAULT \'pending\''); } catch {}
+      if (action === 'hubspot_sync') {
+        await db.run('UPDATE leads SET crm_status = ?, crm_id = COALESCE(NULLIF(?, \'\'), crm_id) WHERE id = ?', [status === 'success' ? 'synced' : status, crmId, leadId]);
+      } else {
+        await db.run('UPDATE leads SET followup_status = ? WHERE id = ?', [status === 'success' ? 'created' : status, leadId]);
+      }
+      res.json({ success: true, lead_id: leadId, action, status });
+    })
+  );
+
+  app.post(
     '/api/n8n/inbound/review',
     limiter,
     asyncHandler(async (req: Request, res: Response) => {
