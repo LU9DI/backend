@@ -64,7 +64,7 @@ export function mountAdminFollowupRoutes(app: Express) {
       '',
       'Nenhum cliente real foi usado neste teste.',
       `Gerado em: ${now}`,
-    ].join('\\n');
+    ].join('\n');
 
     await db.exec(`
       CREATE TABLE IF NOT EXISTS leads (
