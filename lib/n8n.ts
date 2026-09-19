@@ -68,6 +68,43 @@ export async function queueN8nEvent(
   });
 }
 
+export async function sendN8nWebhook(
+  event: N8nEvent | string,
+  payload: Record<string, unknown> = {}
+): Promise<boolean> {
+  if (!n8nConfigured()) return false;
+  const url = n8nWebhookUrl();
+  const body = {
+    event,
+    source: 'filtra-ia',
+    ts: new Date().toISOString(),
+    ...payload,
+  };
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'User-Agent': 'Filtra.IA/n8n',
+  };
+  const secret = process.env.N8N_WEBHOOK_SECRET?.trim();
+  if (secret) headers['X-Filtra-Secret'] = secret;
+  if (process.env.N8N_API_KEY?.trim()) headers['X-N8N-API-KEY'] = process.env.N8N_API_KEY.trim();
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs());
+  try {
+    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ac.signal });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      console.warn('[n8n] ' + event + ' HTTP ' + res.status + ': ' + txt.slice(0, 200));
+      return false;
+    }
+    return true;
+  } catch (e: any) {
+    console.warn('[n8n] ' + event + ' fail: ' + (e?.message || e));
+    return false;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 export function notifyN8n(
   event: N8nEvent | string,
   payload: Record<string, unknown> = {}
