@@ -44,7 +44,7 @@ export async function criarReview(input:ReviewInput,db:Database=getDb()):Promise
       const usadas=await contarReviewsMes(empresaId!);const limite=getFeedbackLimit(plan);if(usadas>=limite)throw new ReviewQuotaError(`Limite mensal de avaliações atingido (${limite}). Faça upgrade do plano.`);
     }
   }
-  const flags=isTest?['teste_painel']:companySelf?['empresa_auto_feedback']:softFraudFlags:softFraudFlags({name:name||'Anônimo',comment,rating});
+  const flags=isTest?['teste_painel']:companySelf?['empresa_auto_feedback']:softFraudFlags({name:name||'Anônimo',comment,rating});
   let aiReply:string|null=null;let aiTags:string|null=null;let aiSkippedQuota=false;
   const planAllowsAi=!isTest&&planTemIA(plan)&&aiConfigured();
   let useAi=planAllowsAi;
