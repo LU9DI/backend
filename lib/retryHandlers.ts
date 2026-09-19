@@ -19,6 +19,7 @@ import { resolvePlano } from '../stripeBilling.js';
 import { activatePlan, blockEmpresa } from '../services/billingService.js';
 import { enviarEmail } from './mailer.js';
 import { logWebhookEvent } from './opsLog.js';
+import { sendN8nWebhook } from './n8n.js';
 
 async function activatePayPal(
   empresaId: string,
@@ -241,6 +242,13 @@ export function registerAllRetryHandlers() {
     if (status === 'pending' || status === 'in_process') {
       throw new Error(`mp ainda pending (${status})`);
     }
+  });
+
+  registerRetryHandler('n8n_webhook', async (payload) => {
+    const event = String(payload.event || '').trim();
+    if (!event) throw new Error('n8n_webhook: event obrigatório');
+    const ok = await sendN8nWebhook(event, payload);
+    if (!ok) throw new Error('n8n_webhook: webhook não aceitou o evento');
   });
 
   registerRetryHandler('email', async (payload) => {
