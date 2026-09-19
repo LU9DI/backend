@@ -174,6 +174,25 @@ export async function checkDbRateByIp(
  * Reclamação (nota ≤ 3): **1x** por IP e **1x** por WhatsApp na janela.
  * O cliente não deve abrir outro formulário para “pedir desculpas” — usa o WPP.
  */
+/** Uma pessoa/IP só pode enviar 1 feedback por empresa. */
+export async function checkOneFeedbackOnly(
+  db: Database,
+  empresaId: string,
+  ipHash: string
+): Promise<void> {
+  const existing = await db.get(
+    `SELECT COUNT(*) as c FROM reviews
+     WHERE empresa_id = ? AND ip_hash = ? AND IFNULL(is_test,0) = 0`,
+    [empresaId, ipHash]
+  );
+  if (Number(existing?.c || 0) >= 1) {
+    throw new ReviewFraudError(
+      'Você já enviou um feedback para este estabelecimento. Cada usuário pode enviar apenas um feedback.',
+      409
+    );
+  }
+}
+
 export async function checkOneComplaintOnly(
   db: Database,
   opts: {
