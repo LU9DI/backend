@@ -9,6 +9,9 @@
  *   N8N_TIMEOUT_MS=8000
  */
 
+import crypto from 'crypto';
+import { enqueueRetry } from './retryQueue.js';
+
 export type N8nEvent =
   | 'trial.ativado'
   | 'payment.confirmado'
@@ -17,6 +20,9 @@ export type N8nEvent =
   | 'review.nova'
   | 'lead.whatsapp'
   | 'lead.captured'
+  | 'lead.qualified'
+  | 'lead.followup.requested'
+  | 'lead.crm_sync.requested'
   | 'empresa.bloqueada'
   | 'ping';
 
@@ -34,6 +40,32 @@ export function n8nWebhookUrl(): string {
 
 function timeoutMs(): number {
   return Math.max(2000, Number(process.env.N8N_TIMEOUT_MS || 8000));
+}
+
+export async function queueN8nEvent(
+  event: N8nEvent | string,
+  payload: Record<string, unknown> = {},
+  options: { dedupeKey?: string | null; delayMs?: number; maxAttempts?: number } = {}
+): Promise<number | null> {
+  if (!n8nConfigured()) return null;
+
+  const eventId = String(payload.event_id || crypto.randomUUID());
+  const body = {
+    event,
+    source: 'filtra-ia',
+    event_id: eventId,
+    ts: new Date().toISOString(),
+    ...payload,
+  };
+  const dedupeKey = options.dedupeKey || String(payload.dedupe_key || ('n8n:' + event + ':' + eventId));
+
+  return enqueueRetry({
+    jobType: 'n8n_webhook',
+    payload: body,
+    dedupeKey,
+    delayMs: options.delayMs,
+    maxAttempts: options.maxAttempts,
+  });
 }
 
 export function notifyN8n(
