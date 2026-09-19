@@ -14,7 +14,6 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import {
   n8nConfigured,
   n8nStatus,
-  notifyN8n,
   queueN8nEvent,
   notifyN8nAsync,
   verifyInboundSecret,
