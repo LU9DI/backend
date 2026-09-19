@@ -2,6 +2,7 @@ import type { Express, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { validateBody, schemaTrialAtivar } from '../middleware/validate.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
+import { clientIp } from '../lib/reviewFraud.js';
 import {
   ativarTrial,
   TrialConflictError,
@@ -32,6 +33,7 @@ export function mountTrialRoutes(app: Express) {
               : undefined,
             whatsapp: req.body.whatsapp ? String(req.body.whatsapp) : undefined,
             locale: req.body.locale ? String(req.body.locale) : undefined,
+            ip: clientIp(req as any),
           },
           undefined,
           res
