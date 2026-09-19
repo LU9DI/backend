@@ -2,6 +2,7 @@
  * Follow-ups comerciais — revisão humana e execução controlada.
  */
 import type { Express, Response } from 'express';
+import crypto from 'crypto';
 import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { getDb } from '../lib/db.js';
