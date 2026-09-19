@@ -9,6 +9,7 @@ import type { Express, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
 import { getDb, findEmpresa } from '../lib/db.js';
+import { qualifyLead } from '../services/leadAutomation.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import {
   n8nConfigured,
@@ -126,7 +127,82 @@ export function mountN8nRoutes(app: Express) {
         fonte,
       });
 
-      res.status(201).json({ success: true, lead_id: id });
+      const qualification = await qualifyLead({
+        nome_empresa: nome,
+        email,
+        telefone,
+        fonte,
+        maps_url: mapsUrl,
+      });
+
+      if (qualification) {
+        try {
+          await db.exec('ALTER TABLE leads ADD COLUMN score INTEGER');
+        } catch {}
+        try {
+          await db.exec('ALTER TABLE leads ADD COLUMN qualification TEXT');
+        } catch {}
+        try {
+          await db.exec('ALTER TABLE leads ADD COLUMN ai_reason TEXT');
+        } catch {}
+        await db.run(
+          'UPDATE leads SET score = ?, qualification = ?, ai_reason = ? WHERE id = ?',
+          [qualification.score, qualification.qualification, qualification.reason, id]
+        );
+        notifyN8n('lead.qualified', {
+          lead_id: id,
+          nome_empresa: nome,
+          email,
+          telefone,
+          fonte,
+          score: qualification.score,
+          qualification: qualification.qualification,
+          reason: qualification.reason,
+        });
+        if (qualification.score >= 40) {
+          notifyN8n('lead.followup.requested', {
+            lead_id: id,
+            nome_empresa: nome,
+            email,
+            telefone,
+            fonte,
+            score: qualification.score,
+            qualification: qualification.qualification,
+            reason: qualification.reason,
+            action: 'create_crm_followup',
+          });
+        }
+      }
+
+      res.status(201).json({ success: true, lead_id: id, qualification });
+    })
+  );
+
+  app.post(
+    '/api/n8n/inbound/automation-result',
+    limiter,
+    asyncHandler(async (req: Request, res: Response) => {
+      if (!requireInbound(req, res)) return;
+      const body = req.body || {};
+      const leadId = String(body.lead_id || '').trim();
+      const action = String(body.action || '').trim();
+      const status = String(body.status || '').trim().toLowerCase();
+      const crmId = String(body.crm_id || '').trim();
+      if (!leadId || !['hubspot_sync', 'followup'].includes(action) || !['success', 'failed', 'pending'].includes(status)) {
+        return res.status(400).json({ error: 'lead_id, action e status inválidos.' });
+      }
+      const db = getDb();
+      const lead = await db.get('SELECT id FROM leads WHERE id = ?', [leadId]);
+      if (!lead) return res.status(404).json({ error: 'Lead não encontrado.' });
+      try { await db.exec('ALTER TABLE leads ADD COLUMN crm_status TEXT DEFAULT \'pending\''); } catch {}
+      try { await db.exec('ALTER TABLE leads ADD COLUMN crm_id TEXT'); } catch {}
+      try { await db.exec('ALTER TABLE leads ADD COLUMN followup_status TEXT DEFAULT \'pending\''); } catch {}
+      if (action === 'hubspot_sync') {
+        await db.run('UPDATE leads SET crm_status = ?, crm_id = COALESCE(NULLIF(?, \'\'), crm_id) WHERE id = ?', [status === 'success' ? 'synced' : status, crmId, leadId]);
+      } else {
+        await db.run('UPDATE leads SET followup_status = ? WHERE id = ?', [status === 'success' ? 'created' : status, leadId]);
+      }
+      res.json({ success: true, lead_id: leadId, action, status });
     })
   );
 
