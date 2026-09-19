@@ -39,11 +39,13 @@ export function clientIp(req: {
   ip?: string;
   socket?: { remoteAddress?: string };
 }): string {
+  // Express está configurado com trust proxy; prefira req.ip para não aceitar X-Forwarded-For forjado.
+  if (req.ip) return req.ip;
+  if (req.socket?.remoteAddress) return req.socket.remoteAddress;
   const xf = String(req.headers?.['x-forwarded-for'] || '')
     .split(',')[0]
     .trim();
-  if (xf) return xf;
-  return req.ip || req.socket?.remoteAddress || '0.0.0.0';
+  return xf || '0.0.0.0';
 }
 
 function prune(ts: number[], windowMs: number, now: number) {
