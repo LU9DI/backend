@@ -3,12 +3,12 @@ import type { Database } from 'sqlite';
 import { getDb, findEmpresa } from '../lib/db.js';
 import { gerarRespostaReview, gerarTagsSemanticas, analisarSentimento, aiConfigured } from '../groqService.js';
 import { planTemIA, getFeedbackLimit, contarReviewsMes, assertEmpresaTokenQuota } from '../lib/quota.js';
-import { assertNotHoneypot, checkDbRateByIp, checkDuplicateComment, checkMemoryRate, checkOneComplaintOnly, ensureReviewFraudColumns, hashIp, softFraudFlags, ReviewFraudError } from '../lib/reviewFraud.js';
+import { assertNotHoneypot, checkDbRateByIp, checkDuplicateComment, checkMemoryRate, checkOneComplaintOnly, checkOneFeedbackOnly, ensureReviewFraudColumns, hashIp, softFraudFlags, ReviewFraudError } from '../lib/reviewFraud.js';
 import { notifyCrisisReview } from '../lib/push.js';
 import { normalizarWhatsapp, linkWhatsapp, mensagemClienteParaEmpresa } from '../lib/whatsapp.js';
 import { notificarCriticaPrivada, notificarAlertaCrise } from '../lib/notifications.js';
 import { normalizeLocale } from '../lib/locale.js';
-export type ReviewInput={name?:string;comment?:string;rating:number;empresa_id?:string;empresa_ref?:string;website?:string;is_test?:boolean;ip?:string;client_whatsapp?:string;locale?:string};
+export type ReviewInput={name?:string;comment?:string;rating:number;empresa_id?:string;empresa_ref?:string;website?:string;is_test?:boolean;company_self?:boolean;ip?:string;client_whatsapp?:string;locale?:string};
 export type ReviewResult={success:true;id:number|undefined;ai:boolean;is_test?:boolean;sentiment?:string;ai_skipped_quota?:boolean;locale?:string;whatsapp_empresa_url?:string|null;whatsapp_mensagem?:string|null};
 export class ReviewNotFoundError extends Error{status=404;constructor(message='Empresa não encontrada.'){super(message);this.name='ReviewNotFoundError';}}
 export class ReviewQuotaError extends Error{status=429;constructor(message:string){super(message);this.name='ReviewQuotaError';}}
@@ -26,7 +26,7 @@ export async function criarReview(input:ReviewInput,db:Database=getDb()):Promise
   const rating=Number(input.rating);
   if(!Number.isInteger(rating)||rating<1||rating>5)throw new ReviewValidationError('Nota inválida. Use uma nota de 1 a 5.');
   const empresaRef=String(input.empresa_id||input.empresa_ref||'').slice(0,100);
-  const isTest=Boolean(input.is_test);
+  const isTest=Boolean(input.is_test); const companySelf=Boolean(input.company_self);
   const ip=input.ip||'0.0.0.0';
   const ipHash=hashIp(ip);
   const locale=normalizeLocale(input.locale);
@@ -36,14 +36,15 @@ export async function criarReview(input:ReviewInput,db:Database=getDb()):Promise
   if(empresaRef){
     const emp=await findEmpresa(empresaRef);if(!emp)throw new ReviewNotFoundError();
     empresaId=emp.id;nomeEmpresa=emp.nome_empresa;plan=String(emp.plan||emp.status||'trial').toLowerCase();slugOrId=emp.slug||emp.id;empresaWpp=normalizarWhatsapp(emp.whatsapp_suporte);
-    if(!isTest){
+    if(!isTest&&!companySelf){
       checkMemoryRate(ip,empresaId!);await checkDbRateByIp(db,empresaId!,ipHash);
       if(comment)await checkDuplicateComment(db,empresaId!,comment);
+      await checkOneFeedbackOnly(db,empresaId!,ipHash);
       await checkOneComplaintOnly(db,{empresaId:empresaId!,ipHash,clientWhatsapp:clientWpp,rating});
       const usadas=await contarReviewsMes(empresaId!);const limite=getFeedbackLimit(plan);if(usadas>=limite)throw new ReviewQuotaError(`Limite mensal de avaliações atingido (${limite}). Faça upgrade do plano.`);
     }
   }
-  const flags=isTest?['teste_painel']:softFraudFlags({name:name||'Anônimo',comment,rating});
+  const flags=isTest?['teste_painel']:companySelf?['empresa_auto_feedback']:softFraudFlags:softFraudFlags({name:name||'Anônimo',comment,rating});
   let aiReply:string|null=null;let aiTags:string|null=null;let aiSkippedQuota=false;
   const planAllowsAi=!isTest&&planTemIA(plan)&&aiConfigured();
   let useAi=planAllowsAi;
