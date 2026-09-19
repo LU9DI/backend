@@ -96,13 +96,28 @@ export function mountAdminFollowupRoutes(app: Express) {
       return res.status(409).json({ error: 'Follow-up já foi processado.' });
     }
 
-    const jobId = await enqueueRetry({
-      jobType: 'followup_email',
-      payload: { followup_id: id },
-      dedupeKey: `followup_email:${id}`,
-    }, db);
+    try {
+      const jobId = await enqueueRetry({
+        jobType: 'followup_email',
+        payload: { followup_id: id },
+        dedupeKey: `followup_email:${id}`,
+      }, db);
 
-    res.json({ success: true, followup_id: id, status: 'approved', job_id: jobId });
+      res.json({ success: true, followup_id: id, status: 'approved', job_id: jobId });
+    } catch (e: any) {
+      // Never leave an approved follow-up stranded when queue persistence fails.
+      await db.run(`
+        UPDATE lead_followups
+        SET status = 'pending',
+            approval_required = 1,
+            approved_by = NULL,
+            approved_at = NULL,
+            last_error = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = 'approved'
+      `, [String(e?.message || e).slice(0, 500), id]);
+      throw e;
+    }
   }));
 
   app.post('/api/admin/followups/:id/reject', autenticarToken, asyncHandler(async (req: AuthRequest, res) => {
