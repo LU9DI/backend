@@ -110,46 +110,11 @@ export function notifyN8n(
   payload: Record<string, unknown> = {}
 ): void {
   if (!n8nConfigured()) return;
-
-  const url = n8nWebhookUrl();
-  const body = {
-    event,
-    source: 'filtra-ia',
-    ts: new Date().toISOString(),
-    ...payload,
-  };
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'User-Agent': 'Filtra.IA/n8n',
-  };
-  const secret = process.env.N8N_WEBHOOK_SECRET?.trim();
-  if (secret) headers['X-Filtra-Secret'] = secret;
-  if (process.env.N8N_API_KEY?.trim()) {
-    headers['X-N8N-API-KEY'] = process.env.N8N_API_KEY.trim();
-  }
-
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), timeoutMs());
-
-  fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal: ac.signal,
-  })
-    .then(async (r) => {
-      if (!r.ok) {
-        const txt = await r.text().catch(() => '');
-        console.warn(`[n8n] ${event} HTTP ${r.status}`, txt.slice(0, 200));
-      } else {
-        console.log(`[n8n] ${event} ok`);
-      }
-    })
-    .catch((e: any) => {
-      console.warn(`[n8n] ${event} falhou:`, e?.message || e);
-    })
-    .finally(() => clearTimeout(t));
+  void queueN8nEvent(event, payload).then((id) => {
+    if (id != null) console.log('[n8n] ' + event + ' enfileirado #' + id);
+  }).catch((e: any) => {
+    console.error('[n8n] ' + event + ' não pôde ser enfileirado:', e?.message || e);
+  });
 }
 
 export async function notifyN8nAsync(
