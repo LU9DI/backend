@@ -7,9 +7,10 @@ import { clientIp } from '../lib/reviewFraud.js';
 import { autenticarToken, extrairToken, isAdminUser, verifyAccessToken, type AuthRequest } from '../lib/auth.js';
 import { findEmpresa, getDb } from '../lib/db.js';
 import { ensureReviewTreatmentColumns } from '../lib/lgpd.js';
-const reviewsLimiter=rateLimit({windowMs:60*60*1000,max:40,standardHeaders:true,legacyHeaders:false,message:{error:'Muitas avaliações. Tente mais tarde.'}});
-const reviewsIpStrict=rateLimit({windowMs:15*60*1000,max:8,standardHeaders:true,legacyHeaders:false,message:{error:'Muitas tentativas deste IP. Aguarde 15 minutos.'}});
+const reviewsLimiter=rateLimit({windowMs:60*60*1000,max:40,standardHeaders:true,legacyHeaders:false,skip:(req:any)=>isCompanySelfRequest(req),message:{error:'Muitas avaliações. Tente mais tarde.'}});
+const reviewsIpStrict=rateLimit({windowMs:15*60*1000,max:8,standardHeaders:true,legacyHeaders:false,skip:(req:any)=>isCompanySelfRequest(req),message:{error:'Muitas tentativas deste IP. Aguarde 15 minutos.'}});
 const treatLimiter=rateLimit({windowMs:15*60*1000,max:60,standardHeaders:true,legacyHeaders:false,message:{error:'Muitas marcações. Aguarde.'}});
+function isCompanySelfRequest(req:any):boolean{try{const token=extrairToken(req);if(!token)return false;const payload=verifyAccessToken(token);const target=String(req.body?.empresa_id||req.body?.empresa_ref||'').trim();return Boolean(payload?.empresa_id&&target&&payload.empresa_id===target);}catch{return false;}}
 export function mountReviewRoutes(app:Express){
   app.post('/api/reviews',reviewsLimiter,reviewsIpStrict,validateBody(schemaReview),asyncHandler(async(req:Request,res:Response)=>{try{
     const empresaRef=String(req.body.empresa_id||req.body.empresa_ref||'').trim(); const requestedTest=Boolean(req.body.is_test); let authorizedTest=false; let companySelf=false;
