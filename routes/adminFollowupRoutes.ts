@@ -40,6 +40,67 @@ function requireAdmin(req: AuthRequest, res: Response): boolean {
 }
 
 export function mountAdminFollowupRoutes(app: Express) {
+  // Cria um follow-up sintético somente para diagnóstico do ciclo de aprovação.
+  // O destinatário é SEMPRE ADMIN_EMAIL; nunca aceita e-mail arbitrário no request.
+  app.post('/api/admin/followups/test', autenticarToken, asyncHandler(async (req: AuthRequest, res: Response) => {
+    if (!requireAdmin(req, res)) return;
+    const testEmail = String(process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    if (!testEmail || !testEmail.includes('@')) {
+      return res.status(503).json({
+        error: 'ADMIN_EMAIL não configurado.',
+        message: 'Configure ADMIN_EMAIL no ambiente de produção para habilitar o teste seguro de follow-up.',
+      });
+    }
+
+    const db = getDb();
+    await ensureFollowupSchema(db);
+    const now = new Date().toISOString();
+    const leadId = `admin-test-${crypto.randomUUID()}`;
+    const followupId = crypto.randomUUID();
+    const company = String(req.body?.nome_empresa || 'Empresa de teste Filtra.AI').trim().slice(0, 120);
+    const draft = [
+      `Olá! Este é um teste controlado do fluxo de follow-up do Filtra.AI para ${company}.`,
+      '',
+      'Nenhum cliente real foi usado neste teste.',
+      `Gerado em: ${now}`,
+    ].join('\\n');
+
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS leads (
+        id TEXT PRIMARY KEY,
+        nome_empresa TEXT,
+        email TEXT,
+        telefone TEXT,
+        fonte TEXT,
+        maps_url TEXT,
+        raw_json TEXT,
+        criado_em TIMESTAMPTZ NOT NULL
+      )
+    `);
+    await db.run(
+      `INSERT INTO leads (id, nome_empresa, email, fonte, raw_json, criado_em)
+       VALUES (?, ?, ?, 'admin-test', ?, ?)`,
+      [leadId, company, testEmail, JSON.stringify({ test: true, created_by: req.user?.id || 'admin' }), now]
+    );
+    await db.run(
+      `INSERT INTO lead_followups
+       (id, lead_id, channel, draft, status, approval_required)
+       VALUES (?, ?, 'email', ?, 'pending', 1)`,
+      [followupId, leadId, draft]
+    );
+
+    res.status(201).json({
+      success: true,
+      test: true,
+      followup_id: followupId,
+      lead_id: leadId,
+      recipient: testEmail.replace(/(^.).*(@.*$)/, '$1***$2'),
+      status: 'pending',
+      approval_required: true,
+      message: 'Follow-up de teste criado. Ele não será enviado sem aprovação no painel.',
+    });
+  }));
+
   app.get('/api/admin/followups', autenticarToken, asyncHandler(async (req: AuthRequest, res) => {
     if (!requireAdmin(req, res)) return;
     const db = getDb();
