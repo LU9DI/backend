@@ -20,6 +20,7 @@ import { mountAuthRoutes } from './routes/authRoutes.js';
 import { mountEmpresaRoutes } from './routes/empresaRoutes.js';
 import { mountReviewRoutes } from './routes/reviewRoutes.js';
 import { mountAdminDashboardRoutes } from './routes/adminDashboardRoutes.js';
+import { mountAdminFollowupRoutes, ensureFollowupSchema } from './routes/adminFollowupRoutes.js';
 import { mountAdminTecnicoRoutes } from './routes/adminTecnicoRoutes.js';
 import { mountAdminNegocioRoutes } from './routes/adminNegocioRoutes.js';
 import { mountTokenMetricsRoutes } from './routes/tokenMetricsRoutes.js';
@@ -275,6 +276,11 @@ async function main() {
     console.warn('plan pricing:', e);
   }
   try {
+    await ensureFollowupSchema(getDb());
+  } catch (e) {
+    console.warn('ensureFollowupSchema:', e);
+  }
+  try {
     await ensureRetryQueue(getDb());
     registerAllRetryHandlers();
     startRetryWorker();
@@ -295,6 +301,7 @@ async function main() {
   mountEmpresaRoutes(app);
   mountReviewRoutes(app);
   mountAdminDashboardRoutes(app);
+  mountAdminFollowupRoutes(app);
   mountAdminTecnicoRoutes(app);
   mountAdminNegocioRoutes(app);
   mountTokenMetricsRoutes(app);
