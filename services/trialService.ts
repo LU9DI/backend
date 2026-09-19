@@ -42,7 +42,7 @@ const DISPOSABLE_EMAIL_DOMAINS = new Set([
 ]);
 
 function isEmailFormat(email: string): boolean {
-  return /^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/.test(email);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email);
 }
 
 async function assertEmailUsable(email: string): Promise<void> {
