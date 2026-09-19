@@ -9,6 +9,7 @@ import type { Express, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
 import { getDb, findEmpresa } from '../lib/db.js';
+import { qualifyLead } from '../services/leadAutomation.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import {
   n8nConfigured,
@@ -126,7 +127,54 @@ export function mountN8nRoutes(app: Express) {
         fonte,
       });
 
-      res.status(201).json({ success: true, lead_id: id });
+      const qualification = await qualifyLead({
+        nome_empresa: nome,
+        email,
+        telefone,
+        fonte,
+        maps_url: mapsUrl,
+      });
+
+      if (qualification) {
+        try {
+          await db.exec('ALTER TABLE leads ADD COLUMN score INTEGER');
+        } catch {}
+        try {
+          await db.exec('ALTER TABLE leads ADD COLUMN qualification TEXT');
+        } catch {}
+        try {
+          await db.exec('ALTER TABLE leads ADD COLUMN ai_reason TEXT');
+        } catch {}
+        await db.run(
+          'UPDATE leads SET score = ?, qualification = ?, ai_reason = ? WHERE id = ?',
+          [qualification.score, qualification.qualification, qualification.reason, id]
+        );
+        notifyN8n('lead.qualified', {
+          lead_id: id,
+          nome_empresa: nome,
+          email,
+          telefone,
+          fonte,
+          score: qualification.score,
+          qualification: qualification.qualification,
+          reason: qualification.reason,
+        });
+        if (qualification.score >= 40) {
+          notifyN8n('lead.followup.requested', {
+            lead_id: id,
+            nome_empresa: nome,
+            email,
+            telefone,
+            fonte,
+            score: qualification.score,
+            qualification: qualification.qualification,
+            reason: qualification.reason,
+            action: 'create_crm_followup',
+          });
+        }
+      }
+
+      res.status(201).json({ success: true, lead_id: id, qualification });
     })
   );
 
