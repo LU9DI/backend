@@ -271,7 +271,7 @@ export function registerAllRetryHandlers() {
 
     if (!row) throw new Error('follow-up não encontrado');
     if (row.status === 'sent') return;
-    if (row.status !== 'approved' && row.status !== 'sending') {
+    if (!['approved', 'sending', 'failed'].includes(String(row.status))) {
       throw new Error(`follow-up não autorizado: ${row.status}`);
     }
 
