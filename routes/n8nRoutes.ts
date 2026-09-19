@@ -18,6 +18,7 @@ import {
   notifyN8nAsync,
   verifyInboundSecret,
 } from '../lib/n8n.js';
+import { ensureFollowupSchema } from './adminFollowupRoutes.js';
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
