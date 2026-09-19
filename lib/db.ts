@@ -119,6 +119,34 @@ export async function initDB(): Promise<Database> {
       createdAt TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  // Migração compatível: bancos Postgres antigos podem ter criado reviews.created_at
+  // antes do schema atual usar o identificador legado "createdAt". O painel e alguns
+  // fluxos dependem desse campo; mantemos ambos durante a transição.
+  try {
+    await _db.exec('ALTER TABLE reviews ADD COLUMN "createdAt" TIMESTAMPTZ');
+  } catch {
+    /* coluna já existe */
+  }
+  try {
+    await _db.run(
+      'UPDATE reviews SET "createdAt" = created_at WHERE "createdAt" IS NULL AND created_at IS NOT NULL'
+    );
+  } catch {
+    /* banco já usa somente createdAt */
+  }
+  try {
+    await _db.run(
+      'UPDATE reviews SET "createdAt" = createdat WHERE "createdAt" IS NULL AND createdat IS NOT NULL'
+    );
+  } catch {
+    /* variante sem aspas não existe */
+  }
+  try {
+    await _db.exec('ALTER TABLE reviews ALTER COLUMN "createdAt" SET DEFAULT CURRENT_TIMESTAMP');
+  } catch {
+    /* SQLite não suporta ALTER COLUMN; o schema local já cria createdAt com default */
+  }
+
   await _db.exec(`
     CREATE TABLE IF NOT EXISTS trial_registrations (
       id TEXT PRIMARY KEY,
