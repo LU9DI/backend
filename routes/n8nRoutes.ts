@@ -15,6 +15,7 @@ import {
   n8nConfigured,
   n8nStatus,
   notifyN8n,
+  queueN8nEvent,
   notifyN8nAsync,
   verifyInboundSecret,
 } from '../lib/n8n.js';
@@ -120,13 +121,13 @@ export function mountN8nRoutes(app: Express) {
         ]
       );
 
-      notifyN8n('lead.captured', {
+      await queueN8nEvent('lead.captured', {
         lead_id: id,
         nome_empresa: nome,
         email,
         telefone,
         fonte,
-      });
+      }, { dedupeKey: 'n8n:lead.captured:' + id });
 
       const qualification = await qualifyLead({
         nome_empresa: nome,
@@ -150,7 +151,7 @@ export function mountN8nRoutes(app: Express) {
           'UPDATE leads SET score = ?, qualification = ?, ai_reason = ? WHERE id = ?',
           [qualification.score, qualification.qualification, qualification.reason, id]
         );
-        notifyN8n('lead.qualified', {
+        await queueN8nEvent('lead.qualified', {
           lead_id: id,
           nome_empresa: nome,
           email,
@@ -159,9 +160,9 @@ export function mountN8nRoutes(app: Express) {
           score: qualification.score,
           qualification: qualification.qualification,
           reason: qualification.reason,
-        });
+        }, { dedupeKey: 'n8n:lead.qualified:' + id });
         if (qualification.score >= 40) {
-          notifyN8n('lead.followup.requested', {
+          await queueN8nEvent('lead.followup.requested', {
             lead_id: id,
             nome_empresa: nome,
             email,
@@ -171,7 +172,7 @@ export function mountN8nRoutes(app: Express) {
             qualification: qualification.qualification,
             reason: qualification.reason,
             action: 'create_crm_followup',
-          });
+          }, { dedupeKey: 'n8n:lead.followup.requested:' + id });
         }
       }
 
@@ -265,14 +266,14 @@ export function mountN8nRoutes(app: Express) {
       );
 
       if (rating <= 3) {
-        notifyN8n('review.critica', {
+        await queueN8nEvent('review.critica', {
           empresa_id: empresa.id,
           slug: empresa.slug,
           nome_empresa: empresa.nome_empresa,
           rating,
           name,
           comment: comment.slice(0, 500),
-        });
+        }, { dedupeKey: 'n8n:review.critica:' + empresa.id + ':' + now });
       }
 
       res.status(201).json({ success: true, empresa_id: empresa.id });
