@@ -82,12 +82,14 @@ export function mountAdminFollowupRoutes(app: Express) {
       return res.status(400).json({ error: 'Lead sem e-mail válido.' });
     }
 
+    const draft = String(req.body?.draft || followup.draft || '').trim();
+    if (!draft) return res.status(400).json({ error: 'Rascunho vazio.' });
     const now = new Date().toISOString();
     await db.run(`
       UPDATE lead_followups
-      SET status = 'approved', approval_required = 0, approved_by = ?, approved_at = ?, updated_at = ?
+      SET draft = ?, status = 'approved', approval_required = 0, approved_by = ?, approved_at = ?, updated_at = ?
       WHERE id = ? AND status = 'pending' AND approval_required = 1
-    `, [req.user?.id || 'admin', now, now, id]);
+    `, [draft.slice(0, 10000), req.user?.id || 'admin', now, now, id]);
 
     const check = await db.get(`SELECT status FROM lead_followups WHERE id = ?`, [id]);
     if (check?.status !== 'approved') {
