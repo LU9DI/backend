@@ -8,13 +8,14 @@ import { autenticarToken, extrairToken, isAdminUser, verifyAccessToken, type Aut
 import { findEmpresa, getDb } from '../lib/db.js';
 import { ensureReviewTreatmentColumns } from '../lib/lgpd.js';
 function isCompanySelfRequest(req:any):boolean{try{const token=extrairToken(req);if(!token)return false;const payload=verifyAccessToken(token);const target=String(req.body?.empresa_id||req.body?.empresa_ref||'').trim();return Boolean(payload?.empresa_id&&target&&payload.empresa_id===target);}catch{return false;}}
-const reviewsLimiter=rateLimit({windowMs:60*60*1000,max:40,standardHeaders:true,legacyHeaders:false,skip:(req:any)=>isCompanySelfRequest(req),message:{error:'Muitas avaliações. Tente mais tarde.'}});
-const reviewsIpStrict=rateLimit({windowMs:15*60*1000,max:8,standardHeaders:true,legacyHeaders:false,skip:(req:any)=>isCompanySelfRequest(req),message:{error:'Muitas tentativas deste IP. Aguarde 15 minutos.'}});
+const reviewsLimiter=rateLimit({windowMs:60*60*1000,max:40,standardHeaders:true,legacyHeaders:false,message:{error:'Muitas avaliações. Tente mais tarde.'}});
+const reviewsIpStrict=rateLimit({windowMs:15*60*1000,max:8,standardHeaders:true,legacyHeaders:false,message:{error:'Muitas tentativas deste IP. Aguarde 15 minutos.'}});
 const treatLimiter=rateLimit({windowMs:15*60*1000,max:60,standardHeaders:true,legacyHeaders:false,message:{error:'Muitas marcações. Aguarde.'}});
 export function mountReviewRoutes(app:Express){
   app.post('/api/reviews',reviewsLimiter,reviewsIpStrict,validateBody(schemaReview),asyncHandler(async(req:Request,res:Response)=>{try{
     const empresaRef=String(req.body.empresa_id||req.body.empresa_ref||'').trim(); const requestedTest=Boolean(req.body.is_test); let authorizedTest=false; let companySelf=isCompanySelfRequest(req);
     const optionalToken=extrairToken(req);
+    if(companySelf&&!requestedTest)return res.status(403).json({error:'A empresa não pode enviar feedback para si mesma.'});
     if(requestedTest){ const token=extrairToken(req); if(!token) return res.status(403).json({error:'Avaliação de teste exige uma sessão autenticada.'}); let payload:any; try{payload=verifyAccessToken(token);}catch{return res.status(401).json({error:'Sessão inválida.'});} const emp=await findEmpresa(empresaRef); if(!emp)return res.status(404).json({error:'Empresa não encontrada.'}); if(!isAdminUser({empresa_id:payload.empresa_id,role:payload.role})&&payload.empresa_id!==emp.id)return res.status(403).json({error:'Sem permissão para criar teste nesta empresa.'}); authorizedTest=true; }
     const result=await criarReview({name:req.body.name?String(req.body.name):undefined,comment:req.body.comment?String(req.body.comment):undefined,rating:Number(req.body.rating),empresa_id:req.body.empresa_id?String(req.body.empresa_id):undefined,empresa_ref:req.body.empresa_ref?String(req.body.empresa_ref):undefined,website:req.body.website!=null?String(req.body.website):undefined,is_test:authorizedTest,company_self:companySelf,client_whatsapp:req.body.client_whatsapp?String(req.body.client_whatsapp):req.body.whatsapp?String(req.body.whatsapp):undefined,locale:req.body.locale?String(req.body.locale):undefined,ip:clientIp(req as any)});
     res.status(201).json(result);
