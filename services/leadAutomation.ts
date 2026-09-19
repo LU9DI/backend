@@ -19,7 +19,7 @@ export type LeadQualification = {
 };
 
 function parseJson(text: string): any | null {
-  try { return JSON.parse(text.replace(/\`\`\`json|\`\`\`/g, '').trim()); } catch { return null; }
+  try { return JSON.parse(text.replace(/```json|```/g, '').trim()); } catch { return null; }
 }
 
 export async function qualifyLead(input: LeadInput): Promise<LeadQualification | null> {
