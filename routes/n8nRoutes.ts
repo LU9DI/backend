@@ -267,11 +267,26 @@ export function mountN8nRoutes(app: Express) {
       if (!lead) {
         const empresa = await db.get('SELECT id FROM empresas WHERE id = ?', [leadId]);
         if (empresa) {
-          lead = await db.get(
-            'SELECT id FROM leads WHERE raw_json LIKE ? ORDER BY criado_em DESC LIMIT 1',
-            ['%"empresa_id":"' + String(empresa.id).replace(/"/g, '') + '"%']
+          // Older trial leads keep the empresa relation inside raw_json.
+          // Parse the JSON instead of depending on exact serialization/spacing.
+          const candidates = await db.all(
+            'SELECT id, raw_json FROM leads WHERE raw_json LIKE ? ORDER BY criado_em DESC LIMIT 100',
+            ['%empresa_id%']
           );
-          if (lead) resolvedLeadId = String(lead.id);
+          for (const candidate of candidates || []) {
+            try {
+              const raw = typeof candidate?.raw_json === 'string'
+                ? JSON.parse(candidate.raw_json)
+                : candidate?.raw_json;
+              if (String(raw?.empresa_id || '').trim() === String(empresa.id)) {
+                lead = { id: candidate.id };
+                resolvedLeadId = String(candidate.id);
+                break;
+              }
+            } catch {
+              // Ignore malformed legacy raw_json rows and continue searching.
+            }
+          }
         }
       }
 
