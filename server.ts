@@ -179,7 +179,8 @@ let server: Server | null = null;
 let shuttingDown = false;
 
 
-async function runProductionE2eN8nTestOnBoot()  if (process.env.BACKFILL_SENTIMENT !== '1') return;
+async function runSentimentBackfillOnBoot() {
+  if (process.env.BACKFILL_SENTIMENT !== '1') return;
   try {
     const db = getDb();
     const missing = await countMissingSentiment(db);
