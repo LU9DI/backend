@@ -7,6 +7,7 @@ import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { getDb } from '../lib/db.js';
 import { enqueueRetry } from '../lib/retryQueue.js';
+import { buildFollowupDraft } from '../lib/followupTemplate.js';
 
 export async function ensureFollowupSchema(db: any = getDb()) {
   await db.exec(`
@@ -68,12 +69,7 @@ export function mountAdminFollowupRoutes(app: Express) {
     const leadId = `admin-test-${crypto.randomUUID()}`;
     const followupId = crypto.randomUUID();
     const company = String(req.body?.nome_empresa || 'Empresa de teste Filtra.AI').trim().slice(0, 120);
-    const draft = [
-      `Olá! Este é um teste controlado do fluxo de follow-up do Filtra.AI para ${company}.`,
-      '',
-      'Nenhum cliente real foi usado neste teste.',
-      `Gerado em: ${now}`,
-    ].join('\n');
+    const draft = buildFollowupDraft(company);
 
     await db.exec(`
       CREATE TABLE IF NOT EXISTS leads (
@@ -158,7 +154,7 @@ export function mountAdminFollowupRoutes(app: Express) {
       if (!phone) return res.status(400).json({ error: 'Lead sem telefone para o canal selecionado.' });
     }
 
-    const draft = String(req.body?.draft || followup.draft || '').trim();
+    const draft = buildFollowupDraft(String(followup.nome_empresa || 'sua empresa'));
     if (!draft) return res.status(400).json({ error: 'Rascunho vazio.' });
     const now = new Date().toISOString();
     await db.run(`
