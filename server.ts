@@ -335,7 +335,8 @@ async function main() {
   }
 
   await runSentimentBackfillOnBoot();
-  await runLgpdSweepOnBoot();\n  await runProductionE2eN8nTestOnBoot();
+  await runLgpdSweepOnBoot();
+  await runProductionE2eN8nTestOnBoot();
 
   mountTrialRoutes(app);
   mountAuthRoutes(app);
