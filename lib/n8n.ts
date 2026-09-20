@@ -58,10 +58,11 @@ export async function queueN8nEvent(
     ...payload,
   };
   const dedupeKey = options.dedupeKey || String(payload.dedupe_key || ('n8n:' + event + ':' + eventId));
+  const idempotencyKey = String(payload.idempotency_key || dedupeKey);
 
   return enqueueRetry({
     jobType: 'n8n_webhook',
-    payload: body,
+    payload: { ...body, idempotency_key: idempotencyKey },
     dedupeKey,
     delayMs: options.delayMs,
     maxAttempts: options.maxAttempts,
@@ -86,6 +87,8 @@ export async function sendN8nWebhook(
   };
   const secret = process.env.N8N_WEBHOOK_SECRET?.trim();
   if (secret) headers['X-Filtra-Secret'] = secret;
+  const idempotencyKey = String(payload.idempotency_key || payload.dedupe_key || payload.event_id || '');
+  if (idempotencyKey) headers['X-Idempotency-Key'] = idempotencyKey;
   if (process.env.N8N_API_KEY?.trim()) headers['X-N8N-API-KEY'] = process.env.N8N_API_KEY.trim();
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs());
@@ -137,6 +140,8 @@ export async function notifyN8nAsync(
   };
   const secret = process.env.N8N_WEBHOOK_SECRET?.trim();
   if (secret) headers['X-Filtra-Secret'] = secret;
+  const idempotencyKey = String(payload.idempotency_key || payload.dedupe_key || payload.event_id || '');
+  if (idempotencyKey) headers['X-Idempotency-Key'] = idempotencyKey;
 
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs());
