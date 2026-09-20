@@ -19,6 +19,7 @@ import {
   verifyInboundSecret,
 } from '../lib/n8n.js';
 import { ensureFollowupSchema } from './adminFollowupRoutes.js';
+import { buildFollowupDraft } from '../lib/followupTemplate.js';
 
 async function ensureN8nIdempotencySchema() {
   const db = getDb();
@@ -319,15 +320,10 @@ export function mountN8nRoutes(app: Express) {
           // O backend preserva a informação do lead mesmo quando nodes HTTP do n8n
           // substituem o $json original. O n8n pode enviar um draft próprio; se não
           // enviar, ou se vier com os placeholders antigos, geramos um rascunho fiel.
-          const suppliedDraft = String(body.draft || '').trim();
-          const score = Number(body.score ?? lead?.score ?? 0);
-          const qualification = String(body.qualification ?? lead?.qualification ?? 'avaliação').trim();
-          const reason = String(body.reason ?? lead?.ai_reason ?? '').trim();
+          // O texto enviado é fixo e centralizado no backend. O n8n pode carregar
+          // contexto e canal, mas não define a redação final do follow-up.
           const nome = String(body.nome_empresa ?? lead?.nome_empresa ?? 'sua empresa').trim();
-          const fallbackDraft = `Olá! Vi o interesse da ${nome} no Filtra.AI e preparei uma análise inicial. A qualificação automática ficou em ${qualification || 'avaliação'} (${Number.isFinite(score) ? score : 0}/100).${reason ? ` Motivo: ${reason}` : ''} Podemos mostrar como a plataforma pode ajudar a acompanhar e melhorar a reputação da empresa. Se fizer sentido, posso enviar os próximos detalhes.`;
-          const draft = suppliedDraft && !/avaliação \(0\/100\)/i.test(suppliedDraft)
-            ? suppliedDraft
-            : fallbackDraft;
+          const draft = buildFollowupDraft(nome);
 
           const existing = await db.get(
             `SELECT id FROM lead_followups
