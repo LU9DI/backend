@@ -81,7 +81,7 @@ export function mountTelegramRoutes(app: Express) {
     if (chatId === undefined || chatId === null) return res.json({ ok: true, ignored: true, reason: 'sem chat' });
 
     const text = String(message?.text || '').trim();
-    const match = text.match(/^\\/start(?:\\s+(.+))?$/i);
+    const match = text.match(/^\/start(?:\s+(.+))?$/i);
     if (!match) {
       await telegramApi('sendMessage', { chat_id: chatId, text: 'Olá! Para vincular este Telegram ao seu cadastro, use o link de conexão enviado pelo Filtra.AI.' }).catch(() => {});
       return res.json({ ok: true, linked: false });
