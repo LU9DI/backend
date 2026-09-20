@@ -12,7 +12,8 @@ import { normalizarWhatsapp } from '../lib/whatsapp.js';
 import { notificarTrialAtivado } from '../lib/notifications.js';
 import { setAuthCookie, signAccessToken } from '../lib/auth.js';
 import { canonicalTaxId, taxIdValido } from '../lib/cnpj.js';
-import { notifyN8n } from '../lib/n8n.js';
+import { notifyN8n, queueN8nEvent } from '../lib/n8n.js';
+import { qualifyLead } from './leadAutomation.js';
 import { hashIp } from '../lib/reviewFraud.js';
 
 const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
@@ -131,6 +132,59 @@ export async function ativarTrial(input: TrialInput, db: Database = getDb(), res
   try { token = signAccessToken(tokenPayload); if (res) { try { setAuthCookie(res, token); } catch (ce: any) { console.warn('[trial] cookie:', ce?.message || ce); } } } catch (e: any) { console.error('[trial] JWT:', e?.message || e); throw new TrialValidationError('Falha ao gerar token. Verifique JWT_SECRET no Render.'); }
 
   notificarTrialAtivado({ email, nomeEmpresa: nome, slug, empresaId: id, expiraEm, locale: input.locale }).catch((e) => console.warn('e-mail trial:', e?.message || e));
+  // Trial é também um lead comercial qualificado. O lead é persistido antes dos eventos
+  // para que a automação continue resiliente mesmo se n8n estiver dormindo.
+  try {
+    await db.exec(`CREATE TABLE IF NOT EXISTS leads (
+      id TEXT PRIMARY KEY,
+      nome_empresa TEXT,
+      email TEXT,
+      telefone TEXT,
+      fonte TEXT,
+      maps_url TEXT,
+      raw_json TEXT,
+      criado_em TIMESTAMPTZ NOT NULL
+    )`);
+    try { await db.exec('ALTER TABLE leads ADD COLUMN score INTEGER'); } catch {}
+    try { await db.exec('ALTER TABLE leads ADD COLUMN qualification TEXT'); } catch {}
+    try { await db.exec('ALTER TABLE leads ADD COLUMN ai_reason TEXT'); } catch {}
+    const existingLead = await db.get('SELECT id, score, qualification, ai_reason FROM leads WHERE lower(email) = lower(?) AND fonte = ? LIMIT 1', [email, 'trial']);
+    let leadId = String(existingLead?.id || '');
+    let score = Number(existingLead?.score || 0);
+    let qualification = String(existingLead?.qualification || '');
+    let reason = String(existingLead?.ai_reason || '');
+    if (!leadId) {
+      leadId = crypto.randomUUID();
+      await db.run(
+        `INSERT INTO leads (id, nome_empresa, email, telefone, fonte, maps_url, raw_json, criado_em)
+         VALUES (?, ?, ?, ?, 'trial', ?, ?, ?)`,
+        [leadId, nome, email, wpp || null, googleReviewUrl || null,
+          JSON.stringify({ empresa_id: id, slug, locale: input.locale || 'pt-BR' }).slice(0, 4000), new Date().toISOString()]
+      );
+      await queueN8nEvent('lead.captured', {
+        lead_id: leadId, nome_empresa: nome, email, telefone: wpp || '', fonte: 'trial', empresa_id: id,
+      }, { dedupeKey: 'n8n:lead.captured:' + leadId });
+      const q = await qualifyLead({ nome_empresa: nome, email, telefone: wpp || '', fonte: 'trial', maps_url: googleReviewUrl });
+      if (q) {
+        score = q.score; qualification = q.qualification; reason = q.reason;
+        await db.run('UPDATE leads SET score = ?, qualification = ?, ai_reason = ? WHERE id = ?', [score, qualification, reason, leadId]);
+        await queueN8nEvent('lead.qualified', {
+          lead_id: leadId, nome_empresa: nome, email, telefone: wpp || '', fonte: 'trial',
+          score, qualification, reason, empresa_id: id,
+        }, { dedupeKey: 'n8n:lead.qualified:' + leadId });
+        if (score >= 40) {
+          await queueN8nEvent('lead.followup.requested', {
+            lead_id: leadId, nome_empresa: nome, email, telefone: wpp || '', fonte: 'trial',
+            score, qualification, reason, action: 'create_crm_followup', empresa_id: id,
+          }, { dedupeKey: 'n8n:lead.followup.requested:' + leadId });
+        }
+      }
+    }
+  } catch (e: any) {
+    // Falha comercial não invalida a ativação do trial; fica registrada para observabilidade.
+    console.warn('[trial] lead automation:', e?.message || e);
+  }
+
   notifyN8n('trial.ativado', { empresa_id: id, slug, cnpj: taxId, tax_id: taxId, nome_empresa: nome, email, whatsapp: wpp, google_review_url: googleReviewUrl || null, locale: input.locale || 'pt-BR', expira_em: expiraEm, link_painel: `${APP_URL}/painel/${slug}`, link_avaliacao: `${APP_URL}/avaliacao/${slug}` });
 
   return { success: true, empresa_id: id, slug, link_acesso: `${APP_URL}/avaliacao/${slug}`, link_painel: `${APP_URL}/painel/${slug}`, expira_em: expiraEm, token, tokenPayload };
