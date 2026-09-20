@@ -18,6 +18,9 @@ export type N8nEvent =
   | 'lead.whatsapp'
   | 'lead.captured'
   | 'empresa.bloqueada'
+  | 'lead.qualified'
+  | 'lead.followup.requested'
+  | 'lead.crm_sync.requested'
   | 'ping';
 
 export function n8nConfigured(): boolean {
@@ -36,11 +39,11 @@ function timeoutMs(): number {
   return Math.max(2000, Number(process.env.N8N_TIMEOUT_MS || 8000));
 }
 
-export function notifyN8n(
+export async function sendN8nWebhook(
   event: N8nEvent | string,
   payload: Record<string, unknown> = {}
-): void {
-  if (!n8nConfigured()) return;
+): Promise<void> {
+  if (!n8nConfigured()) throw new Error('n8n não configurado');
 
   const url = n8nWebhookUrl();
   const body = {
@@ -49,38 +52,53 @@ export function notifyN8n(
     ts: new Date().toISOString(),
     ...payload,
   };
-
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'User-Agent': 'Filtra.IA/n8n',
   };
   const secret = process.env.N8N_WEBHOOK_SECRET?.trim();
   if (secret) headers['X-Filtra-Secret'] = secret;
-  if (process.env.N8N_API_KEY?.trim()) {
-    headers['X-N8N-API-KEY'] = process.env.N8N_API_KEY.trim();
-  }
+  if (process.env.N8N_API_KEY?.trim()) headers['X-N8N-API-KEY'] = process.env.N8N_API_KEY.trim();
 
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs());
+  try {
+    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ac.signal });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}: ${txt.slice(0, 200)}`);
+    }
+    console.log(`[n8n] ${event} ok`);
+  } finally {
+    clearTimeout(t);
+  }
+}
 
-  fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal: ac.signal,
-  })
-    .then(async (r) => {
-      if (!r.ok) {
-        const txt = await r.text().catch(() => '');
-        console.warn(`[n8n] ${event} HTTP ${r.status}`, txt.slice(0, 200));
-      } else {
-        console.log(`[n8n] ${event} ok`);
-      }
-    })
-    .catch((e: any) => {
-      console.warn(`[n8n] ${event} falhou:`, e?.message || e);
-    })
-    .finally(() => clearTimeout(t));
+export async function queueN8nEvent(
+  event: N8nEvent | string,
+  payload: Record<string, unknown> = {},
+  options: { dedupeKey?: string | null; delayMs?: number } = {}
+): Promise<number | null> {
+  if (!n8nConfigured()) return null;
+  const { enqueueRetry } = await import('./retryQueue.js');
+  const id = await enqueueRetry({
+    jobType: 'n8n_webhook',
+    payload: { event, payload },
+    dedupeKey: options.dedupeKey ?? null,
+    delayMs: options.delayMs,
+  });
+  console.log(`[n8n] ${event} queued job=${id}`);
+  return id;
+}
+
+export function notifyN8n(
+  event: N8nEvent | string,
+  payload: Record<string, unknown> = {}
+): void {
+  if (!n8nConfigured()) return;
+  queueN8nEvent(event, payload).catch((e) =>
+    console.warn(`[n8n] ${event} queue failed:`, e?.message || e)
+  );
 }
 
 export async function notifyN8nAsync(
@@ -104,7 +122,7 @@ export async function notifyN8nAsync(
   const secret = process.env.N8N_WEBHOOK_SECRET?.trim();
   if (secret) headers['X-Filtra-Secret'] = secret;
 
-  const ac = new AbortController();
+  const ac = new AbortController;
   const t = setTimeout(() => ac.abort(), timeoutMs());
 
   try {
