@@ -93,22 +93,41 @@ export async function enqueueRetry(
 
   // Use INSERT ... RETURNING so the queue works with both SQLite and
   // PostgreSQL. The PostgreSQL adapter intentionally does not expose lastID.
-  const inserted = await db.get<{ id: number | string }>(
-    `INSERT INTO retry_queue (job_type, payload, attempts, max_attempts, next_run_at, status, dedupe_key)
-     VALUES (?, ?, 0, ?, ?, 'pending', ?)
-     RETURNING id`,
-    [
-      opts.jobType,
-      JSON.stringify(opts.payload),
-      opts.maxAttempts ?? maxAttempts(),
-      next,
-      opts.dedupeKey || null,
-    ]
-  );
-  if (!inserted?.id) {
-    throw new Error('retry_queue: não foi possível obter o id do job inserido');
+  // The SELECT above is only an optimization: two concurrent requests can both
+  // observe no row and race on the unique partial index. Treat that constraint
+  // race as a successful dedupe instead of surfacing a 500/retry-loop.
+  try {
+    const inserted = await db.get<{ id: number | string }>(
+      `INSERT INTO retry_queue (job_type, payload, attempts, max_attempts, next_run_at, status, dedupe_key)
+       VALUES (?, ?, 0, ?, ?, 'pending', ?)
+       RETURNING id`,
+      [
+        opts.jobType,
+        JSON.stringify(opts.payload),
+        opts.maxAttempts ?? maxAttempts(),
+        next,
+        opts.dedupeKey || null,
+      ]
+    );
+    if (!inserted?.id) {
+      throw new Error('retry_queue: não foi possível obter o id do job inserido');
+    }
+    return Number(inserted.id);
+  } catch (error: any) {
+    if (opts.dedupeKey) {
+      const message = String(error?.message || error || '');
+      const isUniqueViolation =
+        /duplicate key|unique constraint|unique violation|already exists/i.test(message);
+      if (isUniqueViolation) {
+        const existing = await db.get(
+          `SELECT id FROM retry_queue WHERE dedupe_key = ? AND status = 'pending'`,
+          [opts.dedupeKey]
+        );
+        if (existing?.id) return Number(existing.id);
+      }
+    }
+    throw error;
   }
-  return Number(inserted.id);
 }
 
 type Handler = (payload: any, job: any) => Promise<void>;
