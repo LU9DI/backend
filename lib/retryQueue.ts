@@ -145,6 +145,28 @@ export async function processRetryQueue(
   await ensureRetryQueue(db);
   const agora = new Date().toISOString();
   const stale = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+  // A stale processing job can coexist with a pending job sharing the same
+  // dedupe key because the unique index only applies to pending rows. Resetting
+  // both to pending in one UPDATE would then violate idx_retry_dedupe. The
+  // pending job is the authoritative one, so retire the stale duplicate first.
+  await db.run(
+    `UPDATE retry_queue
+     SET status = 'dead',
+         processing_at = NULL,
+         last_error = 'stale processing duplicate superseded by pending retry',
+         updated_at = CURRENT_TIMESTAMP
+     WHERE status = 'processing'
+       AND processing_at IS NOT NULL
+       AND processing_at <= ?
+       AND dedupe_key IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM retry_queue p
+         WHERE p.dedupe_key = retry_queue.dedupe_key
+           AND p.status = 'pending'
+       )`,
+    [stale]
+  );
+
   await db.run(
     `UPDATE retry_queue SET status = 'pending', processing_at = NULL, updated_at = CURRENT_TIMESTAMP
      WHERE status = 'processing' AND processing_at IS NOT NULL AND processing_at <= ?`,
