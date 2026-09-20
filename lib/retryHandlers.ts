@@ -265,6 +265,23 @@ export function registerAllRetryHandlers() {
     if (!r.ok) throw new Error('enviarEmail retornou ok=false');
   });
 
+  async function sendTelegramBotMessage(chatId: string, message: string) {
+    const token = String(process.env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_TOKEN || '').trim();
+    if (!token) throw new Error('TELEGRAM_BOT_TOKEN não configurado');
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: message }),
+    });
+    const raw = await response.text().catch(() => '');
+    let data: any = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch {}
+    if (!response.ok || data.ok === false) {
+      throw new Error(`Telegram API HTTP ${response.status}: ${String(data?.description || raw).slice(0, 300)}`);
+    }
+    return { ok: true, mode: 'telegram', messageId: data?.result?.message_id ? String(data.result.message_id) : undefined };
+  }
+
   async function sendChannel(channel: string, row: any, message: string, idempotencyKey: string) {
     if (channel === 'email') {
       const email = String(row.email || '').trim().toLowerCase();
@@ -277,14 +294,16 @@ export function registerAllRetryHandlers() {
       });
     }
 
+    if (channel === 'telegram') {
+      const chatId = String(row.telegram_chat_id || '').trim();
+      if (!chatId) throw new Error('lead sem Telegram conectado; use /start <lead_id> no bot');
+      return sendTelegramBotMessage(chatId, message);
+    }
+
     const phone = String(row.telefone || '').trim();
     if (!phone) throw new Error(`lead sem telefone para ${channel}`);
 
-    const urlEnv = channel === 'whatsapp'
-      ? 'WHATSAPP_SEND_URL'
-      : channel === 'telegram'
-        ? 'TELEGRAM_SEND_URL'
-        : 'WECHAT_SEND_URL';
+    const urlEnv = channel === 'whatsapp' ? 'WHATSAPP_SEND_URL' : 'WECHAT_SEND_URL';
     const url = String(process.env[urlEnv] || '').trim();
     if (!url) throw new Error(`${urlEnv} não configurado`);
 
@@ -318,7 +337,7 @@ export function registerAllRetryHandlers() {
     if (!followupId) throw new Error('followup_id obrigatório');
 
     const row = await db.get(`
-      SELECT f.*, l.email, l.telefone, l.nome_empresa
+      SELECT f.*, l.email, l.telefone, l.telegram_chat_id, l.nome_empresa
       FROM lead_followups f
       LEFT JOIN leads l ON l.id = f.lead_id
       WHERE f.id = ?
