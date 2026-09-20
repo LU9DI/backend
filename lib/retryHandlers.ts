@@ -107,11 +107,6 @@ async function activateFromMp(
 }
 
 export function registerAllRetryHandlers() {
-  registerRetryHandler('n8n_webhook', async (payload) => {
-    const event = String(payload?.event || '');
-    if (!event) throw new Error('n8n_webhook: evento ausente');
-    await sendN8nWebhook(event, (payload?.payload || {}) as Record<string, unknown>);
-  });
   registerRetryHandler('paypal_webhook', async (payload) => {
     const eventType = String(payload.event_type || '');
     const resource = payload.resource || {};
@@ -249,6 +244,13 @@ export function registerAllRetryHandlers() {
     }
   });
 
+  registerRetryHandler('n8n_webhook', async (payload) => {
+    const event = String(payload.event || '').trim();
+    if (!event) throw new Error('n8n_webhook: event obrigatório');
+    const ok = await sendN8nWebhook(event, payload);
+    if (!ok) throw new Error('n8n_webhook: webhook não aceitou o evento');
+  });
+
   registerRetryHandler('email', async (payload) => {
     const to = String(payload.to || '');
     const subject = String(payload.subject || '');
@@ -261,6 +263,54 @@ export function registerAllRetryHandlers() {
       html: payload.html ? String(payload.html) : undefined,
     });
     if (!r.ok) throw new Error('enviarEmail retornou ok=false');
+  });
+
+  registerRetryHandler('followup_email', async (payload) => {
+    const db = getDb();
+    const followupId = String(payload.followup_id || '');
+    if (!followupId) throw new Error('followup_id obrigatório');
+
+    const row = await db.get(`
+      SELECT f.*, l.email, l.nome_empresa
+      FROM lead_followups f
+      LEFT JOIN leads l ON l.id = f.lead_id
+      WHERE f.id = ?
+    `, [followupId]);
+
+    if (!row) throw new Error('follow-up não encontrado');
+    if (row.status === 'sent') return;
+    if (!['approved', 'sending', 'failed'].includes(String(row.status))) {
+      throw new Error(`follow-up não autorizado: ${row.status}`);
+    }
+
+    const email = String(row.email || '').trim().toLowerCase();
+    if (!email || !email.includes('@')) throw new Error('lead sem e-mail válido');
+
+    await db.run(
+      `UPDATE lead_followups SET status = 'sending', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('approved','sending')`,
+      [followupId]
+    );
+
+    const result = await enviarEmail({
+      to: email,
+      subject: `Filtra.AI — acompanhamento inicial`,
+      text: String(row.draft || ''),
+    });
+
+    if (!result.ok) {
+      await db.run(
+        `UPDATE lead_followups SET status = 'failed', last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [String(result.error || 'falha no envio').slice(0, 500), followupId]
+      );
+      throw new Error(result.error || 'falha no envio');
+    }
+
+    await db.run(
+      `UPDATE lead_followups
+       SET status = 'sent', sent_at = CURRENT_TIMESTAMP, message_id = ?, last_error = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [result.messageId || null, followupId]
+    );
   });
 
   registerRetryHandler('generic', async (payload) => {
