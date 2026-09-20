@@ -214,7 +214,12 @@ async function runProductionE2eN8nTestOnBoot() {
       reason: 'Production E2E validation',
       action: 'create_crm_followup',
     }, { dedupeKey: 'e2e:n8n:lead.followup.requested' });
-    console.log(`🧪 E2E n8n queued: lead.followup.requested lead_id=${leadId}`);\n    const delivered = await sendN8nWebhook('lead.followup.requested', {\n      lead_id: leadId, nome_empresa: 'Filtra.AI E2E Test', email, telefone: '', fonte: 'e2e',\n      score: 90, qualification: 'qualified', reason: 'Production E2E validation', action: 'create_crm_followup',\n    });\n    console.log(`🧪 E2E n8n direct delivery: ${delivered ? 'OK' : 'FAIL'}`);
+    console.log(`🧪 E2E n8n queued: lead.followup.requested lead_id=${leadId}`);
+    const delivered = await sendN8nWebhook('lead.followup.requested', {
+      lead_id: leadId, nome_empresa: 'Filtra.AI E2E Test', email, telefone: '', fonte: 'e2e',
+      score: 90, qualification: 'qualified', reason: 'Production E2E validation', action: 'create_crm_followup',
+    });
+    console.log(`🧪 E2E n8n direct delivery: ${delivered ? 'OK' : 'FAIL'}`);
   } catch (e: any) {
     console.error('🧪 E2E n8n test failed:', e?.message || e);
   }
