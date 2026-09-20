@@ -61,7 +61,7 @@ import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
 import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
-import { n8nConfigured, queueN8nEvent, sendN8nWebhook } from './lib/n8n.js';
+import { n8nConfigured, n8nWebhookUrl, queueN8nEvent, sendN8nWebhook } from './lib/n8n.js';
 import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
 import { ensureReportPdfSchema } from './lib/reportPdfStore.js';
 import {
@@ -220,6 +220,10 @@ async function runProductionE2eN8nTestOnBoot() {
       score: 90, qualification: 'qualified', reason: 'Production E2E validation', action: 'create_crm_followup',
     });
     console.log(`🧪 E2E n8n direct delivery: ${delivered ? 'OK' : 'FAIL'}`);
+    if (delivered) {
+      const response = await fetch(n8nWebhookUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': 'Filtra.IA/E2E', ...(process.env.N8N_WEBHOOK_SECRET?.trim() ? { 'X-Filtra-Secret': process.env.N8N_WEBHOOK_SECRET.trim() } : {}) }, body: JSON.stringify({ event:'lead.followup.requested', source:'filtra-ia', lead_id:leadId, nome_empresa:'Filtra.AI E2E Test', email, telefone:'', fonte:'e2e', score:90, qualification:'qualified', reason:'Production E2E validation', action:'create_crm_followup' }) });
+      console.log(`🧪 E2E n8n response: HTTP ${response.status} ${String(await response.text()).slice(0,1000)}`);
+    }
   } catch (e: any) {
     console.error('🧪 E2E n8n test failed:', e?.message || e);
   }
