@@ -267,7 +267,7 @@ export function mountN8nRoutes(app: Express) {
         await db.run('UPDATE leads SET crm_status = ?, crm_id = COALESCE(NULLIF(?, \'\'), crm_id) WHERE id = ?', [status === 'success' ? 'synced' : status, crmId, leadId]);
       } else {
         const followupStatus = status === 'success' ? 'created' : status;
-        await db.run('UPDATE leads SET followup_status = ? WHERE id = ?', [followupStatus, leadId]);
+        await db.run('UPDATE leads SET followup_status = ? WHERE id = ?', [followupStatus, resolvedLeadId]);
 
         // n8n gera o rascunho; o backend passa a ser a fonte de verdade
         // para aprovação e histórico. Nunca marca como aprovado aqui.
@@ -276,7 +276,7 @@ export function mountN8nRoutes(app: Express) {
           const existing = await db.get(
             `SELECT id FROM lead_followups
              WHERE lead_id = ? AND status IN ('pending','approved','sending')`
-            , [leadId]
+            , [resolvedLeadId]
           );
           if (!existing) {
             await db.run(
@@ -285,14 +285,14 @@ export function mountN8nRoutes(app: Express) {
                VALUES (?, ?, 'email', ?, 'pending', 1)`,
               [
                 crypto.randomUUID(),
-                leadId,
+                resolvedLeadId,
                 String(body.draft).trim().slice(0, 10000),
               ]
             );
           }
         }
       }
-      res.json({ success: true, lead_id: leadId, action, status });
+      res.json({ success: true, lead_id: resolvedLeadId, requested_lead_id: leadId, action, status });
     })
   );
 
