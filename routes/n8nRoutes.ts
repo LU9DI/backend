@@ -305,10 +305,30 @@ export function mountN8nRoutes(app: Express) {
         const followupStatus = status === 'success' ? 'created' : status;
         await db.run('UPDATE leads SET followup_status = ? WHERE id = ?', [followupStatus, resolvedLeadId]);
 
-        // n8n gera o rascunho; o backend passa a ser a fonte de verdade
-        // para aprovação e histórico. Nunca marca como aprovado aqui.
-        if (status === 'pending' && String(body.draft || '').trim()) {
+        if (status === 'pending') {
           await ensureFollowupSchema(db);
+          const lead = await db.get(
+            'SELECT nome_empresa, email, telefone, score, qualification, ai_reason FROM leads WHERE id = ?',
+            [resolvedLeadId]
+          );
+          const requestedChannel = String(body.channel || body.preferred_channel || '').trim().toLowerCase();
+          const channel = ['email', 'whatsapp', 'telegram', 'wechat'].includes(requestedChannel)
+            ? requestedChannel
+            : 'email';
+
+          // O backend preserva a informação do lead mesmo quando nodes HTTP do n8n
+          // substituem o $json original. O n8n pode enviar um draft próprio; se não
+          // enviar, ou se vier com os placeholders antigos, geramos um rascunho fiel.
+          const suppliedDraft = String(body.draft || '').trim();
+          const score = Number(body.score ?? lead?.score ?? 0);
+          const qualification = String(body.qualification ?? lead?.qualification ?? 'avaliação').trim();
+          const reason = String(body.reason ?? lead?.ai_reason ?? '').trim();
+          const nome = String(body.nome_empresa ?? lead?.nome_empresa ?? 'sua empresa').trim();
+          const fallbackDraft = `Olá! Vi o interesse da ${nome} no Filtra.AI e preparei uma análise inicial. A qualificação automática ficou em ${qualification || 'avaliação'} (${Number.isFinite(score) ? score : 0}/100).${reason ? ` Motivo: ${reason}` : ''} Podemos mostrar como a plataforma pode ajudar a acompanhar e melhorar a reputação da empresa. Se fizer sentido, posso enviar os próximos detalhes.`;
+          const draft = suppliedDraft && !/avaliação \(0\/100\)/i.test(suppliedDraft)
+            ? suppliedDraft
+            : fallbackDraft;
+
           const existing = await db.get(
             `SELECT id FROM lead_followups
              WHERE lead_id = ? AND status IN ('pending','approved','sending')`,
@@ -318,11 +338,12 @@ export function mountN8nRoutes(app: Express) {
             await db.run(
               `INSERT INTO lead_followups
                (id, lead_id, channel, draft, status, approval_required)
-               VALUES (?, ?, 'email', ?, 'pending', 1)`,
+               VALUES (?, ?, ?, ?, 'pending', 1)`,
               [
                 crypto.randomUUID(),
                 resolvedLeadId,
-                String(body.draft).trim().slice(0, 10000),
+                channel,
+                draft.slice(0, 10000),
               ]
             );
           }
