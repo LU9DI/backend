@@ -19,6 +19,7 @@ import { resolvePlano } from '../stripeBilling.js';
 import { activatePlan, blockEmpresa } from '../services/billingService.js';
 import { enviarEmail } from './mailer.js';
 import { logWebhookEvent } from './opsLog.js';
+import { sendN8nWebhook } from './n8n.js';
 
 async function activatePayPal(
   empresaId: string,
@@ -106,6 +107,11 @@ async function activateFromMp(
 }
 
 export function registerAllRetryHandlers() {
+  registerRetryHandler('n8n_webhook', async (payload) => {
+    const event = String(payload?.event || '');
+    if (!event) throw new Error('n8n_webhook: evento ausente');
+    await sendN8nWebhook(event, (payload?.payload || {}) as Record<string, unknown>);
+  });
   registerRetryHandler('paypal_webhook', async (payload) => {
     const eventType = String(payload.event_type || '');
     const resource = payload.resource || {};
