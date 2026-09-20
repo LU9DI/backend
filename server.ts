@@ -61,7 +61,7 @@ import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
 import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
-import { n8nConfigured, queueN8nEvent } from './lib/n8n.js';
+import { n8nConfigured, queueN8nEvent, sendN8nWebhook } from './lib/n8n.js';
 import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
 import { ensureReportPdfSchema } from './lib/reportPdfStore.js';
 import {
@@ -214,7 +214,7 @@ async function runProductionE2eN8nTestOnBoot() {
       reason: 'Production E2E validation',
       action: 'create_crm_followup',
     }, { dedupeKey: 'e2e:n8n:lead.followup.requested' });
-    console.log(`🧪 E2E n8n queued: lead.followup.requested lead_id=${leadId}`);
+    console.log(`🧪 E2E n8n queued: lead.followup.requested lead_id=${leadId}`);\n    const delivered = await sendN8nWebhook('lead.followup.requested', {\n      lead_id: leadId, nome_empresa: 'Filtra.AI E2E Test', email, telefone: '', fonte: 'e2e',\n      score: 90, qualification: 'qualified', reason: 'Production E2E validation', action: 'create_crm_followup',\n    });\n    console.log(`🧪 E2E n8n direct delivery: ${delivered ? 'OK' : 'FAIL'}`);
   } catch (e: any) {
     console.error('🧪 E2E n8n test failed:', e?.message || e);
   }
