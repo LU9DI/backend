@@ -61,7 +61,7 @@ import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
 import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
-import { n8nConfigured, n8nWebhookUrl, queueN8nEvent, sendN8nWebhook } from './lib/n8n.js';
+import { n8nConfigured } from './lib/n8n.js';
 import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
 import { ensureReportPdfSchema } from './lib/reportPdfStore.js';
 import {
@@ -179,57 +179,7 @@ let server: Server | null = null;
 let shuttingDown = false;
 
 
-async function runProductionE2eN8nTestOnBoot() {
-  if (process.env.E2E_N8N_TEST !== '1') return;
-  try {
-    const db = getDb();
-    await db.exec(`CREATE TABLE IF NOT EXISTS leads (
-      id TEXT PRIMARY KEY,
-      nome_empresa TEXT,
-      email TEXT,
-      telefone TEXT,
-      fonte TEXT,
-      maps_url TEXT,
-      raw_json TEXT,
-      criado_em TIMESTAMPTZ NOT NULL
-    )`);
-    try { await db.exec('ALTER TABLE leads ADD COLUMN score INTEGER'); } catch {}
-    try { await db.exec('ALTER TABLE leads ADD COLUMN qualification TEXT'); } catch {}
-    try { await db.exec('ALTER TABLE leads ADD COLUMN ai_reason TEXT'); } catch {}
-    const email = 'e2e-n8n-test@filtraai.internal';
-    let lead = await db.get('SELECT id FROM leads WHERE lower(email)=lower(?) AND fonte=? LIMIT 1', [email, 'e2e']);
-    const leadId = String(lead?.id || crypto.randomUUID());
-    if (!lead?.id) {
-      await db.run(`INSERT INTO leads (id,nome_empresa,email,telefone,fonte,maps_url,raw_json,criado_em)
-        VALUES (?, ?, ?, ?, 'e2e', ?, ?, ?)`, [leadId, 'Filtra.AI E2E Test', email, '', '', JSON.stringify({ test: true }), new Date().toISOString()]);
-    }
-    await queueN8nEvent('lead.followup.requested', {
-      lead_id: leadId,
-      nome_empresa: 'Filtra.AI E2E Test',
-      email,
-      telefone: '',
-      fonte: 'e2e',
-      score: 90,
-      qualification: 'qualified',
-      reason: 'Production E2E validation',
-      action: 'create_crm_followup',
-    }, { dedupeKey: 'e2e:n8n:lead.followup.requested' });
-    console.log(`🧪 E2E n8n queued: lead.followup.requested lead_id=${leadId}`);
-    const delivered = await sendN8nWebhook('lead.followup.requested', {
-      lead_id: leadId, nome_empresa: 'Filtra.AI E2E Test', email, telefone: '', fonte: 'e2e',
-      score: 90, qualification: 'qualified', reason: 'Production E2E validation', action: 'create_crm_followup',
-    });
-    console.log(`🧪 E2E n8n direct delivery: ${delivered ? 'OK' : 'FAIL'}`);
-    if (delivered) {
-      const response = await fetch(n8nWebhookUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': 'Filtra.IA/E2E', ...(process.env.N8N_WEBHOOK_SECRET?.trim() ? { 'X-Filtra-Secret': process.env.N8N_WEBHOOK_SECRET.trim() } : {}) }, body: JSON.stringify({ event:'lead.followup.requested', source:'filtra-ia', lead_id:leadId, nome_empresa:'Filtra.AI E2E Test', email, telefone:'', fonte:'e2e', score:90, qualification:'qualified', reason:'Production E2E validation', action:'create_crm_followup' }) });
-      console.log(`🧪 E2E n8n response: HTTP ${response.status} ${String(await response.text()).slice(0,1000)}`);
-    }
-  } catch (e: any) {
-    console.error('🧪 E2E n8n test failed:', e?.message || e);
-  }
-}
-async function runSentimentBackfillOnBoot() {
-  if (process.env.BACKFILL_SENTIMENT !== '1') return;
+async function runProductionE2eN8nTestOnBoot()  if (process.env.BACKFILL_SENTIMENT !== '1') return;
   try {
     const db = getDb();
     const missing = await countMissingSentiment(db);
@@ -345,7 +295,6 @@ async function main() {
 
   await runSentimentBackfillOnBoot();
   await runLgpdSweepOnBoot();
-  await runProductionE2eN8nTestOnBoot();
 
   mountTrialRoutes(app);
   mountAuthRoutes(app);
