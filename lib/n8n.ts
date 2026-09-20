@@ -49,6 +49,21 @@ export async function queueN8nEvent(
 ): Promise<number | null> {
   if (!n8nConfigured()) return null;
 
+  if (event === 'lead.followup.requested') {
+    const requestedChannel = String(payload.channel || payload.preferred_channel || '').trim().toLowerCase();
+    if (requestedChannel && requestedChannel !== 'email') {
+      const channelUrlEnv: Record<string, string> = {
+        whatsapp: 'WHATSAPP_SEND_URL',
+        telegram: 'TELEGRAM_SEND_URL',
+        wechat: 'WECHAT_SEND_URL',
+      };
+      const urlEnv = channelUrlEnv[requestedChannel];
+      if (!urlEnv || !String(process.env[urlEnv] || '').trim()) {
+        throw new Error('Canal de follow-up não operacional: ' + requestedChannel);
+      }
+    }
+  }
+
   const eventId = String(payload.event_id || crypto.randomUUID());
   const body = {
     event,
