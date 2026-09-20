@@ -257,17 +257,38 @@ export function mountN8nRoutes(app: Express) {
       if (!leadId || !['hubspot_sync', 'followup'].includes(action) || !['success', 'failed', 'pending'].includes(status)) {
         return res.status(400).json({ error: 'lead_id, action e status inválidos.' });
       }
+
       const db = getDb();
-      const lead = await db.get('SELECT id FROM leads WHERE id = ?', [leadId]);
-      if (!lead) return res.status(404).json({ error: 'Lead não encontrado.' });
+      let resolvedLeadId = leadId;
+      let lead = await db.get('SELECT id FROM leads WHERE id = ?', [leadId]);
+
+      // Compatibility: older n8n callers may send an empresa id in lead_id.
+      // Canonical behavior remains to use the real lead UUID whenever supplied.
+      if (!lead) {
+        const empresa = await db.get('SELECT id FROM empresas WHERE id = ?', [leadId]);
+        if (empresa) {
+          lead = await db.get(
+            'SELECT id FROM leads WHERE raw_json LIKE ? ORDER BY criado_em DESC LIMIT 1',
+            ['%"empresa_id":"' + String(empresa.id).replace(/"/g, '') + '"%']
+          );
+          if (lead) resolvedLeadId = String(lead.id);
+        }
+      }
+
+      if (!lead) return res.status(404).json({ error: 'Lead não encontrado.', lead_id: leadId });
+
       try { await db.exec('ALTER TABLE leads ADD COLUMN crm_status TEXT DEFAULT \'pending\''); } catch {}
       try { await db.exec('ALTER TABLE leads ADD COLUMN crm_id TEXT'); } catch {}
       try { await db.exec('ALTER TABLE leads ADD COLUMN followup_status TEXT DEFAULT \'pending\''); } catch {}
+
       if (action === 'hubspot_sync') {
-        await db.run('UPDATE leads SET crm_status = ?, crm_id = COALESCE(NULLIF(?, \'\'), crm_id) WHERE id = ?', [status === 'success' ? 'synced' : status, crmId, leadId]);
+        await db.run(
+          'UPDATE leads SET crm_status = ?, crm_id = COALESCE(NULLIF(?, \'\'), crm_id) WHERE id = ?',
+          [status === 'success' ? 'synced' : status, crmId, resolvedLeadId]
+        );
       } else {
         const followupStatus = status === 'success' ? 'created' : status;
-        await db.run('UPDATE leads SET followup_status = ? WHERE id = ?', [followupStatus, leadId]);
+        await db.run('UPDATE leads SET followup_status = ? WHERE id = ?', [followupStatus, resolvedLeadId]);
 
         // n8n gera o rascunho; o backend passa a ser a fonte de verdade
         // para aprovação e histórico. Nunca marca como aprovado aqui.
@@ -275,8 +296,8 @@ export function mountN8nRoutes(app: Express) {
           await ensureFollowupSchema(db);
           const existing = await db.get(
             `SELECT id FROM lead_followups
-             WHERE lead_id = ? AND status IN ('pending','approved','sending')`
-            , [leadId]
+             WHERE lead_id = ? AND status IN ('pending','approved','sending')`,
+            [resolvedLeadId]
           );
           if (!existing) {
             await db.run(
@@ -285,14 +306,14 @@ export function mountN8nRoutes(app: Express) {
                VALUES (?, ?, 'email', ?, 'pending', 1)`,
               [
                 crypto.randomUUID(),
-                leadId,
+                resolvedLeadId,
                 String(body.draft).trim().slice(0, 10000),
               ]
             );
           }
         }
       }
-      res.json({ success: true, lead_id: leadId, action, status });
+      res.json({ success: true, lead_id: resolvedLeadId, requested_lead_id: leadId, action, status });
     })
   );
 
