@@ -132,7 +132,7 @@ export function mountAdminFollowupRoutes(app: Express) {
     await ensureFollowupSchema(db);
     const id = String(req.params.id);
     const followup = await db.get(`
-      SELECT f.*, l.email, l.nome_empresa
+      SELECT f.*, l.email, l.telefone, l.telegram_chat_id, l.nome_empresa
       FROM lead_followups f
       LEFT JOIN leads l ON l.id = f.lead_id
       WHERE f.id = ?
@@ -149,7 +149,11 @@ export function mountAdminFollowupRoutes(app: Express) {
       const email = String(followup.email || '').trim().toLowerCase();
       if (!email || !email.includes('@')) return res.status(400).json({ error: 'Lead sem e-mail válido.' });
     }
-    if (['whatsapp', 'telegram', 'wechat'].includes(channel)) {
+    if (channel === 'telegram') {
+      const chatId = String(followup.telegram_chat_id || '').trim();
+      if (!chatId) return res.status(400).json({ error: 'Lead sem Telegram conectado. Inicie o bot com /start <lead_id> antes de aprovar.' });
+    }
+    if (['whatsapp', 'wechat'].includes(channel)) {
       const phone = String(followup.telefone || '').trim();
       if (!phone) return res.status(400).json({ error: 'Lead sem telefone para o canal selecionado.' });
     }
