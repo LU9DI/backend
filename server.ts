@@ -192,9 +192,7 @@ async function runProductionE2eN8nTestOnBoot() {
     await db.exec(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS qualification TEXT`);
     await db.exec(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS ai_reason TEXT`);
     const leadId = 'e2e-n8n-test-lead';
-    await db.query(`INSERT INTO leads (id,nome,email,fonte,raw_json) VALUES ($1,$2,$3,'e2e',$4)
-      ON CONFLICT (id) DO UPDATE SET updated_at=NOW()`,
-      [leadId,'Filtra.AI E2E Test','e2e-n8n-test@filtraai.internal',JSON.stringify({e2e:true})]);
+    await db.exec(`INSERT INTO leads (id,nome,email,fonte,raw_json) VALUES ('e2e-n8n-test-lead','Filtra.AI E2E Test','e2e-n8n-test@filtraai.internal','e2e','{"e2e":true}') ON CONFLICT (id) DO UPDATE SET updated_at=NOW()`);
     const payload = { event:'lead.followup.requested', lead_id:leadId, nome:'Filtra.AI E2E Test', email:'e2e-n8n-test@filtraai.internal', score:80, action:'create_crm_followup', e2e:true };
     await queueN8nEvent('lead.followup.requested',payload,{dedupeKey:'e2e:n8n:lead.followup.requested'});
     const sent = await sendN8nWebhook('lead.followup.requested',payload);
