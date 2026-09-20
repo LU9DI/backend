@@ -61,7 +61,7 @@ import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
 import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
-import { n8nConfigured, n8nWebhookUrl, queueN8nEvent, sendN8nWebhook } from './lib/n8n.js';
+import { n8nConfigured } from './lib/n8n.js';
 import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
 import { ensureReportPdfSchema } from './lib/reportPdfStore.js';
 import {
@@ -180,55 +180,6 @@ let shuttingDown = false;
 
 
 
-async function runProductionE2eN8nTestOnBoot() {
-  if (process.env.E2E_N8N_TEST !== '1') return;
-  try {
-    const db = getDb();
-    const leadId = 'e2e-n8n-test-lead';
-    await db.run(
-      `INSERT INTO leads (id, nome_empresa, email, telefone, fonte, maps_url, raw_json, criado_em)
-       VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-       ON CONFLICT(id) DO NOTHING`,
-      [
-        leadId,
-        'Filtra.AI E2E Test',
-        'e2e-n8n-test@filtraai.internal',
-        '',
-        'e2e',
-        '',
-        JSON.stringify({ e2e: true }),
-      ]
-    );
-    const payload = {
-      event_id: 'e2e:n8n:lead.followup.requested',
-      event: 'lead.followup.requested',
-      lead_id: leadId,
-      nome_empresa: 'Filtra.AI E2E Test',
-      email: 'e2e-n8n-test@filtraai.internal',
-      score: 80,
-      qualification: 'qualified',
-      action: 'create_crm_followup',
-    };
-    await queueN8nEvent('lead.followup.requested', payload, {
-      dedupeKey: 'e2e:n8n:lead.followup.requested',
-    });
-    const ok = await sendN8nWebhook('lead.followup.requested', payload);
-    console.log(`🧪 E2E n8n direct delivery: ${ok ? 'OK' : 'FAILED'} url=${n8nWebhookUrl() || 'OFF'}`);
-    const url = n8nWebhookUrl();
-    if (url) {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-filtra-secret': process.env.N8N_WEBHOOK_SECRET || process.env.N8N_INBOUND_SECRET || '' },
-        body: JSON.stringify(payload),
-      });
-      const body = await res.text();
-      console.log(`🧪 E2E n8n response: HTTP ${res.status} ${body.slice(0, 2000)}`);
-    }
-  } catch (e: any) {
-    console.error('🧪 E2E n8n FAILED:', e?.stack || e?.message || e);
-  }
-}
-
 async function runSentimentBackfillOnBoot() {
   if (process.env.BACKFILL_SENTIMENT !== '1') return;
   try {
@@ -344,7 +295,6 @@ async function main() {
     console.warn('treatment columns:', e);
   }
 
-  await runProductionE2eN8nTestOnBoot();
   await runSentimentBackfillOnBoot();
   await runLgpdSweepOnBoot();
 
