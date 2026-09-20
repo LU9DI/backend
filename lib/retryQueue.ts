@@ -120,7 +120,7 @@ export async function enqueueRetry(
         /duplicate key|unique constraint|unique violation|already exists/i.test(message);
       if (isUniqueViolation) {
         const existing = await db.get(
-          `SELECT id FROM retry_queue WHERE dedupe_key = ? AND status = 'pending'`,
+          `SELECT id FROM retry_queue WHERE dedupe_key = ? AND status IN ('pending', 'processing')`,
           [opts.dedupeKey]
         );
         if (existing?.id) return Number(existing.id);
