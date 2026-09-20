@@ -1,6 +1,5 @@
 /**
  * Integração n8n — saída (API → n8n) e helpers de inbound.
- * Eventos assíncronos são persistidos na retry_queue antes do envio.
  *
  * Env:
  *   N8N_WEBHOOK_URL=https://seu-n8n.../webhook/filtra-ia
@@ -10,6 +9,9 @@
  *   N8N_TIMEOUT_MS=8000
  */
 
+import crypto from 'crypto';
+import { enqueueRetry } from './retryQueue.js';
+
 export type N8nEvent =
   | 'trial.ativado'
   | 'payment.confirmado'
@@ -18,10 +20,10 @@ export type N8nEvent =
   | 'review.nova'
   | 'lead.whatsapp'
   | 'lead.captured'
-  | 'empresa.bloqueada'
   | 'lead.qualified'
   | 'lead.followup.requested'
   | 'lead.crm_sync.requested'
+  | 'empresa.bloqueada'
   | 'ping';
 
 export function n8nConfigured(): boolean {
@@ -40,12 +42,37 @@ function timeoutMs(): number {
   return Math.max(2000, Number(process.env.N8N_TIMEOUT_MS || 8000));
 }
 
+export async function queueN8nEvent(
+  event: N8nEvent | string,
+  payload: Record<string, unknown> = {},
+  options: { dedupeKey?: string | null; delayMs?: number; maxAttempts?: number } = {}
+): Promise<number | null> {
+  if (!n8nConfigured()) return null;
+
+  const eventId = String(payload.event_id || crypto.randomUUID());
+  const body = {
+    event,
+    source: 'filtra-ia',
+    event_id: eventId,
+    ts: new Date().toISOString(),
+    ...payload,
+  };
+  const dedupeKey = options.dedupeKey || String(payload.dedupe_key || ('n8n:' + event + ':' + eventId));
+
+  return enqueueRetry({
+    jobType: 'n8n_webhook',
+    payload: body,
+    dedupeKey,
+    delayMs: options.delayMs,
+    maxAttempts: options.maxAttempts,
+  });
+}
+
 export async function sendN8nWebhook(
   event: N8nEvent | string,
   payload: Record<string, unknown> = {}
-): Promise<void> {
-  if (!n8nConfigured()) throw new Error('n8n não configurado');
-
+): Promise<boolean> {
+  if (!n8nConfigured()) return false;
   const url = n8nWebhookUrl();
   const body = {
     event,
@@ -60,36 +87,22 @@ export async function sendN8nWebhook(
   const secret = process.env.N8N_WEBHOOK_SECRET?.trim();
   if (secret) headers['X-Filtra-Secret'] = secret;
   if (process.env.N8N_API_KEY?.trim()) headers['X-N8N-API-KEY'] = process.env.N8N_API_KEY.trim();
-
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs());
   try {
     const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ac.signal });
     if (!res.ok) {
       const txt = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status}: ${txt.slice(0, 200)}`);
+      console.warn('[n8n] ' + event + ' HTTP ' + res.status + ': ' + txt.slice(0, 200));
+      return false;
     }
-    console.log(`[n8n] ${event} ok`);
+    return true;
+  } catch (e: any) {
+    console.warn('[n8n] ' + event + ' fail: ' + (e?.message || e));
+    return false;
   } finally {
     clearTimeout(t);
   }
-}
-
-export async function queueN8nEvent(
-  event: N8nEvent | string,
-  payload: Record<string, unknown> = {},
-  options: { dedupeKey?: string | null; delayMs?: number } = {}
-): Promise<number | null> {
-  if (!n8nConfigured()) return null;
-  const { enqueueRetry } = await import('./retryQueue.js');
-  const id = await enqueueRetry({
-    jobType: 'n8n_webhook',
-    payload: { event, payload },
-    dedupeKey: options.dedupeKey ?? null,
-    delayMs: options.delayMs,
-  });
-  console.log(`[n8n] ${event} queued job=${id}`);
-  return id;
 }
 
 export function notifyN8n(
@@ -97,9 +110,11 @@ export function notifyN8n(
   payload: Record<string, unknown> = {}
 ): void {
   if (!n8nConfigured()) return;
-  queueN8nEvent(event, payload).catch((e) =>
-    console.warn(`[n8n] ${event} queue failed:`, e?.message || e)
-  );
+  void queueN8nEvent(event, payload).then((id) => {
+    if (id != null) console.log('[n8n] ' + event + ' enfileirado #' + id);
+  }).catch((e: any) => {
+    console.error('[n8n] ' + event + ' não pôde ser enfileirado:', e?.message || e);
+  });
 }
 
 export async function notifyN8nAsync(
@@ -123,7 +138,7 @@ export async function notifyN8nAsync(
   const secret = process.env.N8N_WEBHOOK_SECRET?.trim();
   if (secret) headers['X-Filtra-Secret'] = secret;
 
-  const ac = new AbortController;
+  const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs());
 
   try {
