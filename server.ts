@@ -39,6 +39,7 @@ import { mountPublicPlanosRoutes } from './routes/publicPlanosRoutes.js';
 import { mountAuditRoutes } from './routes/auditRoutes.js';
 import { mountSmtpTestRoutes } from './routes/smtpTestRoutes.js';
 import { mountN8nRoutes } from './routes/n8nRoutes.js';
+import { mountTelegramRoutes } from './routes/telegramRoutes.js';
 import { mountPasswordResetRoutes } from './passwordResetRoutes.js';
 import { mountAdminLoginRoute } from './adminLoginRoute.js';
 import { mountAdminPasswordResetRoutes } from './adminPasswordReset.js';
@@ -322,6 +323,7 @@ async function main() {
   mountAuditRoutes(app);
   mountSmtpTestRoutes(app);
   mountN8nRoutes(app);
+  mountTelegramRoutes(app);
   mountFiscalRoutes(app);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
