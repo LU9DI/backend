@@ -288,9 +288,9 @@ export function registerAllRetryHandlers() {
     const url = String(process.env[urlEnv] || '').trim();
     if (!url) throw new Error(`${urlEnv} não configurado`);
 
-    const secret = String(process.env[\`${urlEnv}_SECRET\`] || process.env.CHANNEL_SEND_SECRET || '').trim();
+    const secret = String(process.env[`${urlEnv}_SECRET`] || process.env.CHANNEL_SEND_SECRET || '').trim();
     const headers: Record<string,string> = { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey };
-    if (secret) headers.Authorization = \`Bearer ${secret}\`;
+    if (secret) headers.Authorization = `Bearer ${secret}`;
 
     const response = await fetch(url, {
       method: 'POST',
