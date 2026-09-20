@@ -58,7 +58,10 @@ export async function queueN8nEvent(
         wechat: 'WECHAT_SEND_URL',
       };
       const urlEnv = channelUrlEnv[requestedChannel];
-      if (!urlEnv || !String(process.env[urlEnv] || '').trim()) {
+      const telegramBotReady =
+        requestedChannel === 'telegram' &&
+        Boolean(String(process.env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_TOKEN || '').trim());
+      if (!telegramBotReady && (!urlEnv || !String(process.env[urlEnv] || '').trim())) {
         throw new Error('Canal de follow-up não operacional: ' + requestedChannel);
       }
     }
