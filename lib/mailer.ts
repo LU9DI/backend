@@ -92,6 +92,7 @@ async function sendViaResend(opts: {
   text: string;
   html?: string;
   from: string;
+  idempotencyKey?: string;
 }): Promise<SendEmailResult> {
   const key = cleanEnv(process.env.RESEND_API_KEY);
   const res = await fetch('https://api.resend.com/emails', {
@@ -99,6 +100,7 @@ async function sendViaResend(opts: {
     headers: {
       Authorization: `Bearer ${key}`,
       'Content-Type': 'application/json',
+      ...(opts.idempotencyKey ? { 'Idempotency-Key': opts.idempotencyKey } : {}),
     },
     body: JSON.stringify({
       from: opts.from,
@@ -148,6 +150,7 @@ export async function enviarEmail(opts: {
   subject: string;
   text: string;
   html?: string;
+  idempotencyKey?: string;
 }): Promise<SendEmailResult> {
   const from = defaultFrom();
   const to = String(opts.to || '').trim().toLowerCase();
@@ -160,7 +163,7 @@ export async function enviarEmail(opts: {
   // 1) Resend primeiro (mais confiável em cloud)
   if (resendConfigured()) {
     try {
-      return await sendViaResend({ ...opts, to, from });
+      return await sendViaResend({ ...opts, to, from, idempotencyKey: opts.idempotencyKey });
     } catch (e: any) {
       console.error('[mail] Resend exception:', e?.message || e);
       // cai no SMTP se existir

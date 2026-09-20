@@ -23,6 +23,9 @@ export async function ensureFollowupSchema(db: any = getDb()) {
       rejected_at TIMESTAMPTZ,
       sent_at TIMESTAMPTZ,
       message_id TEXT,
+      send_idempotency_key TEXT,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      failed_at TIMESTAMPTZ,
       last_error TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -30,6 +33,12 @@ export async function ensureFollowupSchema(db: any = getDb()) {
   `);
   await db.exec(`CREATE INDEX IF NOT EXISTS idx_lead_followups_status ON lead_followups(status)`);
   await db.exec(`CREATE INDEX IF NOT EXISTS idx_lead_followups_lead ON lead_followups(lead_id)`);
+  for (const sql of [
+    "ALTER TABLE lead_followups ADD COLUMN send_idempotency_key TEXT",
+    "ALTER TABLE lead_followups ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE lead_followups ADD COLUMN failed_at TIMESTAMPTZ"
+  ]) { try { await db.exec(sql); } catch {} }
+  try { await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_followup_send_key ON lead_followups(send_idempotency_key) WHERE send_idempotency_key IS NOT NULL`); } catch {}
 }
 
 function requireAdmin(req: AuthRequest, res: Response): boolean {
@@ -136,12 +145,17 @@ export function mountAdminFollowupRoutes(app: Express) {
     if (followup.status !== 'pending' || Number(followup.approval_required) !== 1) {
       return res.status(409).json({ error: `Follow-up não está pendente: ${followup.status}.` });
     }
-    if (String(followup.channel) !== 'email') {
-      return res.status(400).json({ error: 'Canal ainda não suportado para execução automática.' });
+    const channel = String(followup.channel || 'email').trim().toLowerCase();
+    if (!['email', 'whatsapp', 'telegram', 'wechat'].includes(channel)) {
+      return res.status(400).json({ error: 'Canal de follow-up inválido.' });
     }
-    const email = String(followup.email || '').trim().toLowerCase();
-    if (!email || !email.includes('@')) {
-      return res.status(400).json({ error: 'Lead sem e-mail válido.' });
+    if (channel === 'email') {
+      const email = String(followup.email || '').trim().toLowerCase();
+      if (!email || !email.includes('@')) return res.status(400).json({ error: 'Lead sem e-mail válido.' });
+    }
+    if (['whatsapp', 'telegram', 'wechat'].includes(channel)) {
+      const phone = String(followup.telefone || '').trim();
+      if (!phone) return res.status(400).json({ error: 'Lead sem telefone para o canal selecionado.' });
     }
 
     const draft = String(req.body?.draft || followup.draft || '').trim();
@@ -160,9 +174,9 @@ export function mountAdminFollowupRoutes(app: Express) {
 
     try {
       const jobId = await enqueueRetry({
-        jobType: 'followup_email',
-        payload: { followup_id: id },
-        dedupeKey: `followup_email:${id}`,
+        jobType: 'followup_send',
+        payload: { followup_id: id, channel },
+        dedupeKey: `followup_send:${id}`,
       }, db);
 
       res.json({ success: true, followup_id: id, status: 'approved', job_id: jobId });
