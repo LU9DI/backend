@@ -183,16 +183,10 @@ async function runProductionE2eN8nTestOnBoot() {
   if (process.env.E2E_N8N_TEST !== '1') return;
   try {
     const db = getDb();
-    await db.exec(`CREATE TABLE IF NOT EXISTS leads (
-      id TEXT PRIMARY KEY, empresa_id TEXT, nome TEXT, email TEXT, telefone TEXT,
-      fonte TEXT, maps_url TEXT, raw_json TEXT, score INTEGER, qualification TEXT,
-      ai_reason TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
-    )`);
-    await db.exec(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS score INTEGER`);
-    await db.exec(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS qualification TEXT`);
-    await db.exec(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS ai_reason TEXT`);
     const leadId = 'e2e-n8n-test-lead';
-    await db.exec(`INSERT INTO leads (id,nome,email,fonte,raw_json) VALUES ('e2e-n8n-test-lead','Filtra.AI E2E Test','e2e-n8n-test@filtraai.internal','e2e','{"e2e":true}') ON CONFLICT (id) DO UPDATE SET updated_at=NOW()`);
+    await db.exec(`INSERT INTO leads (id,company,email,phone,source,maps_url,raw_json)
+      VALUES ('e2e-n8n-test-lead','Filtra.AI E2E Test','e2e-n8n-test@filtraai.internal','', 'e2e','', '{"e2e":true}')
+      ON CONFLICT (id) DO UPDATE SET updated_at=NOW()`);
     const payload = { event:'lead.followup.requested', lead_id:leadId, nome:'Filtra.AI E2E Test', email:'e2e-n8n-test@filtraai.internal', score:80, action:'create_crm_followup', e2e:true };
     await queueN8nEvent('lead.followup.requested',payload,{dedupeKey:'e2e:n8n:lead.followup.requested'});
     const sent = await sendN8nWebhook('lead.followup.requested',payload);
