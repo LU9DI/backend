@@ -1,5 +1,6 @@
 /**
  * Integração n8n — saída (API → n8n) e helpers de inbound.
+ * Eventos assíncronos são persistidos na retry_queue antes do envio.
  *
  * Env:
  *   N8N_WEBHOOK_URL=https://seu-n8n.../webhook/filtra-ia
