@@ -265,13 +265,60 @@ export function registerAllRetryHandlers() {
     if (!r.ok) throw new Error('enviarEmail retornou ok=false');
   });
 
-  registerRetryHandler('followup_email', async (payload) => {
+  async function sendChannel(channel: string, row: any, message: string, idempotencyKey: string) {
+    if (channel === 'email') {
+      const email = String(row.email || '').trim().toLowerCase();
+      if (!email || !email.includes('@')) throw new Error('lead sem e-mail válido');
+      return enviarEmail({
+        to: email,
+        subject: 'Filtra.AI — acompanhamento inicial',
+        text: message,
+        idempotencyKey,
+      });
+    }
+
+    const phone = String(row.telefone || '').trim();
+    if (!phone) throw new Error(`lead sem telefone para ${channel}`);
+
+    const urlEnv = channel === 'whatsapp'
+      ? 'WHATSAPP_SEND_URL'
+      : channel === 'telegram'
+        ? 'TELEGRAM_SEND_URL'
+        : 'WECHAT_SEND_URL';
+    const url = String(process.env[urlEnv] || '').trim();
+    if (!url) throw new Error(`${urlEnv} não configurado`);
+
+    const secret = String(process.env[\`${urlEnv}_SECRET\`] || process.env.CHANNEL_SEND_SECRET || '').trim();
+    const headers: Record<string,string> = { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey };
+    if (secret) headers.Authorization = \`Bearer ${secret}\`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        channel,
+        to: phone,
+        message,
+        idempotency_key: idempotencyKey,
+        followup_id: String(row.id),
+        lead_id: String(row.lead_id),
+        nome_empresa: String(row.nome_empresa || ''),
+      }),
+    });
+    const body = await response.text().catch(() => '');
+    if (!response.ok) throw new Error(`${channel} HTTP ${response.status}: ${body.slice(0, 240)}`);
+    let parsed: any = {};
+    try { parsed = body ? JSON.parse(body) : {}; } catch {}
+    return { ok: true, mode: channel, messageId: parsed.message_id || parsed.id || undefined };
+  }
+
+  registerRetryHandler('followup_send', async (payload) => {
     const db = getDb();
     const followupId = String(payload.followup_id || '');
     if (!followupId) throw new Error('followup_id obrigatório');
 
     const row = await db.get(`
-      SELECT f.*, l.email, l.nome_empresa
+      SELECT f.*, l.email, l.telefone, l.nome_empresa
       FROM lead_followups f
       LEFT JOIN leads l ON l.id = f.lead_id
       WHERE f.id = ?
@@ -279,38 +326,57 @@ export function registerAllRetryHandlers() {
 
     if (!row) throw new Error('follow-up não encontrado');
     if (row.status === 'sent') return;
-    if (!['approved', 'sending', 'failed'].includes(String(row.status))) {
+    if (!['approved', 'failed'].includes(String(row.status))) {
+      if (row.status === 'sending') return;
       throw new Error(`follow-up não autorizado: ${row.status}`);
     }
 
-    const email = String(row.email || '').trim().toLowerCase();
-    if (!email || !email.includes('@')) throw new Error('lead sem e-mail válido');
-
-    await db.run(
-      `UPDATE lead_followups SET status = 'sending', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('approved','sending')`,
-      [followupId]
-    );
-
-    const result = await enviarEmail({
-      to: email,
-      subject: `Filtra.AI — acompanhamento inicial`,
-      text: String(row.draft || ''),
-    });
-
-    if (!result.ok) {
-      await db.run(
-        `UPDATE lead_followups SET status = 'failed', last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-        [String(result.error || 'falha no envio').slice(0, 500), followupId]
-      );
-      throw new Error(result.error || 'falha no envio');
+    const channel = String(row.channel || payload.channel || 'email').trim().toLowerCase();
+    if (!['email', 'whatsapp', 'telegram', 'wechat'].includes(channel)) {
+      throw new Error(`canal não suportado: ${channel}`);
     }
 
-    await db.run(
+    const sendKey = `send:${followupId}`;
+    const reserved = await db.run(
       `UPDATE lead_followups
-       SET status = 'sent', sent_at = CURRENT_TIMESTAMP, message_id = ?, last_error = NULL, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
-      [result.messageId || null, followupId]
+       SET status = 'sending',
+           send_idempotency_key = ?,
+           retry_count = COALESCE(retry_count, 0) + 1,
+           updated_at = CURRENT_TIMESTAMP,
+           last_error = NULL
+       WHERE id = ? AND status IN ('approved','failed')`,
+      [sendKey, followupId]
     );
+    if (!reserved?.changes) {
+      const current = await db.get('SELECT status FROM lead_followups WHERE id = ?', [followupId]);
+      if (current?.status === 'sent' || current?.status === 'sending') return;
+      throw new Error('follow-up não pôde reservar o envio');
+    }
+
+    try {
+      const result = await sendChannel(channel, row, String(row.draft || ''), sendKey);
+      if (!result?.ok) throw new Error(result?.error || 'falha no envio');
+      await db.run(
+        `UPDATE lead_followups
+         SET status = 'sent',
+             sent_at = CURRENT_TIMESTAMP,
+             message_id = ?,
+             failed_at = NULL,
+             last_error = NULL,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND status = 'sending'`,
+        [result.messageId || null, followupId]
+      );
+    } catch (e: any) {
+      const err = String(e?.message || e).slice(0, 500);
+      await db.run(
+        `UPDATE lead_followups
+         SET status = 'failed', failed_at = CURRENT_TIMESTAMP, last_error = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND status = 'sending'`,
+        [err, followupId]
+      );
+      throw e;
+    }
   });
 
   registerRetryHandler('generic', async (payload) => {
