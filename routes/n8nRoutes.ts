@@ -14,11 +14,11 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import {
   n8nConfigured,
   n8nStatus,
-  notifyN8n,
   queueN8nEvent,
   notifyN8nAsync,
   verifyInboundSecret,
 } from '../lib/n8n.js';
+import { ensureFollowupSchema } from './adminFollowupRoutes.js';
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -120,13 +120,13 @@ export function mountN8nRoutes(app: Express) {
         ]
       );
 
-      queueN8nEvent('lead.captured', {
+      await queueN8nEvent('lead.captured', {
         lead_id: id,
         nome_empresa: nome,
         email,
         telefone,
         fonte,
-      }, { dedupeKey: `n8n:lead.captured:${id}` });
+      }, { dedupeKey: 'n8n:lead.captured:' + id });
 
       const qualification = await qualifyLead({
         nome_empresa: nome,
@@ -150,7 +150,7 @@ export function mountN8nRoutes(app: Express) {
           'UPDATE leads SET score = ?, qualification = ?, ai_reason = ? WHERE id = ?',
           [qualification.score, qualification.qualification, qualification.reason, id]
         );
-        queueN8nEvent('lead.qualified', {
+        await queueN8nEvent('lead.qualified', {
           lead_id: id,
           nome_empresa: nome,
           email,
@@ -159,9 +159,9 @@ export function mountN8nRoutes(app: Express) {
           score: qualification.score,
           qualification: qualification.qualification,
           reason: qualification.reason,
-        }, { dedupeKey: `n8n:lead.qualified:${id}` });
+        }, { dedupeKey: 'n8n:lead.qualified:' + id });
         if (qualification.score >= 40) {
-          queueN8nEvent('lead.followup.requested', {
+          await queueN8nEvent('lead.followup.requested', {
             lead_id: id,
             nome_empresa: nome,
             email,
@@ -171,7 +171,7 @@ export function mountN8nRoutes(app: Express) {
             qualification: qualification.qualification,
             reason: qualification.reason,
             action: 'create_crm_followup',
-          }, { dedupeKey: `n8n:lead.followup.requested:${id}` });
+          }, { dedupeKey: 'n8n:lead.followup.requested:' + id });
         }
       }
 
@@ -201,7 +201,31 @@ export function mountN8nRoutes(app: Express) {
       if (action === 'hubspot_sync') {
         await db.run('UPDATE leads SET crm_status = ?, crm_id = COALESCE(NULLIF(?, \'\'), crm_id) WHERE id = ?', [status === 'success' ? 'synced' : status, crmId, leadId]);
       } else {
-        await db.run('UPDATE leads SET followup_status = ? WHERE id = ?', [status === 'success' ? 'created' : status, leadId]);
+        const followupStatus = status === 'success' ? 'created' : status;
+        await db.run('UPDATE leads SET followup_status = ? WHERE id = ?', [followupStatus, leadId]);
+
+        // n8n gera o rascunho; o backend passa a ser a fonte de verdade
+        // para aprovação e histórico. Nunca marca como aprovado aqui.
+        if (status === 'pending' && String(body.draft || '').trim()) {
+          await ensureFollowupSchema(db);
+          const existing = await db.get(
+            `SELECT id FROM lead_followups
+             WHERE lead_id = ? AND status IN ('pending','approved','sending')`
+            , [leadId]
+          );
+          if (!existing) {
+            await db.run(
+              `INSERT INTO lead_followups
+               (id, lead_id, channel, draft, status, approval_required)
+               VALUES (?, ?, 'email', ?, 'pending', 1)`,
+              [
+                crypto.randomUUID(),
+                leadId,
+                String(body.draft).trim().slice(0, 10000),
+              ]
+            );
+          }
+        }
       }
       res.json({ success: true, lead_id: leadId, action, status });
     })
@@ -241,14 +265,14 @@ export function mountN8nRoutes(app: Express) {
       );
 
       if (rating <= 3) {
-        notifyN8n('review.critica', {
+        await queueN8nEvent('review.critica', {
           empresa_id: empresa.id,
           slug: empresa.slug,
           nome_empresa: empresa.nome_empresa,
           rating,
           name,
           comment: comment.slice(0, 500),
-        });
+        }, { dedupeKey: 'n8n:review.critica:' + empresa.id + ':' + now });
       }
 
       res.status(201).json({ success: true, empresa_id: empresa.id });
