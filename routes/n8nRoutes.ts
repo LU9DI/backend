@@ -20,6 +20,22 @@ import {
 } from '../lib/n8n.js';
 import { ensureFollowupSchema } from './adminFollowupRoutes.js';
 
+async function ensureN8nIdempotencySchema() {
+  const db = getDb();
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS n8n_idempotency_keys (
+      idempotency_key TEXT PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL
+    )
+  `);
+  try {
+    await db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_n8n_idempotency_created
+      ON n8n_idempotency_keys(created_at)
+    `);
+  } catch {}
+}
+
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 120,
@@ -47,6 +63,7 @@ export function mountN8nRoutes(app: Express) {
         ping: 'POST /api/n8n/ping',
         inbound_lead: 'POST /api/n8n/inbound/lead',
         inbound_review: 'POST /api/n8n/inbound/review',
+        automation_claim: 'POST /api/n8n/inbound/automation-claim',
       },
       hint: n8nConfigured()
         ? 'Webhook de saída configurado.'
@@ -176,6 +193,54 @@ export function mountN8nRoutes(app: Express) {
       }
 
       res.status(201).json({ success: true, lead_id: id, qualification });
+    })
+  );
+
+  app.post(
+    '/api/n8n/inbound/automation-claim',
+    limiter,
+    asyncHandler(async (req: Request, res: Response) => {
+      if (!requireInbound(req, res)) return;
+
+      const idempotencyKey = String(
+        req.headers['x-idempotency-key'] || req.body?.idempotency_key || ''
+      ).trim();
+
+      if (!idempotencyKey || idempotencyKey.length > 512) {
+        return res.status(400).json({
+          claimed: false,
+          duplicate: false,
+          error: 'X-Idempotency-Key obrigatório.',
+        });
+      }
+
+      await ensureN8nIdempotencySchema();
+      const db = getDb();
+      const now = new Date().toISOString();
+
+      // Atomic claim: exactly one concurrent request can insert the same key.
+      const inserted = await db.run(
+        `INSERT INTO n8n_idempotency_keys (idempotency_key, created_at)
+         VALUES (?, ?)
+         ON CONFLICT (idempotency_key) DO NOTHING`,
+        [idempotencyKey, now]
+      );
+
+      // Keep the durable ledger bounded without affecting the current claim.
+      try {
+        await db.run(
+          `DELETE FROM n8n_idempotency_keys
+           WHERE created_at < ?`,
+          [new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()]
+        );
+      } catch {}
+
+      const claimed = Number(inserted?.changes ?? 0) === 1;
+      return res.json({
+        claimed,
+        duplicate: !claimed,
+        idempotency_key: idempotencyKey,
+      });
     })
   );
 
