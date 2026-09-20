@@ -219,7 +219,7 @@ async function runProductionE2eN8nTestOnBoot() {
     console.error('🧪 E2E n8n test failed:', e?.message || e);
   }
 }
-\nasync function runSentimentBackfillOnBoot() {
+async function runSentimentBackfillOnBoot() {
   if (process.env.BACKFILL_SENTIMENT !== '1') return;
   try {
     const db = getDb();
