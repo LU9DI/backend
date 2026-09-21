@@ -11,10 +11,14 @@ const q=(s:string)=>'"'+s.replaceAll('"','""')+'"';
 export async function main(){
  if(!sourceUrl) throw new Error('DATABASE_URL não configurada.');
  if(!targetPassword) throw new Error('SUPABASE_DB_PASSWORD não configurada.');
+ let sourceInfo='unknown';
+ try{const u=new URL(sourceUrl);sourceInfo=u.username+'@'+u.hostname+':'+(u.port||'5432')+'/'+u.pathname.replace(/^\//,'');}catch{}
+ console.log('[MIGRATION] source='+sourceInfo+' target='+targetUser+'@'+targetHost+':'+targetPort+'/'+targetDb);
  const source=new Client({connectionString:sourceUrl,ssl:{rejectUnauthorized:false}});
  const target=new Client({host:targetHost,port:targetPort,database:targetDb,user:targetUser,password:targetPassword,ssl:{rejectUnauthorized:false},connectionTimeoutMillis:15000});
  try{
-  await source.connect(); await target.connect();
+  await source.connect(); console.log('[MIGRATION] source connected');
+  await target.connect(); console.log('[MIGRATION] target connected');
   await target.query('CREATE TABLE IF NOT EXISTS "__filtra_migrations" (id text PRIMARY KEY, completed_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP, details jsonb)');
   if((await target.query('SELECT 1 FROM "__filtra_migrations" WHERE id=$1',[marker])).rowCount) return;
   const tables=(await source.query("SELECT c.relname AS table_name FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' ORDER BY c.relname")).rows;
