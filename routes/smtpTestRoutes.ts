@@ -2,6 +2,7 @@
  * Diagnóstico SMTP (só admin autenticado).
  * GET  /api/admin/smtp-status
  * POST /api/admin/test-email  { "to": "opcional@email.com" }
+ * POST /api/admin/test-resend { "to": "opcional@email.com" }
  */
 import type { Express, Response } from 'express';
 import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
@@ -56,7 +57,7 @@ export function mountSmtpTestRoutes(app: Express) {
           '',
           `Enviado em: ${new Date().toISOString()}`,
           'Se você recebeu isto, a recuperação de senha também deve funcionar com o mesmo SMTP.',
-        ].join('\n'),
+        ].join('\\n'),
       });
 
       if (!sent.ok) {
@@ -71,6 +72,46 @@ export function mountSmtpTestRoutes(app: Express) {
       res.json({
         success: true,
         message: `E-mail de teste enviado para ${to}. Confira caixa de entrada e spam.`,
+        messageId: sent.messageId,
+      });
+    })
+  );
+
+  app.post(
+    '/api/admin/test-resend',
+    autenticarToken,
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+      if (!isAdminUser(req.user)) {
+        return res.status(403).json({ error: 'Acesso negado.' });
+      }
+      const to = String(req.body?.to || process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+      if (!to || !to.includes('@')) {
+        return res.status(400).json({ error: 'Informe { "to": "seu@email.com" } ou configure ADMIN_EMAIL.' });
+      }
+
+      if (!process.env.RESEND_API_KEY?.trim()) {
+        return res.status(503).json({ success: false, error: 'RESEND_API_KEY não configurada.' });
+      }
+
+      const sent = await enviarEmail({
+        to,
+        subject: 'Filtra.IA — teste Resend',
+        text: [
+          'Este é um teste direto do canal Resend do Filtra.IA.',
+          '',
+          `Enviado em: ${new Date().toISOString()}`,
+          'Se você recebeu esta mensagem, o envio transacional pelo Resend está funcionando.',
+        ].join('\\n'),
+      });
+
+      if (!sent.ok) {
+        return res.status(503).json({ success: false, error: sent.error || 'Falha no envio via Resend.' });
+      }
+
+      return res.json({
+        success: true,
+        provider: 'resend',
+        message: `Teste Resend enviado para ${to}.`,
         messageId: sent.messageId,
       });
     })
