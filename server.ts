@@ -39,6 +39,7 @@ import { mountPublicPlanosRoutes } from './routes/publicPlanosRoutes.js';
 import { mountAuditRoutes } from './routes/auditRoutes.js';
 import { mountSmtpTestRoutes } from './routes/smtpTestRoutes.js';
 import { mountN8nRoutes } from './routes/n8nRoutes.js';
+import { mountAcquisitionRoutes, ensureAcquisitionSchema } from './routes/acquisitionRoutes.js';
 import { mountTelegramRoutes } from './routes/telegramRoutes.js';
 import { mountPasswordResetRoutes } from './passwordResetRoutes.js';
 import { mountAdminLoginRoute } from './adminLoginRoute.js';
@@ -288,6 +289,11 @@ async function main() {
     console.warn('ensureFollowupSchema:', e);
   }
   try {
+    await ensureAcquisitionSchema(getDb());
+  } catch (e) {
+    console.warn('ensureAcquisitionSchema:', e);
+  }
+  try {
     await ensureRetryQueue(getDb());
     registerAllRetryHandlers();
     startRetryWorker();
@@ -327,6 +333,7 @@ async function main() {
   mountAuditRoutes(app);
   mountSmtpTestRoutes(app);
   mountN8nRoutes(app);
+  mountAcquisitionRoutes(app);
   mountTelegramRoutes(app);
   mountFiscalRoutes(app);
 
