@@ -1,8 +1,8 @@
 import { Client } from 'pg';
 const sourceUrl=(process.env.DATABASE_URL||'').trim();
 const targetPassword=(process.env.SUPABASE_DB_PASSWORD||'').trim();
-const targetHost=(process.env.SUPABASE_DB_HOST||'db.xutrgqurdrpujxjraynm.supabase.co').trim();
-const targetUser=(process.env.SUPABASE_DB_USER||'postgres').trim();
+const targetHost=(process.env.SUPABASE_DB_HOST||'aws-0-us-west-2.pooler.supabase.com').trim();
+const targetUser=(process.env.SUPABASE_DB_USER||'postgres.xutrgqurdrpujxjraynm').trim();
 const targetDb=(process.env.SUPABASE_DB_NAME||'postgres').trim();
 const targetPort=Number(process.env.SUPABASE_DB_PORT||5432);
 const marker='render-to-supabase-2026-09-21-v1';
