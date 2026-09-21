@@ -15,10 +15,20 @@ export async function main(){
  try{const u=new URL(sourceUrl);sourceInfo=u.username+'@'+u.hostname+':'+(u.port||'5432')+'/'+u.pathname.replace(/^\//,'');}catch{}
  console.log('[MIGRATION] source='+sourceInfo+' target='+targetUser+'@'+targetHost+':'+targetPort+'/'+targetDb);
  const source=new Client({connectionString:sourceUrl,ssl:{rejectUnauthorized:false}});
- const target=new Client({host:targetHost,port:targetPort,database:targetDb,user:targetUser,password:targetPassword,ssl:{rejectUnauthorized:false},connectionTimeoutMillis:15000});
+ const targetConfig={host:targetHost,port:targetPort,database:targetDb,user:targetUser,password:targetPassword,ssl:{rejectUnauthorized:false},connectionTimeoutMillis:15000};
+ console.log('[MIGRATION] target password present='+String(Boolean(targetPassword))+' length='+String(targetPassword.length));
+ let target=new Client(targetConfig);
  try{
   await source.connect(); console.log('[MIGRATION] source connected');
-  await target.connect(); console.log('[MIGRATION] target connected');
+  try { await target.connect(); console.log('[MIGRATION] target connected as '+targetUser); }
+  catch (err:any) {
+   await target.end().catch(()=>{});
+   if (targetUser !== 'postgres' && String(err?.code||'') === '28P01') {
+    console.log('[MIGRATION] pooler rejected project-scoped user; retrying as postgres');
+    target=new Client({...targetConfig,user:'postgres'});
+    await target.connect(); console.log('[MIGRATION] target connected as postgres');
+   } else throw err;
+  }
   await target.query('CREATE TABLE IF NOT EXISTS "__filtra_migrations" (id text PRIMARY KEY, completed_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP, details jsonb)');
   if((await target.query('SELECT 1 FROM "__filtra_migrations" WHERE id=$1',[marker])).rowCount) return;
   const tables=(await source.query("SELECT c.relname AS table_name FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' ORDER BY c.relname")).rows;
