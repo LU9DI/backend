@@ -19,6 +19,7 @@ RUN npm install --omit=dev --no-audit --no-fund \
 COPY . .
 
 ENV NODE_ENV=production
+ENV RUN_SUPABASE_MIGRATION=1
 ENV PORT=5000
 ENV CHROMIUM_PATH=/usr/bin/chromium
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
