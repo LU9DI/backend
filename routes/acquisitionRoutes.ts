@@ -124,8 +124,8 @@ export function mountAcquisitionRoutes(app: Express) {
     if(!secret||!msgId||!timestamp||!signature) return res.status(401).json({error:'Webhook Resend não configurado ou assinatura ausente.'});
     const ts=Number(timestamp);
     if(!Number.isFinite(ts)||Math.abs(Date.now()/1000-ts)>300) return res.status(401).json({error:'Assinatura Resend expirada.'});
-    let key=secret;
-    try { if(secret.startsWith('whsec_')) key=Buffer.from(secret.slice(6),'base64').toString('utf8'); } catch { return res.status(401).json({error:'Segredo Resend inválido.'}); }
+    let key:string|Buffer=secret;
+    try { if(secret.startsWith('whsec_')) key=Buffer.from(secret.slice(6),'base64'); } catch { return res.status(401).json({error:'Segredo Resend inválido.'}); }
     const signed=Buffer.from(msgId+'.'+timestamp+'.'+raw.toString('utf8'),'utf8');
     const expected=crypto.createHmac('sha256',key).update(signed).digest('base64');
     const valid=signature.split(' ').some(part=>{ const [v,sig]=part.split(',',2); if(v!=='v1'||!sig)return false; try{return crypto.timingSafeEqual(Buffer.from(sig),Buffer.from(expected));}catch{return false;} });
