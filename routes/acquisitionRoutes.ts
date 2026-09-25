@@ -115,6 +115,37 @@ export function mountAcquisitionRoutes(app: Express) {
     res.json({success:true,persisted:true,opportunity:row});
   }));
 
+  app.post('/api/n8n/acquisition/email-events', limiter, asyncHandler(async(req,res)=>{
+    const secret=String(process.env.RESEND_WEBHOOK_SECRET||'').trim();
+    const raw=Buffer.isBuffer(req.body)?req.body:Buffer.from(JSON.stringify(req.body??{}));
+    const msgId=String(req.headers['svix-id']||'').trim();
+    const timestamp=String(req.headers['svix-timestamp']||'').trim();
+    const signature=String(req.headers['svix-signature']||'').trim();
+    if(!secret||!msgId||!timestamp||!signature) return res.status(401).json({error:'Webhook Resend não configurado ou assinatura ausente.'});
+    const ts=Number(timestamp);
+    if(!Number.isFinite(ts)||Math.abs(Date.now()/1000-ts)>300) return res.status(401).json({error:'Assinatura Resend expirada.'});
+    let key=secret;
+    try { if(secret.startsWith('whsec_')) key=Buffer.from(secret.slice(6),'base64').toString('utf8'); } catch { return res.status(401).json({error:'Segredo Resend inválido.'}); }
+    const signed=Buffer.from(msgId+'.'+timestamp+'.'+raw.toString('utf8'),'utf8');
+    const expected=crypto.createHmac('sha256',key).update(signed).digest('base64');
+    const valid=signature.split(' ').some(part=>{ const [v,sig]=part.split(',',2); if(v!=='v1'||!sig)return false; try{return crypto.timingSafeEqual(Buffer.from(sig),Buffer.from(expected));}catch{return false;} });
+    if(!valid) return res.status(401).json({error:'Assinatura Resend inválida.'});
+    let payload:any={}; try { payload=JSON.parse(raw.toString('utf8')); } catch { return res.status(400).json({error:'Payload JSON inválido.'}); }
+    const db=getDb(); await ensureAcquisitionSchema(db);
+    const data=payload?.data||{}; const tags=Array.isArray(data?.tags)?data.tags:{};
+    const tagMap:any=Array.isArray(tags)?Object.fromEntries(tags.map((t:any)=>[String(t?.name||t?.key||''),String(t?.value||'')])):tags;
+    const event=s(payload?.type,80)||'email.unknown';
+    const eventId=s(msgId,200)||hash(payload); const occurred=s(payload?.created_at,80)||now();
+    const metadata={email_id:data?.email_id||data?.id||null,to:data?.to||null,subject:data?.subject||null,from:data?.from||null,tags:tagMap};
+    await db.run(`INSERT INTO acquisition_events
+      (id,campaign_id,content_id,lead_id,event_type,source,medium,campaign,content,occurred_at,metadata_json)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
+      [eventId,s(tagMap.campaign_id,120)||null,s(tagMap.content_id,120)||null,s(tagMap.lead_id||tagMap.leadId,120)||null,
+       event,'resend',s(tagMap.utm_medium,120)||null,s(tagMap.utm_campaign,160)||null,s(tagMap.utm_content,160)||null,
+       occurred,JSON.stringify(metadata).slice(0,20000)]);
+    res.status(200).json({success:true,persisted:true,id:eventId,event_type:event});
+  }));
+
   app.post('/api/n8n/acquisition/events', limiter, asyncHandler(async(req,res)=>{
     if(!auth(req,res)) return; const b=req.body||{}, db=getDb(); await ensureAcquisitionSchema(db);
     const event=s(b.event_type,80); if(!event) return res.status(400).json({error:'event_type obrigatório.'});
