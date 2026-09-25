@@ -91,9 +91,11 @@ app.use(securityHeaders);
 app.use(cookieParser());
 app.use(latencyMiddleware as any);
 app.use((req, res, next) => {
-  if (req.originalUrl?.startsWith('/api/webhook/stripe')) return next();
+  // Stripe and Resend need the exact raw payload for signature verification.
+  if (req.originalUrl?.startsWith('/api/webhook/stripe') || req.originalUrl?.startsWith('/api/n8n/acquisition/email-events')) return next();
   return express.json({ limit: '20kb' })(req, res, next);
 });
+app.use('/api/n8n/acquisition/email-events', express.raw({ type: 'application/json', limit: '100kb' }));
 app.use(cors(buildCorsOptions()));
 
 app.get('/api/live', (_req, res) => {
