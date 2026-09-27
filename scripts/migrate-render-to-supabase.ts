@@ -76,10 +76,21 @@ export async function main() {
       if (!exists.rowCount) await target.query('CREATE SEQUENCE ' + q(sequence));
     }
 
+    const skipTables = new Set([
+      'oauth_authorization_codes', 'oauth_access_tokens', 'invalid_auth_token',
+      'credentials_entity', 'credential_dependency', 'dynamic_credential_entry',
+      'dynamic_credential_resolver', 'dynamic_credential_user_entry',
+      'instance_credential_assignment', 'deployment_key', 'instance_version_history',
+      'execution_entity', 'execution_data', 'execution_annotations',
+      'execution_annotation_tags', 'execution_metadata', 'migrations',
+      'n8n_idempotency_keys', 'mcp_registry_server',
+    ]);
+
     const tables = (await source.query(`
       SELECT c.relname AS table_name FROM pg_class c
       JOIN pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname='public' AND c.relkind='r' ORDER BY c.relname`)).rows;
+      WHERE n.nspname='public' AND c.relkind='r' ORDER BY c.relname`)).rows
+      .filter((row: any) => !skipTables.has(String(row.table_name)));
 
     const report: Record<string, any> = {};
 
