@@ -10,11 +10,12 @@ const marker = 'render-to-supabase-2026-09-27-v2';
 
 const q = (s: string) => '"' + s.replaceAll('"', '""') + '"';
 
-async function rowFingerprint(client: Client, table: string): Promise<{ count: number; fingerprint: string }> {
+async function rowFingerprint(client: Client, table: string, columns: string[]): Promise<{ count: number; fingerprint: string }> {
+  const projection = columns.map(q).join(', ');
   const sql = `
     SELECT COUNT(*)::bigint AS count,
       COALESCE(md5(string_agg(md5(to_jsonb(t)::text), '' ORDER BY to_jsonb(t)::text)), md5('')) AS fingerprint
-    FROM ${q(table)} t`;
+    FROM (SELECT ${projection} FROM ${q(table)}) t`;
   const row = (await client.query(sql)).rows[0];
   return { count: Number(row.count), fingerprint: String(row.fingerprint) };
 }
@@ -108,8 +109,9 @@ export async function main() {
         }
       }
 
-      const sourceFp = await rowFingerprint(source, table);
-      const targetFp = await rowFingerprint(target, table);
+      const fingerprintColumns = cols.map((c: any) => c.name);
+      const sourceFp = await rowFingerprint(source, table, fingerprintColumns);
+      const targetFp = await rowFingerprint(target, table, fingerprintColumns);
 
       if (targetFp.count > 0) {
         if (targetFp.count !== sourceFp.count || targetFp.fingerprint !== sourceFp.fingerprint) {
@@ -133,7 +135,7 @@ export async function main() {
         }
       }
 
-      const after = await rowFingerprint(target, table);
+      const after = await rowFingerprint(target, table, fingerprintColumns);
       if (after.count !== sourceFp.count || after.fingerprint !== sourceFp.fingerprint) {
         throw new Error('Validação de dados falhou em ' + table);
       }
@@ -169,8 +171,15 @@ export async function main() {
     const finalReport: Record<string, any> = {};
     for (const t of tables) {
       const table = String(t.table_name);
-      const sourceFp = await rowFingerprint(source, table);
-      const targetFp = await rowFingerprint(target, table);
+      const fingerprintColumns = (await source.query(`
+        SELECT a.attname AS name
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid=a.attrelid
+        JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relname=$1 AND a.attnum>0 AND NOT a.attisdropped
+        ORDER BY a.attnum`, [table])).rows.map((r: any) => r.name);
+      const sourceFp = await rowFingerprint(source, table, fingerprintColumns);
+      const targetFp = await rowFingerprint(target, table, fingerprintColumns);
       if (sourceFp.count !== targetFp.count || sourceFp.fingerprint !== targetFp.fingerprint) {
         throw new Error('Validação final falhou em ' + table);
       }
