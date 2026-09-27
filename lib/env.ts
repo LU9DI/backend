@@ -24,12 +24,17 @@ export function validateEnv(): EnvReport {
   }
 
   const dbUrl = process.env.DATABASE_URL?.trim() || '';
+  const useSupabaseDb = process.env.USE_SUPABASE_DB === '1';
   const allowSqliteProd = process.env.SQLITE_ALLOW_PROD === '1';
   if (isProd && !allowSqliteProd) {
-    if (!dbUrl) {
+    if (useSupabaseDb) {
+      if (!process.env.SUPABASE_DB_PASSWORD?.trim() || !process.env.SUPABASE_DB_HOST?.trim() || !process.env.SUPABASE_DB_USER?.trim()) {
+        errors.push('USE_SUPABASE_DB=1 exige SUPABASE_DB_PASSWORD, SUPABASE_DB_HOST e SUPABASE_DB_USER.');
+      }
+    } else if (!dbUrl) {
       errors.push(
         'DATABASE_URL (PostgreSQL) é obrigatório em produção. ' +
-          'No Render, ligue filtra-ia-db ou defina SQLITE_ALLOW_PROD=1 (não recomendado).'
+          'Defina USE_SUPABASE_DB=1 para usar o Postgres do Supabase.'
       );
     } else if (!/^postgres(ql)?:\/\//i.test(dbUrl)) {
       errors.push('DATABASE_URL deve ser uma URL postgres:// ou postgresql://.');
