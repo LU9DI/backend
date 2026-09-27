@@ -150,6 +150,13 @@ export async function main() {
         }
       }
 
+      const afterRows = (await target.query('SELECT ' + names.map(q).join(',') + ' FROM ' + q(table))).rows;
+      if (afterRows.length !== sourceCount || rowsFingerprint(afterRows) !== rowsFingerprint(sourceRows)) {
+        throw new Error('Validação de dados falhou em ' + table);
+      }
+      report[table] = { source: sourceCount, target: afterRows.length, fingerprint: rowsFingerprint(sourceRows), action: 'copied' };
+    }
+
     for (const t of tables) {
       const table = String(t.table_name);
       const cols = (await source.query(`
@@ -192,69 +199,6 @@ export async function main() {
         throw new Error('Validação final falhou em ' + table);
       }
       finalReport[table] = { source: sourceRows.length, target: targetRows.length, fingerprint: rowsFingerprint(targetRows), action: report[table]?.action || 'validated' };
-    }
-
-    await target.query('INSERT INTO "__filtra_migrations"(id,details) VALUES($1,$2)', [marker, JSON.stringify(finalReport)]);
-    console.log('[MIGRATION] Render -> Supabase concluída e validada.', finalReport);
-  } finally {
-    await Promise.allSettled([source.end(), target.end()]);
-  }
-}
- + vals.length;
-          }).join(',') + ')').join(',');
-          await target.query('INSERT INTO ' + q(table) + ' (' + names.map(q).join(',') + ') VALUES ' + tuples, vals);
-        }
-      }
-
-      const afterRows = (await target.query('SELECT ' + names.map(q).join(',') + ' FROM ' + q(table))).rows;
-      if (afterRows.length !== sourceCount || rowsFingerprint(afterRows) !== rowsFingerprint(sourceRows)) {
-        throw new Error('Validação de dados falhou em ' + table);
-      }
-      report[table] = { source: sourceCount, target: afterRows.length, fingerprint: rowsFingerprint(sourceRows), action: 'copied' };
-    }
-
-    for (const t of tables) {
-      const table = String(t.table_name);
-      const cols = (await source.query(`
-        SELECT a.attname AS name FROM pg_attribute a
-        JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace
-        WHERE n.nspname='public' AND c.relname=$1 AND a.attnum>0 AND NOT a.attisdropped
-        ORDER BY a.attnum`, [table])).rows;
-
-      for (const c of cols) {
-        const sourceSeq = (await source.query(
-          'SELECT pg_get_serial_sequence($1,$2) AS seq', ['public.' + table, c.name],
-        )).rows[0]?.seq;
-        if (!sourceSeq) continue;
-
-        const targetSeq = (await target.query(
-          'SELECT pg_get_serial_sequence($1,$2) AS seq', ['public.' + table, c.name],
-        )).rows[0]?.seq;
-        if (!targetSeq) continue;
-
-        const max = (await target.query('SELECT MAX(' + q(c.name) + ') AS max FROM ' + q(table))).rows[0]?.max;
-        if (max !== null && max !== undefined) {
-          await target.query('SELECT setval($1::regclass,$2,true)', [String(targetSeq), max]);
-        }
-      }
-    }
-
-    const finalReport: Record<string, any> = {};
-    for (const t of tables) {
-      const table = String(t.table_name);
-      const fingerprintColumns = (await source.query(`
-        SELECT a.attname AS name
-        FROM pg_attribute a
-        JOIN pg_class c ON c.oid=a.attrelid
-        JOIN pg_namespace n ON n.oid=c.relnamespace
-        WHERE n.nspname='public' AND c.relname=$1 AND a.attnum>0 AND NOT a.attisdropped
-        ORDER BY a.attnum`, [table])).rows.map((r: any) => r.name);
-      const sourceFp = await rowFingerprint(source, table, fingerprintColumns);
-      const targetFp = await rowFingerprint(target, table, fingerprintColumns);
-      if (sourceFp.count !== targetFp.count || sourceFp.fingerprint !== targetFp.fingerprint) {
-        throw new Error('Validação final falhou em ' + table);
-      }
-      finalReport[table] = { source: sourceFp.count, target: targetFp.count, fingerprint: targetFp.fingerprint, action: report[table]?.action || 'validated' };
     }
 
     await target.query('INSERT INTO "__filtra_migrations"(id,details) VALUES($1,$2)', [marker, JSON.stringify(finalReport)]);
