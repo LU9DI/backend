@@ -219,7 +219,9 @@ export async function main() {
           const batch = sourceRows.slice(i, i + 200);
           const vals: any[] = [];
           const tuples = batch.map((r: any) => '(' + names.map((name: string) => {
-            vals.push(toTargetValue(r[name], targetTypes.get(name))); return ' + ')').join(',');
+            vals.push(toTargetValue(r[name], targetTypes.get(name)));
+            return '$' + vals.length;
+          }).join(',') + ')').join(',');
           await target.query(
             'INSERT INTO ' + q(table) + ' (' + names.map(q).join(',') + ') VALUES ' + tuples,
             vals,
