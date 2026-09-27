@@ -100,15 +100,6 @@ export async function initDB(): Promise<Database> {
     }
   }
 
-  if (isPostgresUrl(url)) {
-    _db = await initPostgres();
-  } else if (isProd) {
-    throw new Error(
-      'DATABASE_URL com uma URL PostgreSQL válida é obrigatória em produção. SQLite não é permitido.'
-    );
-  } else {
-    _db = await initSqlite();
-  }
 
   await _db.exec(`
     CREATE TABLE IF NOT EXISTS empresas (
