@@ -179,7 +179,9 @@ export async function main() {
       let targetCount = targetRows.length;
 
       if (targetCount > 0) {
-        if (table === 'ai_usage') {
+        const replaceTarget = process.env.MIGRATION_REPLACE_TARGET === '1';
+        if (table === 'ai_usage' || replaceTarget) {
+          console.log('[MIGRATION] replacing target table=' + table + ' sourceRows=' + sourceCount + ' targetRows=' + targetCount);
           await target.query('DELETE FROM ' + q(table));
           targetCount = 0;
         } else {
