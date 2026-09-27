@@ -125,13 +125,40 @@ export async function main() {
       const targetRows = (await target.query('SELECT ' + names.map(q).join(',') + ' FROM ' + q(table))).rows;
 
       const sourceCount = sourceRows.length;
-      const targetCount = targetRows.length;
+      let targetCount = targetRows.length;
 
       if (targetCount > 0) {
         if (table === 'ai_usage') {
           await target.query('DELETE FROM ' + q(table));
+          targetCount = 0;
         } else {
-          throw new Error('Destino já contém dados em ' + table + ' antes da migração; execução interrompida para evitar sobrescrita.');
+          if (targetCount !== sourceCount) {
+            throw new Error('Destino contém quantidade diferente em ' + table + ': source=' + sourceCount + ' target=' + targetCount);
+          }
+
+          const pkNames = (await source.query(`
+            SELECT a.attname AS name
+            FROM pg_constraint con
+            JOIN pg_class c ON c.oid=con.conrelid
+            JOIN pg_namespace n ON n.oid=c.relnamespace
+            JOIN unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord) ON true
+            JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum=k.attnum
+            WHERE con.contype='p' AND n.nspname='public' AND c.relname=$1
+            ORDER BY k.ord`, [table])).rows.map((r: any) => r.name);
+
+          if (!pkNames.length) {
+            throw new Error('Destino contém dados em ' + table + ' e a tabela não possui chave primária para validação segura.');
+          }
+
+          const keyOf = (row: any) => JSON.stringify(pkNames.map((name: string) => stableValue(row[name])));
+          const sourceKeys = sourceRows.map(keyOf).sort();
+          const targetKeys = targetRows.map(keyOf).sort();
+          if (JSON.stringify(sourceKeys) !== JSON.stringify(targetKeys)) {
+            throw new Error('Chaves primárias divergentes em ' + table + '; migração interrompida para evitar mistura de dados.');
+          }
+
+          report[table] = { source: sourceCount, target: targetCount, action: 'already-migrated-pk-validated' };
+          continue;
         }
       }
 
