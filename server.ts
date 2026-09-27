@@ -233,7 +233,7 @@ function gracefulShutdown(signal: string) {
 }
 
 async function main() {
-  if (true) {
+  if (process.env.RUN_SUPABASE_MIGRATION === '1') {
     const { main: runMigration } = await import('./scripts/migrate-render-to-supabase.js');
     await runMigration();
   }
