@@ -163,6 +163,7 @@ export async function main() {
       }
 
       if (sourceCount > 0) {
+        console.log('[MIGRATION] copying table=' + table + ' rows=' + sourceCount);
         for (let i = 0; i < sourceRows.length; i += 200) {
           const batch = sourceRows.slice(i, i + 200);
           const vals: any[] = [];
