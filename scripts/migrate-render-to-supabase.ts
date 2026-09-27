@@ -77,7 +77,7 @@ export async function main() {
     }
 
     const skipTables = new Set([
-      'oauth_authorization_codes', 'oauth_access_tokens', 'oauth_clients', 'invalid_auth_token',
+      'oauth_authorization_codes', 'oauth_access_tokens', 'oauth_clients', 'oauth_user_consents', 'invalid_auth_token',
       'credentials_entity', 'credential_dependency', 'dynamic_credential_entry',
       'dynamic_credential_resolver', 'dynamic_credential_user_entry',
       'instance_credential_assignment', 'deployment_key', 'instance_version_history',
