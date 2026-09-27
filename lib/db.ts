@@ -61,16 +61,44 @@ async function initSqlite(): Promise<Database> {
   return db as Database;
 }
 
-async function initPostgres(): Promise<Database> {
-  const url = process.env.DATABASE_URL!.trim();
+async function initPostgresWithUrl(url: string): Promise<Database> {
   const pg = await initPgDatabase(url);
   _engine = 'postgres';
-  console.log('🐘 Postgres conectado (DATABASE_URL)');
+  console.log('🐘 Postgres conectado');
   return asSqliteDb(pg);
 }
 
+async function initPostgres(): Promise<Database> {
+  return initPostgresWithUrl(process.env.DATABASE_URL!.trim());
+}
+
 export async function initDB(): Promise<Database> {
-  const url = process.env.DATABASE_URL?.trim();
+  const useSupabase = process.env.USE_SUPABASE_DB === '1';
+  const supabasePassword = (process.env.SUPABASE_DB_PASSWORD || '').trim();
+  const supabaseHost = (process.env.SUPABASE_DB_HOST || '').trim();
+  const supabaseUser = (process.env.SUPABASE_DB_USER || '').trim();
+  const supabaseName = (process.env.SUPABASE_DB_NAME || 'postgres').trim();
+  const supabasePort = Number(process.env.SUPABASE_DB_PORT || 5432);
+
+  if (useSupabase) {
+    if (!supabasePassword || !supabaseHost || !supabaseUser) {
+      throw new Error('USE_SUPABASE_DB=1 exige SUPABASE_DB_PASSWORD, SUPABASE_DB_HOST e SUPABASE_DB_USER.');
+    }
+    const auth = encodeURIComponent(supabaseUser) + ':' + encodeURIComponent(supabasePassword);
+    const url = 'postgresql://' + auth + '@' + supabaseHost + ':' + supabasePort + '/' + encodeURIComponent(supabaseName);
+    _db = await initPostgresWithUrl(url);
+  } else {
+    const url = process.env.DATABASE_URL?.trim();
+    if (isPostgresUrl(url)) {
+      _db = await initPostgres();
+    } else if (isProd) {
+      throw new Error(
+        'DATABASE_URL com uma URL PostgreSQL válida é obrigatória em produção. SQLite não é permitido.'
+      );
+    } else {
+      _db = await initSqlite();
+    }
+  }
 
   if (isPostgresUrl(url)) {
     _db = await initPostgres();
