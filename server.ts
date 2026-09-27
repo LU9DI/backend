@@ -233,7 +233,7 @@ function gracefulShutdown(signal: string) {
 }
 
 async function main() {
-  if (process.env.RUN_SUPABASE_MIGRATION === '1') {
+  // One-shot production migration: revert this gate immediately after the validated run.\n  if (true) {
     const { main: runMigration } = await import('./scripts/migrate-render-to-supabase.js');
     await runMigration();
   }
