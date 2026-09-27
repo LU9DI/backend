@@ -1,4 +1,5 @@
 import { Client } from 'pg';
+import crypto from 'crypto';
 
 const sourceUrl = (process.env.DATABASE_URL || '').trim();
 const targetPassword = (process.env.SUPABASE_DB_PASSWORD || '').trim();
@@ -10,15 +11,25 @@ const marker = 'render-to-supabase-2026-09-27-v2';
 
 const q = (s: string) => '"' + s.replaceAll('"', '""') + '"';
 
-async function rowFingerprint(client: Client, table: string, columns: string[]): Promise<{ count: number; fingerprint: string }> {
-  const projection = columns.map(q).join(', ');
-  const sql = `
-    SELECT COUNT(*)::bigint AS count,
-      COALESCE(md5(string_agg(md5(to_jsonb(t)::text), '' ORDER BY to_jsonb(t)::text)), md5('')) AS fingerprint
-    FROM (SELECT ${projection} FROM ${q(table)}) t`;
-  const row = (await client.query(sql)).rows[0];
-  return { count: Number(row.count), fingerprint: String(row.fingerprint) };
+function stableValue(value: any): any {
+  if (value instanceof Date) return value.toISOString();
+  if (Buffer.isBuffer(value)) return value.toString('base64');
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === 'object') {
+    return Object.keys(value).sort().reduce((out: Record<string, any>, key) => {
+      out[key] = stableValue(value[key]);
+      return out;
+    }, {});
+  }
+  return value;
 }
+
+function rowsFingerprint(rows: any[]): string {
+  const normalized = rows.map((row) => JSON.stringify(stableValue(row))).sort();
+  return crypto.createHash('sha256').update(normalized.join('\n')).digest('hex');
+}
+
+
 
 export async function main() {
   if (!sourceUrl) throw new Error('DATABASE_URL não configurada.');
@@ -109,37 +120,91 @@ export async function main() {
         }
       }
 
-      const fingerprintColumns = cols.map((c: any) => c.name);
-      const sourceFp = await rowFingerprint(source, table, fingerprintColumns);
-      const targetFp = await rowFingerprint(target, table, fingerprintColumns);
+      const names = cols.map((c: any) => c.name);
+      const sourceRows = (await source.query('SELECT * FROM ' + q(table))).rows;
+      const targetRows = (await target.query('SELECT ' + names.map(q).join(',') + ' FROM ' + q(table))).rows;
 
-      if (targetFp.count > 0) {
-        if (targetFp.count !== sourceFp.count || targetFp.fingerprint !== sourceFp.fingerprint) {
-          throw new Error('Conflito de dados em ' + table + ': source=' + sourceFp.count + '/' + sourceFp.fingerprint +
-            ' target=' + targetFp.count + '/' + targetFp.fingerprint);
+      const sourceCount = sourceRows.length;
+      const targetCount = targetRows.length;
+
+      if (targetCount > 0) {
+        if (targetCount !== sourceCount || rowsFingerprint(targetRows) !== rowsFingerprint(sourceRows)) {
+          throw new Error('Conflito de dados em ' + table + ': source=' + sourceCount + '/' + rowsFingerprint(sourceRows) +
+            ' target=' + targetCount + '/' + rowsFingerprint(targetRows));
         }
-        report[table] = { source: sourceFp.count, target: targetFp.count, fingerprint: sourceFp.fingerprint, action: 'already-migrated' };
+        report[table] = { source: sourceCount, target: targetCount, fingerprint: rowsFingerprint(sourceRows), action: 'already-migrated' };
         continue;
       }
 
-      if (sourceFp.count > 0) {
-        const names = cols.map((c: any) => c.name);
-        const rows = (await source.query('SELECT * FROM ' + q(table))).rows;
-        for (let i = 0; i < rows.length; i += 200) {
-          const batch = rows.slice(i, i + 200);
+      if (sourceCount > 0) {
+        for (let i = 0; i < sourceRows.length; i += 200) {
+          const batch = sourceRows.slice(i, i + 200);
           const vals: any[] = [];
           const tuples = batch.map((r: any) => '(' + names.map((name: string) => {
-            vals.push(r[name]); return '$' + vals.length;
+            vals.push(r[name]); return '
+    }
+
+    for (const t of tables) {
+      const table = String(t.table_name);
+      const cols = (await source.query(`
+        SELECT a.attname AS name FROM pg_attribute a
+        JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relname=$1 AND a.attnum>0 AND NOT a.attisdropped
+        ORDER BY a.attnum`, [table])).rows;
+
+      for (const c of cols) {
+        const sourceSeq = (await source.query(
+          'SELECT pg_get_serial_sequence($1,$2) AS seq', ['public.' + table, c.name],
+        )).rows[0]?.seq;
+        if (!sourceSeq) continue;
+
+        const targetSeq = (await target.query(
+          'SELECT pg_get_serial_sequence($1,$2) AS seq', ['public.' + table, c.name],
+        )).rows[0]?.seq;
+        if (!targetSeq) continue;
+
+        const max = (await target.query('SELECT MAX(' + q(c.name) + ') AS max FROM ' + q(table))).rows[0]?.max;
+        if (max !== null && max !== undefined) {
+          await target.query('SELECT setval($1::regclass,$2,true)', [String(targetSeq), max]);
+        }
+      }
+    }
+
+    const finalReport: Record<string, any> = {};
+    for (const t of tables) {
+      const table = String(t.table_name);
+      const names = (await source.query(`
+        SELECT a.attname AS name
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid=a.attrelid
+        JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relname=$1 AND a.attnum>0 AND NOT a.attisdropped
+        ORDER BY a.attnum`, [table])).rows.map((r: any) => r.name);
+      const sourceRows = (await source.query('SELECT ' + names.map(q).join(',') + ' FROM ' + q(table))).rows;
+      const targetRows = (await target.query('SELECT ' + names.map(q).join(',') + ' FROM ' + q(table))).rows;
+      if (sourceRows.length !== targetRows.length || rowsFingerprint(sourceRows) !== rowsFingerprint(targetRows)) {
+        throw new Error('Validação final falhou em ' + table);
+      }
+      finalReport[table] = { source: sourceRows.length, target: targetRows.length, fingerprint: rowsFingerprint(targetRows), action: report[table]?.action || 'validated' };
+    }
+
+    await target.query('INSERT INTO "__filtra_migrations"(id,details) VALUES($1,$2)', [marker, JSON.stringify(finalReport)]);
+    console.log('[MIGRATION] Render -> Supabase concluída e validada.', finalReport);
+  } finally {
+    await Promise.allSettled([source.end(), target.end()]);
+  }
+}
+ + vals.length;
           }).join(',') + ')').join(',');
           await target.query('INSERT INTO ' + q(table) + ' (' + names.map(q).join(',') + ') VALUES ' + tuples, vals);
         }
       }
 
-      const after = await rowFingerprint(target, table, fingerprintColumns);
-      if (after.count !== sourceFp.count || after.fingerprint !== sourceFp.fingerprint) {
+      const afterRows = (await target.query('SELECT ' + names.map(q).join(',') + ' FROM ' + q(table))).rows;
+      if (afterRows.length !== sourceCount || rowsFingerprint(afterRows) !== rowsFingerprint(sourceRows)) {
         throw new Error('Validação de dados falhou em ' + table);
       }
-      report[table] = { source: sourceFp.count, target: after.count, fingerprint: after.fingerprint, action: 'copied' };
+      report[table] = { source: sourceCount, target: afterRows.length, fingerprint: rowsFingerprint(sourceRows), action: 'copied' };
     }
 
     for (const t of tables) {
