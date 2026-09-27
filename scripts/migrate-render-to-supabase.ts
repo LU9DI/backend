@@ -219,7 +219,138 @@ export async function main() {
           const batch = sourceRows.slice(i, i + 200);
           const vals: any[] = [];
           const tuples = batch.map((r: any) => '(' + names.map((name: string) => {
-            vals.push(toTargetValue(r[name], targetTypes.get(name))); return '
+            vals.push(toTargetValue(r[name], targetTypes.get(name))); return ' + ')').join(',');
+          await target.query(
+            'INSERT INTO ' + q(table) + ' (' + names.map(q).join(',') + ') VALUES ' + tuples,
+            vals,
+          );
+        }
+      }
+
+      const afterRows = (await target.query('SELECT ' + names.map(q).join(',') + ' FROM ' + q(table))).rows;
+      if (afterRows.length !== sourceCount) {
+        throw new Error('Validação de quantidade falhou em ' + table + ': source=' + sourceCount + ' target=' + afterRows.length);
+      }
+      report[table] = { source: sourceCount, target: afterRows.length, action: 'copied' };
+    }
+
+    for (const t of tables) {
+      const table = String(t.table_name);
+      const cols = (await source.query(`
+        SELECT a.attname AS name FROM pg_attribute a
+        JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relname=$1 AND a.attnum>0 AND NOT a.attisdropped
+        ORDER BY a.attnum`, [table])).rows;
+
+      for (const c of cols) {
+        const sourceSeq = (await source.query(
+          'SELECT pg_get_serial_sequence($1,$2) AS seq', ['public.' + table, c.name],
+        )).rows[0]?.seq;
+        if (!sourceSeq) continue;
+
+        const targetSeq = (await target.query(
+          'SELECT pg_get_serial_sequence($1,$2) AS seq', ['public.' + table, c.name],
+        )).rows[0]?.seq;
+        if (!targetSeq) continue;
+
+        const max = (await target.query('SELECT MAX(' + q(c.name) + ') AS max FROM ' + q(table))).rows[0]?.max;
+        if (max !== null && max !== undefined) {
+          await target.query('SELECT setval($1::regclass,$2,true)', [String(targetSeq), max]);
+        }
+      }
+    }
+
+    const finalReport: Record<string, any> = {};
+    for (const t of tables) {
+      const table = String(t.table_name);
+      const names = (await source.query(`
+        SELECT a.attname AS name
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid=a.attrelid
+        JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relname=$1 AND a.attnum>0 AND NOT a.attisdropped
+        ORDER BY a.attnum`, [table])).rows.map((r: any) => r.name);
+      const sourceRows = (await source.query('SELECT ' + names.map(q).join(',') + ' FROM ' + q(table))).rows;
+      const targetRows = (await target.query('SELECT ' + names.map(q).join(',') + ' FROM ' + q(table))).rows;
+      if (sourceRows.length !== targetRows.length) {
+        throw new Error('Validação final de quantidade falhou em ' + table + ': source=' + sourceRows.length + ' target=' + targetRows.length);
+      }
+      finalReport[table] = { source: sourceRows.length, target: targetRows.length, action: report[table]?.action || 'validated' };
+    }
+
+    await target.query('INSERT INTO "__filtra_migrations"(id,details) VALUES($1,$2)', [marker, JSON.stringify(finalReport)]);
+    console.log('[MIGRATION] Render -> Supabase concluída e validada.', finalReport);
+  } finally {
+    await Promise.allSettled([source.end(), target.end()]);
+  }
+}
+ + vals.length;
+          }).join(',') + ')').join(',');
+          await target.query(
+            'INSERT INTO ' + q(table) + ' (' + names.map(q).join(',') + ') VALUES ' + tuples,
+            vals,
+          );
+        }
+      }
+
+      const afterRows = (await target.query('SELECT ' + names.map(q).join(',') + ' FROM ' + q(table))).rows;
+      if (afterRows.length !== sourceCount) {
+        throw new Error('Validação de quantidade falhou em ' + table + ': source=' + sourceCount + ' target=' + afterRows.length);
+      }
+      report[table] = { source: sourceCount, target: afterRows.length, action: 'copied' };
+    }
+
+    for (const t of tables) {
+      const table = String(t.table_name);
+      const cols = (await source.query(`
+        SELECT a.attname AS name FROM pg_attribute a
+        JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relname=$1 AND a.attnum>0 AND NOT a.attisdropped
+        ORDER BY a.attnum`, [table])).rows;
+
+      for (const c of cols) {
+        const sourceSeq = (await source.query(
+          'SELECT pg_get_serial_sequence($1,$2) AS seq', ['public.' + table, c.name],
+        )).rows[0]?.seq;
+        if (!sourceSeq) continue;
+
+        const targetSeq = (await target.query(
+          'SELECT pg_get_serial_sequence($1,$2) AS seq', ['public.' + table, c.name],
+        )).rows[0]?.seq;
+        if (!targetSeq) continue;
+
+        const max = (await target.query('SELECT MAX(' + q(c.name) + ') AS max FROM ' + q(table))).rows[0]?.max;
+        if (max !== null && max !== undefined) {
+          await target.query('SELECT setval($1::regclass,$2,true)', [String(targetSeq), max]);
+        }
+      }
+    }
+
+    const finalReport: Record<string, any> = {};
+    for (const t of tables) {
+      const table = String(t.table_name);
+      const names = (await source.query(`
+        SELECT a.attname AS name
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid=a.attrelid
+        JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relname=$1 AND a.attnum>0 AND NOT a.attisdropped
+        ORDER BY a.attnum`, [table])).rows.map((r: any) => r.name);
+      const sourceRows = (await source.query('SELECT ' + names.map(q).join(',') + ' FROM ' + q(table))).rows;
+      const targetRows = (await target.query('SELECT ' + names.map(q).join(',') + ' FROM ' + q(table))).rows;
+      if (sourceRows.length !== targetRows.length) {
+        throw new Error('Validação final de quantidade falhou em ' + table + ': source=' + sourceRows.length + ' target=' + targetRows.length);
+      }
+      finalReport[table] = { source: sourceRows.length, target: targetRows.length, action: report[table]?.action || 'validated' };
+    }
+
+    await target.query('INSERT INTO "__filtra_migrations"(id,details) VALUES($1,$2)', [marker, JSON.stringify(finalReport)]);
+    console.log('[MIGRATION] Render -> Supabase concluída e validada.', finalReport);
+  } finally {
+    await Promise.allSettled([source.end(), target.end()]);
+  }
+}
+ + vals.length;
           }).join(',') + ')').join(',');
           await target.query(
             'INSERT INTO ' + q(table) + ' (' + names.map(q).join(',') + ') VALUES ' + tuples,
