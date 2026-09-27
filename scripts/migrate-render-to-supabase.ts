@@ -90,7 +90,7 @@ export async function main() {
       SELECT c.relname AS table_name FROM pg_class c
       JOIN pg_namespace n ON n.oid=c.relnamespace
       WHERE n.nspname='public' AND c.relkind='r' ORDER BY c.relname`)).rows
-      .filter((row: any) => !skipTables.has(String(row.table_name)));
+      .filter((row: any) => { const name = String(row.table_name); return !skipTables.has(name) && !name.startsWith('oauth_'); });
 
     const report: Record<string, any> = {};
 
