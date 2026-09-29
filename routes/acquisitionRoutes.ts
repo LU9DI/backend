@@ -75,7 +75,7 @@ export function mountAcquisitionRoutes(app: Express) {
     const exists=await db.get('SELECT id FROM leads WHERE id=?',[leadId]);
     if(!exists) return res.status(404).json({error:'Lead não encontrado.'});
     const now=eligible?nowIso():null;
-    await db.run(\`UPDATE leads SET acquisition_eligible=?, acquisition_opted_in_at=?, acquisition_suppressed=?, acquisition_stage=? WHERE id=?\`,
+    await db.run(`UPDATE leads SET acquisition_eligible=?, acquisition_opted_in_at=?, acquisition_suppressed=?, acquisition_stage=? WHERE id=?`,
       [eligible?1:0,now,eligible?0:1,eligible?'ready':'suppressed',leadId]);
     res.json({success:true,lead_id:leadId,eligible,requires_explicit_opt_in:true});
   }));
