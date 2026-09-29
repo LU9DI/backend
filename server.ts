@@ -19,6 +19,7 @@ import { mountTrialRoutes } from './routes/trialRoutes.js';
 import { mountAuthRoutes } from './routes/authRoutes.js';
 import { mountEmpresaRoutes } from './routes/empresaRoutes.js';
 import { mountReviewRoutes } from './routes/reviewRoutes.js';
+import { mountDiagnosticRoutes } from './routes/diagnosticRoutes.js';
 import { mountAdminDashboardRoutes } from './routes/adminDashboardRoutes.js';
 import { mountAdminFollowupRoutes, ensureFollowupSchema } from './routes/adminFollowupRoutes.js';
 import { mountAdminTecnicoRoutes } from './routes/adminTecnicoRoutes.js';
@@ -315,6 +316,7 @@ async function main() {
   mountAuthRoutes(app);
   mountEmpresaRoutes(app);
   mountReviewRoutes(app);
+  mountDiagnosticRoutes(app);
   mountAdminDashboardRoutes(app);
   mountAdminFollowupRoutes(app);
   mountAdminTecnicoRoutes(app);
