@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { getDb } from '../lib/db.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyInboundSecret, notifyN8n } from '../lib/n8n.js';
+import { acquisitionEngineStatus, queueEligibleAcquisition } from '../lib/acquisitionEngine.js';
 
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 240, message: { error: 'Rate limit acquisition.' } });
 
@@ -14,6 +15,7 @@ function auth(req: Request, res: Response) {
 }
 const s = (v: unknown, n = 10000) => String(v ?? '').trim().slice(0, n);
 const now = () => new Date().toISOString();
+const nowIso = () => new Date().toISOString();
 const hash = (v: unknown) => crypto.createHash('sha256').update(typeof v === 'string' ? v : JSON.stringify(v)).digest('hex');
 
 export async function ensureAcquisitionSchema(db = getDb()) {
@@ -54,6 +56,30 @@ export async function ensureAcquisitionSchema(db = getDb()) {
 }
 
 export function mountAcquisitionRoutes(app: Express) {
+  app.get('/api/n8n/acquisition/engine-status', limiter, asyncHandler(async (req,res) => {
+    if (!auth(req,res)) return;
+    res.json({success:true, engine:await acquisitionEngineStatus()});
+  }));
+
+  app.post('/api/n8n/acquisition/engine/tick', limiter, asyncHandler(async (req,res) => {
+    if (!auth(req,res)) return;
+    const result = await queueEligibleAcquisition(Math.min(25, Math.max(1, Number(req.body?.limit || 25))));
+    res.json({success:true, result});
+  }));
+
+  app.post('/api/n8n/acquisition/leads/eligibility', limiter, asyncHandler(async (req,res) => {
+    if (!auth(req,res)) return;
+    const db=getDb(); await ensureAcquisitionSchema(db);
+    const leadId=s(req.body?.lead_id,120); const eligible=req.body?.eligible===true;
+    if(!leadId) return res.status(400).json({error:'lead_id obrigatório.'});
+    const exists=await db.get('SELECT id FROM leads WHERE id=?',[leadId]);
+    if(!exists) return res.status(404).json({error:'Lead não encontrado.'});
+    const now=eligible?nowIso():null;
+    await db.run(\`UPDATE leads SET acquisition_eligible=?, acquisition_opted_in_at=?, acquisition_suppressed=?, acquisition_stage=? WHERE id=?\`,
+      [eligible?1:0,now,eligible?0:1,eligible?'ready':'suppressed',leadId]);
+    res.json({success:true,lead_id:leadId,eligible,requires_explicit_opt_in:true});
+  }));
+
   app.get('/api/n8n/acquisition/status', limiter, asyncHandler(async (req,res) => {
     if (!auth(req,res)) return; const db=getDb(); await ensureAcquisitionSchema(db);
     const [a,b,c,d]=await Promise.all([
