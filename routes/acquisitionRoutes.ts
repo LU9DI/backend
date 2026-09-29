@@ -237,6 +237,26 @@ export function mountAcquisitionRoutes(app: Express) {
     res.status(200).json({success:true,persisted:true,id:eventId,event_type:event,n8n_queued:true});
   }));
 
+  app.post('/api/public/acquisition/consent', limiter, asyncHandler(async(req,res)=>{
+    const db=getDb(); await ensureAcquisitionSchema(db);
+    const b=req.body||{};
+    const email=s(b.email,320).toLowerCase();
+    const company=s(b.company||b.nome_empresa,180);
+    const source=s(b.source,120)||'website';
+    const consent=b.consent===true;
+    if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) return res.status(400).json({error:'E-mail inválido.'});
+    if(!consent) return res.status(400).json({error:'Consentimento explícito obrigatório.'});
+    let lead=await db.get('SELECT id FROM leads WHERE LOWER(email)=? LIMIT 1',[email]);
+    const leadId=String(lead?.id||crypto.randomUUID());
+    if(lead?.id){
+      await db.run('UPDATE leads SET nome_empresa=COALESCE(NULLIF(? ,\'\'),nome_empresa), acquisition_eligible=1, acquisition_opted_in_at=CURRENT_TIMESTAMP, acquisition_suppressed=0, acquisition_stage=\'ready\', acquisition_source=?, acquisition_next_at=CURRENT_TIMESTAMP WHERE id=?',[company,source,lead.id]);
+    } else {
+      await db.run('INSERT INTO leads (id,nome_empresa,email,fonte,raw_json,criado_em,acquisition_eligible,acquisition_opted_in_at,acquisition_suppressed,acquisition_stage,acquisition_next_at,acquisition_source) VALUES (?,?,?,?,?,CURRENT_TIMESTAMP,1,CURRENT_TIMESTAMP,0,\'ready\',CURRENT_TIMESTAMP,?)',[leadId,company||null,email,source,JSON.stringify({consent:true,consent_source:source,consent_at:new Date().toISOString()}).slice(0,20000),source]);
+    }
+    await db.run('INSERT INTO acquisition_events (id,lead_id,event_type,source,occurred_at,metadata_json) VALUES (?,?,?,?,CURRENT_TIMESTAMP,?)',[crypto.randomUUID(),leadId,'consent','website',JSON.stringify({source,consent:true}).slice(0,20000)]);
+    res.status(201).json({success:true,persisted:true,lead_id:leadId,stage:'ready'});
+  }));
+
   app.post('/api/n8n/acquisition/events', limiter, asyncHandler(async(req,res)=>{
     if(!auth(req,res)) return; const b=req.body||{}, db=getDb(); await ensureAcquisitionSchema(db);
     const event=s(b.event_type,80); if(!event) return res.status(400).json({error:'event_type obrigatório.'});
