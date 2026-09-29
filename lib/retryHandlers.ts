@@ -20,6 +20,8 @@ import { activatePlan, blockEmpresa } from '../services/billingService.js';
 import { enviarEmail } from './mailer.js';
 import { logWebhookEvent } from './opsLog.js';
 import { sendN8nWebhook } from './n8n.js';
+import { processAcquisitionEmail } from './acquisitionEngine.js';
+import { enviarEmail } from './mailer.js';
 
 async function activatePayPal(
   empresaId: string,
@@ -242,6 +244,12 @@ export function registerAllRetryHandlers() {
     if (status === 'pending' || status === 'in_process') {
       throw new Error(`mp ainda pending (${status})`);
     }
+  });
+
+  registerRetryHandler('acquisition_email', async (payload) => {
+    const sendId = String(payload.send_id || '').trim();
+    if (!sendId) throw new Error('acquisition_email: send_id obrigatório');
+    await processAcquisitionEmail(sendId, enviarEmail);
   });
 
   registerRetryHandler('n8n_webhook', async (payload) => {
