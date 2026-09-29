@@ -13,6 +13,18 @@ const emailOk = (v: unknown) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean(v, 320))
 
 export async function ensureAcquisitionEngineSchema(db = getDb()) {
   await db.exec(`
+    CREATE TABLE IF NOT EXISTS leads (
+      id TEXT PRIMARY KEY,
+      nome_empresa TEXT,
+      email TEXT,
+      telefone TEXT,
+      fonte TEXT,
+      maps_url TEXT,
+      raw_json TEXT,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS acquisition_sends (
       id TEXT PRIMARY KEY,
       lead_id TEXT NOT NULL,
