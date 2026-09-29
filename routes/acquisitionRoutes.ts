@@ -170,6 +170,60 @@ export function mountAcquisitionRoutes(app: Express) {
       [eventId,s(tagMap.campaign_id,120)||null,s(tagMap.content_id,120)||null,s(tagMap.lead_id||tagMap.leadId,120)||null,
        event,'resend',s(tagMap.utm_medium,120)||null,s(tagMap.utm_campaign,160)||null,s(tagMap.utm_content,160)||null,
        occurred,JSON.stringify(metadata).slice(0,20000),eventId]);
+
+    // Fecha o ciclo de aquisição no próprio backend: o webhook do provedor é
+    // a fonte de verdade para entrega, engajamento e supressão.
+    const providerEmailId = s(data?.email_id || data?.id, 240);
+    if (providerEmailId) {
+      const send = await db.get(
+        `SELECT id,lead_id FROM acquisition_sends WHERE provider_message_id=? ORDER BY sent_at DESC LIMIT 1`,
+        [providerEmailId]
+      );
+      if (send?.lead_id) {
+        const terminal = ['email.bounced','email.complained','email.suppressed'].includes(event);
+        const engaged = ['email.opened','email.clicked'].includes(event);
+        const delivered = event === 'email.delivered';
+        const delayed = event === 'email.delivery_delayed';
+        const failed = event === 'email.failed';
+
+        if (terminal) {
+          await db.run(
+            `UPDATE leads
+             SET acquisition_suppressed=1, acquisition_eligible=0,
+                 acquisition_stage='suppressed', acquisition_next_at=NULL
+             WHERE id=?`,
+            [send.lead_id]
+          );
+        } else if (engaged) {
+          await db.run(
+            `UPDATE leads
+             SET acquisition_stage='engaged', acquisition_next_at=NULL
+             WHERE id=? AND COALESCE(acquisition_suppressed,0)=0`,
+            [send.lead_id]
+          );
+        } else if (delivered) {
+          await db.run(
+            `UPDATE leads
+             SET acquisition_stage='delivered'
+             WHERE id=? AND COALESCE(acquisition_suppressed,0)=0`,
+            [send.lead_id]
+          );
+        } else if (delayed) {
+          await db.run(
+            `UPDATE leads
+             SET acquisition_stage='delivery_delayed'
+             WHERE id=? AND COALESCE(acquisition_suppressed,0)=0`,
+            [send.lead_id]
+          );
+        } else if (failed) {
+          await db.run(
+            `UPDATE leads SET acquisition_stage='failed'
+             WHERE id=? AND COALESCE(acquisition_suppressed,0)=0`,
+            [send.lead_id]
+          );
+        }
+      }
+    }
     notifyN8n(event, {
       event_id: eventId,
       email_id: data?.email_id||data?.id||null,
