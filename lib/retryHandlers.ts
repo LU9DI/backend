@@ -21,7 +21,6 @@ import { enviarEmail } from './mailer.js';
 import { logWebhookEvent } from './opsLog.js';
 import { sendN8nWebhook } from './n8n.js';
 import { processAcquisitionEmail } from './acquisitionEngine.js';
-import { enviarEmail } from './mailer.js';
 
 async function activatePayPal(
   empresaId: string,
