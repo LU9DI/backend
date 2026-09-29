@@ -144,7 +144,17 @@ export function mountAcquisitionRoutes(app: Express) {
       [eventId,s(tagMap.campaign_id,120)||null,s(tagMap.content_id,120)||null,s(tagMap.lead_id||tagMap.leadId,120)||null,
        event,'resend',s(tagMap.utm_medium,120)||null,s(tagMap.utm_campaign,160)||null,s(tagMap.utm_content,160)||null,
        occurred,JSON.stringify(metadata).slice(0,20000),eventId]);
-    notifyN8n(event, {\n      event_id: eventId,\n      email_id: data?.email_id||data?.id||null,\n      to: data?.to||null,\n      subject: data?.subject||null,\n      from: data?.from||null,\n      tags: tagMap,\n      occurred_at: occurred,\n      dedupe_key: `resend:${eventId}`\n    });\n    res.status(200).json({success:true,persisted:true,id:eventId,event_type:event,n8n_queued:true});
+    notifyN8n(event, {
+      event_id: eventId,
+      email_id: data?.email_id||data?.id||null,
+      to: data?.to||null,
+      subject: data?.subject||null,
+      from: data?.from||null,
+      tags: tagMap,
+      occurred_at: occurred,
+      dedupe_key: `resend:${eventId}`
+    });
+    res.status(200).json({success:true,persisted:true,id:eventId,event_type:event,n8n_queued:true});
   }));
 
   app.post('/api/n8n/acquisition/events', limiter, asyncHandler(async(req,res)=>{
