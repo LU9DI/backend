@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "filtra-ai-acquisition": {
+      "command": "npx",
+      "args": ["tsx", "scripts/filtra-mcp.ts"],
+      "env": {
+        "FILTRA_API_URL": "https://api.filtraai.com",
+        "FILTRA_MCP_SECRET": "COLOQUE_AQUI_O_SEGREDO_DE_INTEGRACAO"
+      }
+    }
+  }
+}
