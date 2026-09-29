@@ -139,10 +139,11 @@ export function mountAcquisitionRoutes(app: Express) {
     const metadata={email_id:data?.email_id||data?.id||null,to:data?.to||null,subject:data?.subject||null,from:data?.from||null,tags:tagMap};
     await db.run(`INSERT INTO acquisition_events
       (id,campaign_id,content_id,lead_id,event_type,source,medium,campaign,content,occurred_at,metadata_json)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,
+      SELECT ?,?,?,?,?,?,?,?,?,?,?
+      WHERE NOT EXISTS (SELECT 1 FROM acquisition_events WHERE id=?)`,
       [eventId,s(tagMap.campaign_id,120)||null,s(tagMap.content_id,120)||null,s(tagMap.lead_id||tagMap.leadId,120)||null,
        event,'resend',s(tagMap.utm_medium,120)||null,s(tagMap.utm_campaign,160)||null,s(tagMap.utm_content,160)||null,
-       occurred,JSON.stringify(metadata).slice(0,20000)]);
+       occurred,JSON.stringify(metadata).slice(0,20000),eventId]);
     res.status(200).json({success:true,persisted:true,id:eventId,event_type:event});
   }));
 
