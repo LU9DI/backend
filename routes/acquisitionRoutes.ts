@@ -291,7 +291,7 @@ export function mountAcquisitionRoutes(app: Express) {
     } else {
       await db.run('INSERT INTO leads (id,nome_empresa,email,fonte,raw_json,criado_em,acquisition_eligible,acquisition_opted_in_at,acquisition_suppressed,acquisition_stage,acquisition_next_at,acquisition_source) VALUES (?,?,?,?,?,CURRENT_TIMESTAMP,1,CURRENT_TIMESTAMP,0,\'ready\',CURRENT_TIMESTAMP,?)',[leadId,company||null,email,source,JSON.stringify({consent:true,consent_source:source,consent_at:new Date().toISOString()}).slice(0,20000),source]);
     }
-    await db.run('INSERT INTO acquisition_events (id,lead_id,event_type,source,occurred_at,metadata_json) VALUES (?,?,?,?,CURRENT_TIMESTAMP,?)',[crypto.randomUUID(),leadId,'consent','website',JSON.stringify({source,consent:true}).slice(0,20000)]);
+    await db.run('INSERT INTO acquisition_events (id,lead_id,event_type,source,occurred_at,metadata_json) VALUES (?,?,?,?,CURRENT_TIMESTAMP,?)',[crypto.randomUUID(),leadId,'consent','website',JSON.stringify({source,consent:true,consent_at:new Date().toISOString(),ip:req.ip||null,user_agent:req.headers['user-agent']||null}).slice(0,20000)]);
     res.status(201).json({success:true,persisted:true,lead_id:leadId,stage:'ready'});
   }));
 
