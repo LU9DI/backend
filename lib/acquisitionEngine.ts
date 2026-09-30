@@ -13,6 +13,8 @@ let running = false;
 
 const clean = (v: unknown, n = 5000) => String(v ?? '').trim().slice(0, n);
 const emailOk = (v: unknown) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean(v, 320));
+const unsubscribeSecret = () => clean(process.env.ACQUISITION_UNSUBSCRIBE_SECRET || process.env.JWT_SECRET, 500);
+const unsubscribeToken = (leadId: string) => crypto.createHmac('sha256', unsubscribeSecret()).update(leadId).digest('hex');
 
 export async function ensureAcquisitionEngineSchema(db = getDb()) {
   await db.exec(`
@@ -226,13 +228,15 @@ Depois, se fizer sentido, você pode testar a plataforma por 7 dias.
 
 Equipe filtra.ai
 
-Se não quiser receber novas comunicações da Filtra.AI, responda a este e-mail solicitando a remoção.`;
+Se não quiser receber novas comunicações da Filtra.AI, cancele aqui: ${unsubscribeUrl}`;
   const safeCompany = company.replace(/[&<>"]/g, (m: string) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m] || m));
   const safeUrl = url.replace(/&/g, '&amp;');
   const trackingBase = 'https://api.filtraai.com/api/public/acquisition';
+  const unsubscribeUrl = trackingBase + '/unsubscribe?l=' + encodeURIComponent(String(lead.id)) + '&t=' + encodeURIComponent(unsubscribeToken(String(lead.id)));
   const clickUrl = trackingBase + '/click?l=' + encodeURIComponent(String(lead.id)) + '&u=' + encodeURIComponent(url);
   const openUrl = trackingBase + '/open?l=' + encodeURIComponent(String(lead.id));
   const safeClickUrl = clickUrl.replace(/&/g, '&amp;');
+  const safeUnsubscribeUrl = unsubscribeUrl.replace(/&/g, '&amp;');
   const html =
 `<!doctype html><html lang="pt-BR"><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#202124;line-height:1.55">
 <div style="max-width:600px;margin:auto">
@@ -243,7 +247,7 @@ Se não quiser receber novas comunicações da Filtra.AI, responda a este e-mail
 <p><a href="${safeClickUrl}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:700">Ver auditoria gratuita</a></p>
 <p>Depois, se fizer sentido, você pode testar a plataforma por 7 dias.</p>
 <p>Equipe filtra.ai</p>
-<p style="font-size:12px;color:#6b7280">Se não quiser receber novas comunicações da Filtra.AI, responda a este e-mail solicitando a remoção.</p>
+<p style="font-size:12px;color:#6b7280">Se não quiser receber novas comunicações da Filtra.AI, <a href="${safeUnsubscribeUrl}">clique aqui para cancelar</a>.</p>
 <img src="${openUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px" />
 </div></body></html>`;
   return { subject, body, html };
