@@ -206,23 +206,42 @@ export async function syncResendContacts(db = getDb()) {
 
 function buildMessage(lead: any) {
   const company = clean(lead.nome_empresa, 180) || 'sua empresa';
-  const subject = `Uma forma simples de transformar avaliações em crescimento — ${company}`;
+  const variant = crypto.createHash('sha256').update(String(lead.id)).digest('hex').charCodeAt(0) % 2 === 0 ? 'A' : 'B';
+  const subject = variant === 'A'
+    ? `Uma pergunta rápida sobre as avaliações da ${company}`
+    : `Podemos fazer uma auditoria da ${company}?`;
+  const url = 'https://filtraai.com/auditoria-gratuita?utm_source=acquisition&utm_medium=email&utm_campaign=2026-09&utm_content=' + variant.toLowerCase();
   const body =
 `Olá,
 
-A Filtra.AI ajuda empresas a transformar avaliações e feedback dos clientes em sinais acionáveis para melhorar experiência, reputação e crescimento.
+Vi a presença digital da ${company} e queria fazer uma pergunta rápida: vocês acompanham de forma estruturada o que os clientes estão dizendo nas avaliações?
 
-Se sua equipe já recebe avaliações de clientes, podemos fazer um diagnóstico gratuito da presença digital da ${company} e mostrar onde existem oportunidades de melhoria.
+A Filtra.AI transforma avaliações e feedback em oportunidades práticas para melhorar experiência, reputação e crescimento.
 
-Auditoria gratuita:
-https://filtraai.com/auditoria-gratuita
+Posso fazer uma auditoria gratuita da ${company} e mostrar o que encontramos?
 
-Depois, se fizer sentido, há 7 dias para testar a plataforma.
+${url}
+
+Depois, se fizer sentido, você pode testar a plataforma por 7 dias.
 
 Equipe filtra.ai
 
-Se você não quiser receber comunicações da Filtra.AI, basta responder a este e-mail solicitando a remoção.`;
-  return { subject, body };
+Se não quiser receber novas comunicações da Filtra.AI, responda a este e-mail solicitando a remoção.`;
+  const safeCompany = company.replace(/[&<>"]/g, (m: string) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m] || m));
+  const safeUrl = url.replace(/&/g, '&amp;');
+  const html =
+`<!doctype html><html lang="pt-BR"><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#202124;line-height:1.55">
+<div style="max-width:600px;margin:auto">
+<p>Olá,</p>
+<p>Vi a presença digital da <strong>${safeCompany}</strong> e queria fazer uma pergunta rápida: vocês acompanham de forma estruturada o que os clientes estão dizendo nas avaliações?</p>
+<p>A <strong>Filtra.AI</strong> transforma avaliações e feedback em oportunidades práticas para melhorar experiência, reputação e crescimento.</p>
+<p>Posso fazer uma auditoria gratuita da <strong>${safeCompany}</strong> e mostrar o que encontramos?</p>
+<p><a href="${safeUrl}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:700">Ver auditoria gratuita</a></p>
+<p>Depois, se fizer sentido, você pode testar a plataforma por 7 dias.</p>
+<p>Equipe filtra.ai</p>
+<p style="font-size:12px;color:#6b7280">Se não quiser receber novas comunicações da Filtra.AI, responda a este e-mail solicitando a remoção.</p>
+</div></body></html>`;
+  return { subject, body, html };
 }
 
 export async function queueEligibleAcquisition(limit = 25) {
@@ -355,6 +374,7 @@ export async function processAcquisitionEmail(sendId: string) {
     to: String(send.email),
     subject: String(send.subject),
     text: String(send.body),
+    html: buildMessage(send).html,
     idempotencyKey: String(send.idempotency_key)
   });
   if (!result.ok) {
