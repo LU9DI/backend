@@ -31,7 +31,7 @@ async function acquisitionReputationGuard(db: any) {
   const complained = Number(complaintRow?.c || 0);
   const bounceRate = sent ? bounced / sent : 0;
   const complaintRate = sent ? complained / sent : 0;
-  const paused = complained > 0 || (sent >= REPUTATION_MIN_SAMPLE && bounceRate >= REPUTATION_BOUNCE_LIMIT);
+  const paused = complaintRate >= REPUTATION_COMPLAINT_LIMIT || complained > 0 || (sent >= REPUTATION_MIN_SAMPLE && bounceRate >= REPUTATION_BOUNCE_LIMIT);
   return { paused, sent, bounced, complained, bounce_rate: bounceRate, complaint_rate: complaintRate, reason: complained > 0 ? 'complaint' : (paused ? 'bounce_rate' : null) };
 }
 
@@ -232,6 +232,10 @@ function buildMessage(lead: any) {
     ? `Uma pergunta rápida sobre as avaliações da ${company}`
     : `Podemos fazer uma auditoria da ${company}?`;
   const url = 'https://filtraai.com/auditoria-gratuita?utm_source=acquisition&utm_medium=email&utm_campaign=2026-09&utm_content=' + variant.toLowerCase();
+  const trackingBase = 'https://api.filtraai.com/api/public/acquisition';
+  const unsubscribeUrl = trackingBase + '/unsubscribe?l=' + encodeURIComponent(String(lead.id)) + '&t=' + encodeURIComponent(unsubscribeToken(String(lead.id)));
+  const clickUrl = trackingBase + '/click?l=' + encodeURIComponent(String(lead.id)) + '&u=' + encodeURIComponent(url);
+  const openUrl = trackingBase + '/open?l=' + encodeURIComponent(String(lead.id));
   const body =
 `Olá,
 
@@ -249,7 +253,6 @@ Equipe filtra.ai
 
 Se não quiser receber novas comunicações da Filtra.AI, cancele aqui: ${unsubscribeUrl}`;
   const safeCompany = company.replace(/[&<>"]/g, (m: string) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m] || m));
-  const safeUrl = url.replace(/&/g, '&amp;');
   const safeClickUrl = clickUrl.replace(/&/g, '&amp;');
   const safeUnsubscribeUrl = unsubscribeUrl.replace(/&/g, '&amp;');
   const html =
