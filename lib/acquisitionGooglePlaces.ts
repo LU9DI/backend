@@ -166,24 +166,34 @@ export async function googlePlacesLeads(limit: number) {
   const target = Math.min(200, Math.max(1, limit));
   const places = new Map<string, any>();
 
-  for (const query of queries()) {
+  const queryList = queries();
+  console.log('[acquisition-google-places] start queries=' + queryList.length + ' target=' + target);
+  for (let i = 0; i < queryList.length; i += 4) {
     if (places.size >= target * 2) break;
-    try {
-      const first = await searchPlaces(query);
-      const pages = [first];
-      if (first?.nextPageToken && pages.length < 2) {
-        await new Promise(resolve => setTimeout(resolve, 1200));
-        pages.push(await searchPlaces(query, first.nextPageToken));
+    const batch = queryList.slice(i, i + 4);
+    const results = await Promise.all(batch.map(async (query) => {
+      try {
+        const first = await searchPlaces(query);
+        const pages = [first];
+        if (first?.nextPageToken) {
+          await new Promise(resolve => setTimeout(resolve, 1200));
+          pages.push(await searchPlaces(query, first.nextPageToken));
+        }
+        return pages;
+      } catch (error: any) {
+        console.warn('[acquisition-google-places] query=' + query + ' failed:', error?.message || error);
+        return [];
       }
+    }));
+    for (const pages of results) {
       for (const page of pages) {
         for (const place of Array.isArray(page?.places) ? page.places : []) {
           const id = clean(place?.id, 300);
           if (id) places.set(id, place);
         }
       }
-    } catch (error: any) {
-      console.warn('[acquisition-google-places]', error?.message || error);
     }
+    console.log('[acquisition-google-places] places=' + places.size);
   }
 
   const ranked = [...places.values()]
@@ -192,11 +202,18 @@ export async function googlePlacesLeads(limit: number) {
     .slice(0, target * 2);
 
   const leads: any[] = [];
-  for (const place of ranked) {
-    if (leads.length >= target) break;
-    const emails = await websiteEmails(place.websiteUri);
-    for (const email of emails) {
-      leads.push({
+  for (let i = 0; i < ranked.length && leads.length < target; i += 8) {
+    const batch = ranked.slice(i, i + 8);
+    const emailResults = await Promise.all(batch.map(async (place) => {
+      try {
+        return { place, emails: await websiteEmails(place.websiteUri) };
+      } catch {
+        return { place, emails: [] as string[] };
+      }
+    }));
+    for (const { place, emails } of emailResults) {
+      for (const email of emails) {
+        leads.push({
         id: `google-places-${hash(email).slice(0, 32)}`,
         email,
         company: clean(place?.displayName?.text, 200),
@@ -212,9 +229,11 @@ export async function googlePlacesLeads(limit: number) {
           types: Array.isArray(place?.types) ? place.types : [],
         },
       });
+        if (leads.length >= target) break;
+      }
       if (leads.length >= target) break;
     }
   }
-
+  console.log('[acquisition-google-places] done places=' + places.size + ' leads=' + leads.length);
   return { leads };
 }
