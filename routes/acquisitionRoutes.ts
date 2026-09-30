@@ -17,6 +17,8 @@ const s = (v: unknown, n = 10000) => String(v ?? '').trim().slice(0, n);
 const now = () => new Date().toISOString();
 const nowIso = () => new Date().toISOString();
 const hash = (v: unknown) => crypto.createHash('sha256').update(typeof v === 'string' ? v : JSON.stringify(v)).digest('hex');
+const unsubscribeSecret = () => s(process.env.ACQUISITION_UNSUBSCRIBE_SECRET || process.env.JWT_SECRET, 500);
+const unsubscribeToken = (leadId: string) => crypto.createHmac('sha256', unsubscribeSecret()).update(leadId).digest('hex');
 
 export async function ensureAcquisitionSchema(db = getDb()) {
   await db.exec(`CREATE TABLE IF NOT EXISTS acquisition_campaigns (
@@ -92,6 +94,31 @@ export function mountAcquisitionRoutes(app: Express) {
       [crypto.randomUUID(), leadId, 'email.clicked', 'first_party_tracking', JSON.stringify({target:destination.toString(),user_agent:req.headers['user-agent'] || null}).slice(0,20000)]
     );
     res.redirect(302, destination.toString());
+  }));
+
+  app.get('/api/public/acquisition/unsubscribe', limiter, asyncHandler(async (req,res) => {
+    const leadId = s(req.query.l, 120);
+    const token = s(req.query.t, 200);
+    if (!leadId || !token || !unsubscribeSecret()) return res.status(400).send('Link de cancelamento inválido.');
+    const expected = unsubscribeToken(leadId);
+    if (token.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expected))) {
+      return res.status(400).send('Link de cancelamento inválido.');
+    }
+    const db = getDb(); await ensureAcquisitionSchema(db);
+    const lead = await db.get('SELECT id FROM leads WHERE id=? LIMIT 1', [leadId]);
+    if (!lead?.id) return res.status(404).send('Contato não encontrado.');
+    await db.run(
+      `UPDATE leads SET acquisition_suppressed=1, acquisition_eligible=0,
+        acquisition_stage='suppressed', acquisition_next_at=NULL WHERE id=?`,
+      [leadId]
+    );
+    await db.run(
+      `INSERT INTO acquisition_events (id,lead_id,event_type,source,occurred_at,metadata_json)
+       VALUES (?,?,?,?,CURRENT_TIMESTAMP,?)`,
+      [crypto.randomUUID(), leadId, 'email.unsubscribed', 'first_party_unsubscribe',
+       JSON.stringify({user_agent:req.headers['user-agent'] || null}).slice(0,20000)]
+    );
+    res.status(200).send('<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Cancelamento confirmado</title><body style="font-family:Arial,sans-serif;padding:40px;max-width:680px;margin:auto"><h1>Cancelamento confirmado</h1><p>Você não receberá novas comunicações de aquisição da Filtra.AI.</p></body></html>');
   }));
 
   app.get('/api/n8n/acquisition/engine-status', limiter, asyncHandler(async (req,res) => {
