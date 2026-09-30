@@ -62,23 +62,50 @@ async function searchPlaces(textQuery: string, pageToken?: string) {
   };
   if (pageToken) body.pageToken = pageToken;
 
-  const response = await fetch('https://places.googleapis.com/v1/places:searchText', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-goog-api-key': key,
-      'x-goog-fieldmask': 'places.id,places.displayName,places.formattedAddress,places.websiteUri,places.rating,places.userRatingCount,places.types',
-    },
-    body: JSON.stringify(body),
-  });
+  // Places API (New): mantém FieldMask explícita para limitar resposta/custo.
+  const fieldMask =
+    'places.id,places.displayName,places.formattedAddress,places.websiteUri,places.rating,places.userRatingCount,places.types,nextPageToken';
 
-  const raw = await response.text();
-  let data: any = {};
-  try { data = JSON.parse(raw); } catch {}
-  if (!response.ok) throw new Error(`Google Places HTTP ${response.status}: ${clean(data?.error?.message || raw, 500)}`);
-  return data;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await fetch('https://places.googleapis.com/v1/places:searchText', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-goog-api-key': key,
+          'x-goog-fieldmask': fieldMask,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15000),
+      });
+
+      const raw = await response.text();
+      let data: any = {};
+      try { data = JSON.parse(raw); } catch {}
+
+      if (response.ok) return data;
+
+      // 4xx é erro de configuração/permissão: não insistir e não gerar custo repetido.
+      if (response.status < 500) {
+        throw new Error(`Google Places HTTP ${response.status}: ${clean(data?.error?.message || raw, 500)}`);
+      }
+
+      // 5xx/transiente: backoff exponencial antes de nova tentativa.
+      if (attempt < 2) {
+        await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** attempt));
+        continue;
+      }
+
+      throw new Error(`Google Places HTTP ${response.status}: ${clean(data?.error?.message || raw, 500)}`);
+    } catch (error: any) {
+      const message = String(error?.message || error);
+      if (attempt >= 2 || /HTTP 4\\d\\d/.test(message)) throw error;
+      await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** attempt));
+    }
+  }
+
+  throw new Error('Google Places: tentativas esgotadas');
 }
-
 function candidateScore(place: any) {
   const rating = Number(place?.rating || 0);
   const reviews = Number(place?.userRatingCount || 0);
