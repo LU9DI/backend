@@ -7,6 +7,9 @@ const DAILY_CAP = Math.min(80, Math.max(1, Number(process.env.ACQUISITION_DAILY_
 const ENGINE_INTERVAL_MS = Math.max(30_000, Number(process.env.ACQUISITION_ENGINE_INTERVAL_MS || 60_000));
 const RESEND_SYNC_PAGE_SIZE = Math.min(100, Math.max(1, Number(process.env.RESEND_CONTACT_SYNC_PAGE_SIZE || 100)));
 const RESEND_SYNC_MAX_PAGES = Math.min(20, Math.max(1, Number(process.env.RESEND_CONTACT_SYNC_MAX_PAGES || 5)));
+const REPUTATION_MIN_SAMPLE = Math.max(10, Number(process.env.ACQUISITION_REPUTATION_MIN_SAMPLE || 25));
+const REPUTATION_BOUNCE_LIMIT = Math.max(0.01, Math.min(0.04, Number(process.env.ACQUISITION_REPUTATION_BOUNCE_LIMIT || 0.04)));
+const REPUTATION_COMPLAINT_LIMIT = 0.0008;
 
 let started = false;
 let running = false;
@@ -15,6 +18,22 @@ const clean = (v: unknown, n = 5000) => String(v ?? '').trim().slice(0, n);
 const emailOk = (v: unknown) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean(v, 320));
 const unsubscribeSecret = () => clean(process.env.ACQUISITION_UNSUBSCRIBE_SECRET || process.env.JWT_SECRET, 500);
 const unsubscribeToken = (leadId: string) => crypto.createHmac('sha256', unsubscribeSecret()).update(leadId).digest('hex');
+
+async function acquisitionReputationGuard(db: any) {
+  const from = localDayStartUtcIso();
+  const [sentRow, bounceRow, complaintRow] = await Promise.all([
+    db.get(`SELECT COUNT(*) AS c FROM acquisition_sends WHERE channel='email' AND status='sent' AND sent_at >= ?`, [from]),
+    db.get(`SELECT COUNT(*) AS c FROM acquisition_events WHERE event_type='email.bounced' AND occurred_at >= ?`, [from]),
+    db.get(`SELECT COUNT(*) AS c FROM acquisition_events WHERE event_type='email.complained' AND occurred_at >= ?`, [from])
+  ]);
+  const sent = Number(sentRow?.c || 0);
+  const bounced = Number(bounceRow?.c || 0);
+  const complained = Number(complaintRow?.c || 0);
+  const bounceRate = sent ? bounced / sent : 0;
+  const complaintRate = sent ? complained / sent : 0;
+  const paused = complained > 0 || (sent >= REPUTATION_MIN_SAMPLE && bounceRate >= REPUTATION_BOUNCE_LIMIT);
+  return { paused, sent, bounced, complained, bounce_rate: bounceRate, complaint_rate: complaintRate, reason: complained > 0 ? 'complaint' : (paused ? 'bounce_rate' : null) };
+}
 
 export async function ensureAcquisitionEngineSchema(db = getDb()) {
   await db.exec(`
@@ -231,10 +250,6 @@ Equipe filtra.ai
 Se não quiser receber novas comunicações da Filtra.AI, cancele aqui: ${unsubscribeUrl}`;
   const safeCompany = company.replace(/[&<>"]/g, (m: string) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m] || m));
   const safeUrl = url.replace(/&/g, '&amp;');
-  const trackingBase = 'https://api.filtraai.com/api/public/acquisition';
-  const unsubscribeUrl = trackingBase + '/unsubscribe?l=' + encodeURIComponent(String(lead.id)) + '&t=' + encodeURIComponent(unsubscribeToken(String(lead.id)));
-  const clickUrl = trackingBase + '/click?l=' + encodeURIComponent(String(lead.id)) + '&u=' + encodeURIComponent(url);
-  const openUrl = trackingBase + '/open?l=' + encodeURIComponent(String(lead.id));
   const safeClickUrl = clickUrl.replace(/&/g, '&amp;');
   const safeUnsubscribeUrl = unsubscribeUrl.replace(/&/g, '&amp;');
   const html =
@@ -263,6 +278,9 @@ export async function queueEligibleAcquisition(limit = 25) {
     // Optional contact-management fallback. It requires a separate
     // RESEND_CONTACTS_API_KEY; the production sending key is never reused here.
     const resendFallback = await syncResendContacts(db);
+
+    const reputation = await acquisitionReputationGuard(db);
+    if (reputation.paused) return { queued: 0, skipped: 0, reason: 'reputation_pause', reputation };
 
     const used = await sentToday(db);
     const capacity = Math.max(0, DAILY_CAP - used);
@@ -343,6 +361,7 @@ export async function acquisitionEngineStatus() {
   const db = getDb();
   await ensureAcquisitionEngineSchema(db);
   const nowIso = new Date().toISOString();
+  const reputation = await acquisitionReputationGuard(db);
   const [queued, sent, failed, eligible, sendable] = await Promise.all([
     db.get(`SELECT COUNT(*) AS c FROM acquisition_sends WHERE status='queued'`),
     db.get(`SELECT COUNT(*) AS c FROM acquisition_sends WHERE status='sent' AND sent_at >= ?`, [localDayStartUtcIso()]),
@@ -362,7 +381,8 @@ export async function acquisitionEngineStatus() {
     sent_today: Number(sent?.c || 0),
     failed: Number(failed?.c || 0),
     eligible_leads: Number(eligible?.c || 0),
-    sendable_leads: Number(sendable?.c || 0)
+    sendable_leads: Number(sendable?.c || 0),
+    reputation_guard: reputation
   };
 }
 
@@ -376,6 +396,12 @@ export async function processAcquisitionEmail(sendId: string) {
   );
   if (!send) throw new Error('acquisition_send não encontrado');
   if (send.status === 'sent') return;
+  const reputation = await acquisitionReputationGuard(db);
+  if (reputation.paused) {
+    await db.run(`UPDATE acquisition_sends SET status='failed',failed_at=CURRENT_TIMESTAMP,last_error=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+      [`reputation_pause:${reputation.reason}`, sendId]);
+    throw new Error(`Envio pausado por reputação: ${reputation.reason}`);
+  }
   if (Number(send.acquisition_eligible) !== 1 || !send.acquisition_opted_in_at || Number(send.acquisition_suppressed || 0) === 1) {
     await db.run(`UPDATE acquisition_sends SET status='failed',failed_at=CURRENT_TIMESTAMP,last_error='lead não elegível/suprimido',updated_at=CURRENT_TIMESTAMP WHERE id=?`, [sendId]);
     return;
