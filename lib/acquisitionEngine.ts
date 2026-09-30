@@ -214,11 +214,11 @@ function buildMessage(lead: any) {
   const body =
 `Olá,
 
-Vi a presença digital da ${company} e queria fazer uma pergunta rápida: vocês acompanham de forma estruturada o que os clientes estão dizendo nas avaliações?
+Queria fazer uma pergunta rápida: vocês acompanham de forma estruturada o que os clientes estão dizendo nas avaliações?
 
 A Filtra.AI transforma avaliações e feedback em oportunidades práticas para melhorar experiência, reputação e crescimento.
 
-Posso fazer uma auditoria gratuita da ${company} e mostrar o que encontramos?
+Podemos preparar uma auditoria gratuita da ${company}, sem compromisso?
 
 ${url}
 
@@ -229,17 +229,22 @@ Equipe filtra.ai
 Se não quiser receber novas comunicações da Filtra.AI, responda a este e-mail solicitando a remoção.`;
   const safeCompany = company.replace(/[&<>"]/g, (m: string) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m] || m));
   const safeUrl = url.replace(/&/g, '&amp;');
+  const trackingBase = 'https://api.filtraai.com/api/public/acquisition';
+  const clickUrl = trackingBase + '/click?l=' + encodeURIComponent(String(lead.id)) + '&u=' + encodeURIComponent(url);
+  const openUrl = trackingBase + '/open?l=' + encodeURIComponent(String(lead.id));
+  const safeClickUrl = clickUrl.replace(/&/g, '&amp;');
   const html =
 `<!doctype html><html lang="pt-BR"><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#202124;line-height:1.55">
 <div style="max-width:600px;margin:auto">
 <p>Olá,</p>
-<p>Vi a presença digital da <strong>${safeCompany}</strong> e queria fazer uma pergunta rápida: vocês acompanham de forma estruturada o que os clientes estão dizendo nas avaliações?</p>
+<p>Queria fazer uma pergunta rápida: vocês acompanham de forma estruturada o que os clientes estão dizendo nas avaliações?</p>
 <p>A <strong>Filtra.AI</strong> transforma avaliações e feedback em oportunidades práticas para melhorar experiência, reputação e crescimento.</p>
-<p>Posso fazer uma auditoria gratuita da <strong>${safeCompany}</strong> e mostrar o que encontramos?</p>
-<p><a href="${safeUrl}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:700">Ver auditoria gratuita</a></p>
+<p>Podemos preparar uma auditoria gratuita da <strong>${safeCompany}</strong>, sem compromisso?</p>
+<p><a href="${safeClickUrl}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:700">Ver auditoria gratuita</a></p>
 <p>Depois, se fizer sentido, você pode testar a plataforma por 7 dias.</p>
 <p>Equipe filtra.ai</p>
 <p style="font-size:12px;color:#6b7280">Se não quiser receber novas comunicações da Filtra.AI, responda a este e-mail solicitando a remoção.</p>
+<img src="${openUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px" />
 </div></body></html>`;
   return { subject, body, html };
 }
