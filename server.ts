@@ -66,6 +66,7 @@ import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
 import { n8nConfigured } from './lib/n8n.js';
 import { ensureAcquisitionEngineSchema, startAcquisitionWorker } from './lib/acquisitionEngine.js';
+import { startAcquisitionReplenisher } from './lib/acquisitionReplenisher.js';
 import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
 import { ensureReportPdfSchema } from './lib/reportPdfStore.js';
 import {
@@ -307,6 +308,7 @@ async function main() {
   try {
     await ensureAcquisitionEngineSchema(getDb());
     startAcquisitionWorker();
+    startAcquisitionReplenisher();
   } catch (e) {
     console.warn('acquisition engine:', e);
   }
