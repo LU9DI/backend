@@ -180,11 +180,17 @@ export function startAcquisitionWorker() {
 export async function acquisitionEngineStatus() {
   const db = getDb();
   await ensureAcquisitionEngineSchema(db);
-  const [queued, sent, failed, eligible] = await Promise.all([
+  const nowIso = new Date().toISOString();
+  const [queued, sent, failed, eligible, sendable] = await Promise.all([
     db.get(`SELECT COUNT(*) AS c FROM acquisition_sends WHERE status='queued'`),
-    db.get(`SELECT COUNT(*) AS c FROM acquisition_sends WHERE status='sent' AND scheduled_at >= ?`, [localDayStartUtcIso()]),
+    db.get(`SELECT COUNT(*) AS c FROM acquisition_sends WHERE status='sent' AND sent_at >= ?`, [localDayStartUtcIso()]),
     db.get(`SELECT COUNT(*) AS c FROM acquisition_sends WHERE status='failed'`),
-    db.get(`SELECT COUNT(*) AS c FROM leads WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0`)
+    db.get(`SELECT COUNT(*) AS c FROM leads WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0`),
+    db.get(`SELECT COUNT(*) AS c FROM leads
+      WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0
+        AND email IS NOT NULL AND TRIM(email)!=''
+        AND (acquisition_next_at IS NULL OR acquisition_next_at <= ?)
+        AND acquisition_stage IN ('eligible','ready','followup')`, [nowIso])
   ]);
   return {
     enabled: process.env.ACQUISITION_ENGINE === '1',
@@ -192,7 +198,8 @@ export async function acquisitionEngineStatus() {
     queued: Number(queued?.c || 0),
     sent_today: Number(sent?.c || 0),
     failed: Number(failed?.c || 0),
-    eligible_leads: Number(eligible?.c || 0)
+    eligible_leads: Number(eligible?.c || 0),
+    sendable_leads: Number(sendable?.c || 0)
   };
 }
 
