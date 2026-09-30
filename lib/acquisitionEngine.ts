@@ -88,7 +88,10 @@ async function sentToday(db: any) {
  * Resend documents GET /contacts with cursor pagination (limit <= 100).
  */
 export async function syncResendContacts(db = getDb()) {
-  const apiKey = clean(process.env.RESEND_API_KEY);
+  const apiKey = clean(process.env.RESEND_CONTACTS_API_KEY);
+  // Contact-management access is intentionally separate from the production
+  // sending key. The production key is sending-only and must never be used
+  // for contact enumeration or other management APIs.
   if (!apiKey) return { enabled: false, fetched: 0, created: 0, existing: 0, suppressed: 0, pages: 0 };
 
   let after = '';
@@ -228,8 +231,8 @@ export async function queueEligibleAcquisition(limit = 25) {
     const db = getDb();
     await ensureAcquisitionEngineSchema(db);
 
-    // Replenish from the existing Resend contact base before consuming the queue.
-    // This path does not depend on FullEnrich credits.
+    // Optional contact-management fallback. It requires a separate
+    // RESEND_CONTACTS_API_KEY; the production sending key is never reused here.
     const resendFallback = await syncResendContacts(db);
 
     const used = await sentToday(db);
