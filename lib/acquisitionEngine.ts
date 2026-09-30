@@ -4,6 +4,8 @@ import { enqueueRetry } from './retryQueue.js';
 
 const DAILY_CAP = Math.min(80, Math.max(1, Number(process.env.ACQUISITION_DAILY_CAP || 80)));
 const ENGINE_INTERVAL_MS = Math.max(30_000, Number(process.env.ACQUISITION_ENGINE_INTERVAL_MS || 60_000));
+const RESEND_SYNC_PAGE_SIZE = Math.min(100, Math.max(1, Number(process.env.RESEND_CONTACT_SYNC_PAGE_SIZE || 100)));
+const RESEND_SYNC_MAX_PAGES = Math.min(20, Math.max(1, Number(process.env.RESEND_CONTACT_SYNC_MAX_PAGES || 5)));
 
 let started = false;
 let running = false;
@@ -76,6 +78,128 @@ async function sentToday(db: any) {
   return Number(row?.c || 0);
 }
 
+/**
+ * Replenishment fallback:
+ * FullEnrich remains the preferred source, but Resend's existing Contacts
+ * become a zero-credit fallback. We only import valid contacts that are not
+ * unsubscribed, dedupe by normalized email, and never re-enable a lead that
+ * was already locally suppressed.
+ *
+ * Resend documents GET /contacts with cursor pagination (limit <= 100).
+ */
+export async function syncResendContacts(db = getDb()) {
+  const apiKey = clean(process.env.RESEND_API_KEY);
+  if (!apiKey) return { enabled: false, fetched: 0, created: 0, existing: 0, suppressed: 0, pages: 0 };
+
+  let after = '';
+  let pages = 0;
+  let fetched = 0;
+  let created = 0;
+  let existing = 0;
+  let suppressed = 0;
+
+  try {
+    while (pages < RESEND_SYNC_MAX_PAGES) {
+      const params = new URLSearchParams({ limit: String(RESEND_SYNC_PAGE_SIZE) });
+      if (after) params.set('after', after);
+
+      const response = await fetch(`https://api.resend.com/contacts?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${apiKey}` }
+      });
+      const body: any = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        console.warn('[acquisition] Resend contact sync failed:', response.status, body?.message || body?.error || 'unknown');
+        return { enabled: true, fetched, created, existing, suppressed, pages, error: `HTTP ${response.status}` };
+      }
+
+      pages++;
+      const contacts = Array.isArray(body?.data) ? body.data : [];
+      fetched += contacts.length;
+
+      for (const contact of contacts) {
+        const email = clean(contact?.email, 320).toLowerCase();
+        if (!emailOk(email)) continue;
+
+        const unsubscribed = contact?.unsubscribed === true;
+        const props = (contact?.properties && typeof contact.properties === 'object') ? contact.properties : {};
+        const company = clean(
+          props.company_name || props.company || props.nome_empresa ||
+          contact?.company_name || contact?.first_name || '',
+          180
+        ) || null;
+
+        const lead = await db.get('SELECT id,acquisition_suppressed FROM leads WHERE LOWER(email)=? LIMIT 1', [email]);
+
+        if (lead?.id) {
+          existing++;
+          if (unsubscribed) {
+            await db.run(
+              `UPDATE leads
+               SET acquisition_suppressed=1, acquisition_eligible=0,
+                   acquisition_stage='suppressed', acquisition_next_at=NULL,
+                   acquisition_source=COALESCE(acquisition_source,'resend_existing')
+               WHERE id=?`,
+              [lead.id]
+            );
+            suppressed++;
+          } else {
+            // Do not overwrite a local suppression (bounce/complaint/manual opt-out).
+            await db.run(
+              `UPDATE leads
+               SET nome_empresa=COALESCE(NULLIF(nome_empresa,''),?),
+                   acquisition_source=COALESCE(acquisition_source,'resend_existing')
+               WHERE id=? AND COALESCE(acquisition_suppressed,0)=0`,
+              [company, lead.id]
+            );
+          }
+          continue;
+        }
+
+        if (unsubscribed) {
+          // Preserve the opt-out in the central lead table so this contact
+          // cannot later enter the acquisition queue accidentally.
+          const id = crypto.randomUUID();
+          await db.run(
+            `INSERT INTO leads
+             (id,nome_empresa,email,fonte,raw_json,criado_em,acquisition_eligible,
+              acquisition_suppressed,acquisition_stage,acquisition_source)
+             VALUES (?,?,?,?,?,CURRENT_TIMESTAMP,0,1,'suppressed','resend_existing')`,
+            [id, company, email, 'resend', JSON.stringify({resend_contact_id: contact?.id || null, unsubscribed: true}).slice(0,20000)]
+          );
+          suppressed++;
+          created++;
+          continue;
+        }
+
+        const id = crypto.randomUUID();
+        await db.run(
+          `INSERT INTO leads
+           (id,nome_empresa,email,fonte,raw_json,criado_em,acquisition_eligible,
+            acquisition_suppressed,acquisition_stage,acquisition_next_at,acquisition_source)
+           VALUES (?,?,?,?,?,CURRENT_TIMESTAMP,1,0,'ready',CURRENT_TIMESTAMP,'resend_existing')`,
+          [id, company, email, 'resend', JSON.stringify({
+            resend_contact_id: contact?.id || null,
+            first_name: contact?.first_name || null,
+            last_name: contact?.last_name || null,
+            properties: props
+          }).slice(0,20000)]
+        );
+        created++;
+      }
+
+      const hasMore = body?.has_more === true;
+      const last = contacts[contacts.length - 1];
+      if (!hasMore || !last?.id) break;
+      after = String(last.id);
+    }
+  } catch (e: any) {
+    console.warn('[acquisition] Resend contact sync exception:', e?.message || e);
+    return { enabled: true, fetched, created, existing, suppressed, pages, error: String(e?.message || e).slice(0,300) };
+  }
+
+  return { enabled: true, fetched, created, existing, suppressed, pages };
+}
+
 function buildMessage(lead: any) {
   const company = clean(lead.nome_empresa, 180) || 'sua empresa';
   const subject = `Uma forma simples de transformar avaliações em crescimento — ${company}`;
@@ -103,9 +227,14 @@ export async function queueEligibleAcquisition(limit = 25) {
   try {
     const db = getDb();
     await ensureAcquisitionEngineSchema(db);
+
+    // Replenish from the existing Resend contact base before consuming the queue.
+    // This path does not depend on FullEnrich credits.
+    const resendFallback = await syncResendContacts(db);
+
     const used = await sentToday(db);
     const capacity = Math.max(0, DAILY_CAP - used);
-    if (!capacity) return { queued: 0, skipped: 0, reason: 'daily_cap' };
+    if (!capacity) return { queued: 0, skipped: 0, reason: 'daily_cap', resend_fallback: resendFallback };
 
     const take = Math.min(capacity, Math.max(1, limit));
     const leads = await db.all(
@@ -157,7 +286,7 @@ export async function queueEligibleAcquisition(limit = 25) {
         else throw e;
       }
     }
-    return { queued, skipped, capacity, used_before: used };
+    return { queued, skipped, capacity, used_before: used, resend_fallback: resendFallback };
   } finally {
     running = false;
   }
