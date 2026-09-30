@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import { getDb } from './db.js';
 import { ensureAcquisitionEngineSchema } from './acquisitionEngine.js';
 import { googlePlacesLeads } from './acquisitionGooglePlaces.js';
@@ -292,7 +291,7 @@ async function openStreetMapProvider(limit: number) {
 }
 
 function providerOrder() {
-  return clean(process.env.ACQUISITION_PROVIDERS || 'google_places,fullenrich')
+  return clean(process.env.ACQUISITION_PROVIDERS || 'osm,google_places,fullenrich')
     .split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
 }
 
