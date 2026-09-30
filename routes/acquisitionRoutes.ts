@@ -56,6 +56,44 @@ export async function ensureAcquisitionSchema(db = getDb()) {
 }
 
 export function mountAcquisitionRoutes(app: Express) {
+  // First-party engagement tracking is intentionally independent of the provider's
+  // domain-level tracking flag. It records opens/clicks in acquisition_events.
+  app.get('/api/public/acquisition/open', asyncHandler(async (req,res) => {
+    const leadId = s(req.query.l, 120);
+    if (!leadId) return res.status(400).end();
+    const db = getDb(); await ensureAcquisitionSchema(db);
+    await db.run(
+      `INSERT INTO acquisition_events (id,lead_id,event_type,source,occurred_at,metadata_json)
+       VALUES (?,?,?,?,CURRENT_TIMESTAMP,?)
+       ON CONFLICT DO NOTHING`,
+      [crypto.randomUUID(), leadId, 'email.opened', 'first_party_tracking', JSON.stringify({user_agent:req.headers['user-agent'] || null}).slice(0,20000)]
+    );
+    const pixel = Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64');
+    res.setHeader('Content-Type', 'image/gif');
+    res.setHeader('Content-Length', String(pixel.length));
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    res.end(pixel);
+  }));
+
+  app.get('/api/public/acquisition/click', asyncHandler(async (req,res) => {
+    const leadId = s(req.query.l, 120);
+    const target = s(req.query.u, 2000);
+    if (!leadId || !target) return res.status(400).json({error:'Parâmetros inválidos.'});
+    let destination: URL;
+    try { destination = new URL(target); } catch { return res.status(400).json({error:'Destino inválido.'}); }
+    if (destination.protocol !== 'https:' || destination.hostname !== 'filtraai.com') {
+      return res.status(400).json({error:'Destino não autorizado.'});
+    }
+    const db = getDb(); await ensureAcquisitionSchema(db);
+    await db.run(
+      `INSERT INTO acquisition_events (id,lead_id,event_type,source,occurred_at,metadata_json)
+       VALUES (?,?,?,?,CURRENT_TIMESTAMP,?)
+       ON CONFLICT DO NOTHING`,
+      [crypto.randomUUID(), leadId, 'email.clicked', 'first_party_tracking', JSON.stringify({target:destination.toString(),user_agent:req.headers['user-agent'] || null}).slice(0,20000)]
+    );
+    res.redirect(302, destination.toString());
+  }));
+
   app.get('/api/n8n/acquisition/engine-status', limiter, asyncHandler(async (req,res) => {
     if (!auth(req,res)) return;
     res.json({success:true, engine:await acquisitionEngineStatus()});
