@@ -269,6 +269,7 @@ export async function queueEligibleAcquisition(limit = 25) {
       `SELECT id,nome_empresa,email,acquisition_stage,acquisition_next_at
        FROM leads
        WHERE acquisition_eligible=1
+         AND acquisition_opted_in_at IS NOT NULL
          AND COALESCE(acquisition_suppressed,0)=0
          AND email IS NOT NULL AND TRIM(email)!=''
          AND (acquisition_next_at IS NULL OR acquisition_next_at <= ?)
@@ -344,7 +345,8 @@ export async function acquisitionEngineStatus() {
     db.get(`SELECT COUNT(*) AS c FROM acquisition_sends WHERE status='failed'`),
     db.get(`SELECT COUNT(*) AS c FROM leads WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0`),
     db.get(`SELECT COUNT(*) AS c FROM leads
-      WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0
+      WHERE acquisition_eligible=1 AND acquisition_opted_in_at IS NOT NULL
+        AND COALESCE(acquisition_suppressed,0)=0
         AND email IS NOT NULL AND TRIM(email)!=''
         AND (acquisition_next_at IS NULL OR acquisition_next_at <= ?)
         AND acquisition_stage IN ('eligible','ready','followup')`, [nowIso])
@@ -364,13 +366,13 @@ export async function processAcquisitionEmail(sendId: string) {
   const db = getDb();
   await ensureAcquisitionEngineSchema(db);
   const send = await db.get(
-    `SELECT s.*,l.email,l.acquisition_eligible,l.acquisition_suppressed,l.acquisition_stage
+    `SELECT s.*,l.email,l.nome_empresa,l.acquisition_eligible,l.acquisition_opted_in_at,l.acquisition_suppressed,l.acquisition_stage
      FROM acquisition_sends s JOIN leads l ON l.id=s.lead_id WHERE s.id=?`,
     [sendId]
   );
   if (!send) throw new Error('acquisition_send não encontrado');
   if (send.status === 'sent') return;
-  if (Number(send.acquisition_eligible) !== 1 || Number(send.acquisition_suppressed || 0) === 1) {
+  if (Number(send.acquisition_eligible) !== 1 || !send.acquisition_opted_in_at || Number(send.acquisition_suppressed || 0) === 1) {
     await db.run(`UPDATE acquisition_sends SET status='failed',failed_at=CURRENT_TIMESTAMP,last_error='lead não elegível/suprimido',updated_at=CURRENT_TIMESTAMP WHERE id=?`, [sendId]);
     return;
   }
