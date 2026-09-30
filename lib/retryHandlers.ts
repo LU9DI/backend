@@ -17,7 +17,7 @@ import {
 } from './mercadopago.js';
 import { resolvePlano } from '../stripeBilling.js';
 import { activatePlan, blockEmpresa } from '../services/billingService.js';
-import { enviarEmail } from './mailer.js';
+import { enviarEmail, enviarEmailAquisicao } from './mailer.js';
 import { logWebhookEvent } from './opsLog.js';
 import { sendN8nWebhook } from './n8n.js';
 import { processAcquisitionEmail } from './acquisitionEngine.js';
@@ -248,7 +248,7 @@ export function registerAllRetryHandlers() {
   registerRetryHandler('acquisition_email', async (payload) => {
     const sendId = String(payload.send_id || '').trim();
     if (!sendId) throw new Error('acquisition_email: send_id obrigatório');
-    await processAcquisitionEmail(sendId, enviarEmail);
+    await processAcquisitionEmail(sendId);
   });
 
   registerRetryHandler('n8n_webhook', async (payload) => {
@@ -293,7 +293,7 @@ export function registerAllRetryHandlers() {
     if (channel === 'email') {
       const email = String(row.email || '').trim().toLowerCase();
       if (!email || !email.includes('@')) throw new Error('lead sem e-mail válido');
-      return enviarEmail({
+      return enviarEmailAquisicao({
         to: email,
         subject: 'Filtra.AI — acompanhamento inicial',
         text: message,
