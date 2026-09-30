@@ -145,13 +145,22 @@ export async function verifySmtp(): Promise<SendEmailResult> {
   }
 }
 
+export type MailPurpose = 'transactional' | 'acquisition' | 'admin_test';
+
 export async function enviarEmail(opts: {
   to: string;
   subject: string;
   text: string;
   html?: string;
   idempotencyKey?: string;
+  purpose?: MailPurpose;
 }): Promise<SendEmailResult> {
+  const purpose = opts.purpose || 'transactional';
+  if (purpose === 'acquisition' && cleanEnv(process.env.ACQUISITION_ENGINE) !== '1') {
+    const error = 'acquisition_email bloqueado: ACQUISITION_ENGINE não está habilitado';
+    console.warn(`[mail] ${error}`);
+    return { ok: false, mode: 'error', error };
+  }
   const from = defaultFrom();
   const to = String(opts.to || '').trim().toLowerCase();
 
