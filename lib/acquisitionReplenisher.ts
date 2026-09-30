@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { getDb } from './db.js';
 import { ensureAcquisitionEngineSchema } from './acquisitionEngine.js';
 import { googlePlacesLeads } from './acquisitionGooglePlaces.js';
+import crypto from 'crypto';
 
 const MIN_STOCK = Math.max(80, Number(process.env.ACQUISITION_MIN_STOCK || 560));
 const BATCH_SIZE = Math.min(200, Math.max(1, Number(process.env.ACQUISITION_REPLENISH_BATCH || 200)));
@@ -179,6 +180,117 @@ async function fullEnrichProvider() {
   return { leads: out };
 }
 
+
+const OSM_URL = clean(process.env.ACQUISITION_OSM_OVERPASS_URL, 2000) || 'https://overpass-api.de/api/interpreter';
+const OSM_CITIES = [
+  ['São Paulo', -23.82, -46.82, -23.35, -46.35],
+  ['Rio de Janeiro', -23.05, -43.80, -22.70, -43.05],
+  ['Belo Horizonte', -20.05, -44.15, -19.75, -43.80],
+  ['Curitiba', -25.65, -49.45, -25.30, -49.10],
+  ['Goiânia', -17.00, -49.50, -16.50, -49.00],
+] as const;
+
+function osmEmail(tags: any) {
+  const value = clean(tags?.email || tags?.['contact:email'], 320).toLowerCase();
+  return validEmail(value) ? value : '';
+}
+function osmWebsite(tags: any) {
+  return clean(tags?.website || tags?.['contact:website'], 1000);
+}
+function osmQuery(city: typeof OSM_CITIES[number]) {
+  const [name, south, west, north, east] = city;
+  const bbox = `${south},${west},${north},${east}`;
+  return `[out:json][timeout:60];(
+    nwr["tourism"="hotel"](${bbox});
+    nwr["amenity"~"restaurant|clinic|doctors"](${bbox});
+    nwr["office"~"company|association|trade_union|chamber|chamber_of_commerce|non_profit"](${bbox});
+  );out center tags;`;
+}
+async function osmWebsiteEmails(url: string) {
+  try {
+    const base = new URL(url);
+    const paths = ['', '/contato', '/contact', '/fale-conosco', '/faleconosco', '/sobre', '/about'];
+    const found = new Set<string>();
+    for (const path of paths) {
+      const response = await fetch(new URL(path || '/', base), {
+        headers: { 'user-agent': 'FiltraAI-Acquisition/1.0 (+https://filtraai.com)' },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!response.ok || !(response.headers.get('content-type') || '').includes('text/html')) continue;
+      const html = (await response.text()).slice(0, 400000)
+        .replace(/&#64;|\[at\]|\(at\)/gi, '@')
+        .replace(/&#46;|\[dot\]|\(dot\)/gi, '.');
+      for (const email of html.match(/[^\s@]+@[^\s@]+\.[A-Za-z]{2,}/g) || []) {
+        const e = email.toLowerCase();
+        if (validEmail(e)) found.add(e);
+      }
+      if (found.size >= 3) break;
+    }
+    return [...found].slice(0, 5);
+  } catch { return []; }
+}
+async function openStreetMapProvider(limit: number) {
+  const target = Math.min(200, Math.max(1, limit));
+  const elements: any[] = [];
+  for (const city of OSM_CITIES) {
+    try {
+      const response = await fetch(OSM_URL, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'user-agent': 'FiltraAI-Acquisition/1.0 (+https://filtraai.com)',
+        },
+        body: 'data=' + encodeURIComponent(osmQuery(city)),
+        signal: AbortSignal.timeout(75000),
+      });
+      if (!response.ok) throw new Error(`Overpass HTTP ${response.status}`);
+      const data: any = await response.json();
+      for (const element of Array.isArray(data?.elements) ? data.elements : []) {
+        const tags = element?.tags || {};
+        if (tags?.name || osmWebsite(tags) || osmEmail(tags)) elements.push({ element, city });
+      }
+      console.log(`[acquisition-osm] city=${city[0]} elements=${data?.elements?.length || 0}`);
+      if (elements.length >= target * 3) break;
+    } catch (error: any) {
+      console.warn(`[acquisition-osm] city=${city[0]} failed:`, error?.message || error);
+    }
+  }
+  const ranked = elements.sort((a,b) => {
+    const score = (x:any) => {
+      const t=x?.element?.tags||{}, o=String(t.office||'').toLowerCase();
+      return (['association','trade_union','chamber','chamber_of_commerce','non_profit'].includes(o)?8:0)
+        +(t.tourism==='hotel'?5:0)+(t.amenity==='restaurant'||t.amenity==='clinic'||t.amenity==='doctors'?3:0)
+        +(osmWebsite(t)?3:0)+(osmEmail(t)?10:0);
+    };
+    return score(b)-score(a);
+  }).slice(0,target*3);
+  const leads:any[]=[]; const seen=new Set<string>();
+  for(let i=0;i<ranked.length && leads.length<target;i+=8){
+    const results=await Promise.all(ranked.slice(i,i+8).map(async ({element,city})=>{
+      const t=element?.tags||{}; let emails:string[]=[];
+      const direct=osmEmail(t); if(direct) emails=[direct];
+      else if(osmWebsite(t)) emails=await osmWebsiteEmails(osmWebsite(t));
+      return {element,city,emails};
+    }));
+    for(const {element,city,emails} of results) for(const email of emails){
+      if(seen.has(email)) continue; seen.add(email);
+      const t=element?.tags||{}, website=osmWebsite(t);
+      leads.push({
+        id:`osm-${crypto.createHash('sha256').update(email).digest('hex').slice(0,32)}`,
+        email,
+        company:clean(t?.name||city[0],200),
+        source:'OpenStreetMap + official website',
+        timezone:'America/Sao_Paulo',
+        profile:{provider:'openstreetmap_overpass',osm_id:`${element?.type}:${element?.id}`,category:clean(t?.office||t?.amenity||t?.tourism,100),address:clean([t?.['addr:street'],t?.['addr:housenumber'],t?.['addr:city']||city[0],t?.['addr:state']].filter(Boolean).join(', '),500),website},
+      });
+      if(leads.length>=target) break;
+    }
+  }
+  console.log(`[acquisition-osm] done leads=${leads.length}`);
+  return {leads};
+}
+
 function providerOrder() {
   return clean(process.env.ACQUISITION_PROVIDERS || 'google_places,fullenrich')
     .split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
@@ -188,7 +300,14 @@ async function providerRequest() {
   const errors: string[] = [];
   for (const provider of providerOrder()) {
     try {
-      if (provider === 'google_places') {
+      if (provider === 'osm') {
+        const result = await openStreetMapProvider(BATCH_SIZE);
+        if (result.leads.length) {
+          console.log('[acquisition-replenisher] provider=osm leads=' + result.leads.length);
+          return result;
+        }
+        errors.push('osm: sem emails encontrados');
+      } else if (provider === 'google_places') {
         const result = await googlePlacesLeads(BATCH_SIZE);
         if (result.leads.length) {
           console.log('[acquisition-replenisher] provider=google_places leads=' + result.leads.length);
