@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { getDb } from './db.js';
 import { enqueueRetry } from './retryQueue.js';
+import { enviarEmailAquisicao } from './mailer.js';
 
 const DAILY_CAP = Math.min(80, Math.max(1, Number(process.env.ACQUISITION_DAILY_CAP || 80)));
 const ENGINE_INTERVAL_MS = Math.max(30_000, Number(process.env.ACQUISITION_ENGINE_INTERVAL_MS || 60_000));
@@ -335,7 +336,7 @@ export async function acquisitionEngineStatus() {
   };
 }
 
-export async function processAcquisitionEmail(sendId: string, enviarEmail: Function) {
+export async function processAcquisitionEmail(sendId: string) {
   const db = getDb();
   await ensureAcquisitionEngineSchema(db);
   const send = await db.get(
@@ -350,7 +351,7 @@ export async function processAcquisitionEmail(sendId: string, enviarEmail: Funct
     return;
   }
 
-  const result = await enviarEmail({
+  const result = await enviarEmailAquisicao({
     to: String(send.email),
     subject: String(send.subject),
     text: String(send.body),
