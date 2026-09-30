@@ -269,7 +269,13 @@ export async function replenishAcquisitionStock(force = false) {
 }
 
 export function startAcquisitionReplenisher() {
-  if (started || process.env.ACQUISITION_REPLENISHER !== '1') return;
+  // O replenisher faz parte do motor de aquisição. Se o motor estiver
+  // habilitado, a descoberta de leads não pode ficar parada só porque a
+  // variável específica do replenisher não foi criada no Render.
+  const enabled =
+    process.env.ACQUISITION_REPLENISHER === '1' ||
+    process.env.ACQUISITION_ENGINE === '1';
+  if (started || !enabled) return;
   started = true;
   const tick = () => replenishAcquisitionStock()
     .then(r => console.log('[acquisition-replenisher]', r))
