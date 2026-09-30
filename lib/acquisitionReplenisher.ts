@@ -199,11 +199,8 @@ function osmWebsite(tags: any) {
 function osmQuery(city: typeof OSM_CITIES[number]) {
   const [name, south, west, north, east] = city;
   const bbox = `${south},${west},${north},${east}`;
-  return `[out:json][timeout:60];(
-    nwr["tourism"="hotel"](${bbox});
-    nwr["amenity"~"restaurant|clinic|doctors"](${bbox});
-    nwr["office"~"company|association|trade_union|chamber|chamber_of_commerce|non_profit"](${bbox});
-  );out center tags;`;
+  // Restrict discovery to objects that already expose a public email or official website.
+  return `[out:json][timeout:30];(\n    nwr["email"](${bbox});\n    nwr["contact:email"](${bbox});\n    nwr["website"](${bbox});\n    nwr["contact:website"](${bbox});\n  );out center tags;`;
 }
 async function osmWebsiteEmails(url: string) {
   try {
