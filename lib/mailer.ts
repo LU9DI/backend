@@ -231,6 +231,18 @@ export async function enviarEmail(opts: {
   }
 }
 
+
+/** Gateway dedicado para e-mails de aquisição. */
+export async function enviarEmailAquisicao(opts: {
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
+  idempotencyKey?: string;
+}): Promise<SendEmailResult> {
+  return enviarEmail({ ...opts, purpose: 'acquisition' });
+}
+
 /** Diagnóstico seguro (sem senha). */
 export function smtpPublicStatus() {
   return {
