@@ -225,8 +225,8 @@ async function runOne(lead: any) {
     const subject = pick(/subject|assunto|asunto|objet|betreff/i);
     let msg = pick(/message|mensagem|mensaje|nachricht|comments?|coment[aá]rio|inquiry|enquiry|request|consulta|solicita/i);
     if (!msg) {
-      const editable = await page.locator('[contenteditable="true"]');
-      if (await editable.count()) msg = { id: '', name: '', placeholder: '', aria: '', contenteditable: 'true' };
+      const editable = await page.$('[contenteditable="true"]');
+      if (editable) msg = { id: '', name: '', placeholder: '', aria: '', contenteditable: 'true' };
     }
     if (!msg) throw new Error('campo_mensagem_nao_encontrado');
 
@@ -241,7 +241,11 @@ async function runOne(lead: any) {
             ? `[name="${escapeAttr(field.name)}"]`
             : '';
       if (!selector) return;
-      await page.locator(selector).fill(value);
+      const el = await page.$(selector);
+      if (!el) return;
+      await el.click({ clickCount: 3 });
+      await page.keyboard.press('Backspace');
+      await page.keyboard.type(value);
     };
     await fill(name, 'Equipe Filtra.AI');
     await fill(email, clean(process.env.ACQUISITION_BROWSER_FROM_EMAIL || process.env.SMTP_FROM || 'contato@filtraai.com', 320));
@@ -250,14 +254,14 @@ async function runOne(lead: any) {
     await fill(msg, target.body);
 
     // Never accept legal/marketing consent on behalf of the recipient.
-    const requiredCheckboxes = await page.locator('input[type="checkbox"][required]').count();
+    const requiredCheckboxes = await page.$eval('input[type="checkbox"][required]', els => els.length);
     if (requiredCheckboxes > 0) throw new Error('checkbox_obrigatorio_requer_intervencao');
 
     const formSelector = form.fields.some((f:any) => /textarea/i.test(f.tag))
       ? 'form:has(textarea)'
       : 'form';
-    const submit = page.locator(formSelector).locator('button[type="submit"],input[type="submit"],button');
-    if (!(await submit.count())) throw new Error('botao_envio_nao_encontrado');
+    const submit = await page.$(`${formSelector} button[type="submit"],${formSelector} input[type="submit"],${formSelector} button`);
+    if (!submit) throw new Error('botao_envio_nao_encontrado');
     await Promise.all([
       page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 12_000 }).catch(() => null),
       submit.click(),
