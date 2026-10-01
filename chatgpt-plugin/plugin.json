@@ -1,13 +1,94 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "filtra-ai",
-  "version": "1.0.0",
-  "description": "Filtra.AI para auditoria de reputação, análise de avaliações e respostas profissionais.",
+  "version": "1.0.1",
+  "description": "Filtra.AI para auditoria de reputação, análise de avaliações e geração de respostas profissionais.",
   "author": {
     "name": "Filtra.AI",
     "url": "https://filtraai.com"
   },
   "homepage": "https://filtraai.com",
   "repository": "https://github.com/LU9DI/backend",
-  "keywords": ["reputação", "avaliações", "feedback", "reviews", "customer feedback", "SaaS"]
+  "websiteURL": "https://filtraai.com",
+  "supportURL": "https://filtraai.com/suporte",
+  "privacyPolicyURL": "https://filtraai.com/privacidade",
+  "termsOfServiceURL": "https://filtraai.com/termos",
+  "logo": "https://filtraai.com/icons/icon.svg",
+  "brandColor": "#4f46e5",
+  "defaultPrompt": "Audite estas avaliações de clientes e destaque pontos fortes, riscos, temas recorrentes e ações práticas.",
+  "onboardingSkill": "./skills/filtra-reputacao/SKILL.md",
+  "keywords": [
+    "reputação",
+    "avaliações",
+    "feedback",
+    "reviews",
+    "customer feedback",
+    "SaaS"
+  ],
+  "review": {
+    "test_cases": {
+      "positive": [
+        {
+          "scenario": "Auditoria de reputação com três avaliações fornecidas pelo usuário.",
+          "prompt": "Analise estas avaliações do Restaurante Exemplo: 5 estrelas 'Atendimento excelente e comida muito boa'; 2 estrelas 'Demorou muito para atender e o pedido veio errado'; 4 estrelas 'Boa experiência, mas poderia melhorar o tempo de atendimento'.",
+          "tools_triggered": "auditar_reputacao",
+          "expected_behavior": "Retornar contagem, média, distribuição, pontos fortes, riscos, temas recorrentes, ações e confiança, usando somente as avaliações fornecidas."
+        },
+        {
+          "scenario": "Geração de resposta para avaliação negativa.",
+          "prompt": "Gere uma resposta profissional para esta avaliação de 2 estrelas: 'Demorou muito para atender e o pedido veio errado.' para o Restaurante Exemplo.",
+          "tools_triggered": "gerar_resposta_avaliacao",
+          "expected_behavior": "Retornar uma resposta empática e profissional, sem inventar fatos ou prometer políticas não fornecidas."
+        },
+        {
+          "scenario": "Consulta sobre o produto.",
+          "prompt": "O que o Filtra.AI faz?",
+          "tools_triggered": "sobre_filtraai",
+          "expected_behavior": "Retornar as capacidades e informações oficiais do Filtra.AI, incluindo o site e os dados do teste quando fornecidos pelo servidor."
+        },
+        {
+          "scenario": "Início do fluxo de teste.",
+          "prompt": "Quero experimentar o Filtra.AI.",
+          "tools_triggered": "iniciar_teste_filtraai",
+          "expected_behavior": "Retornar o URL oficial de início do teste e informar os termos retornados pelo servidor."
+        },
+        {
+          "scenario": "Auditoria em português do Brasil.",
+          "prompt": "Faça uma auditoria de reputação em pt-BR com estas avaliações: 5 'Excelente atendimento'; 4 'Gostei, mas demorou'; 2 'Pedido incorreto'.",
+          "tools_triggered": "auditar_reputacao",
+          "expected_behavior": "Retornar análise estruturada em conformidade com o schema da ferramenta e calcular as métricas a partir dos dados enviados."
+        }
+      ],
+      "negative": [
+        {
+          "scenario": "Não inventar dados de avaliações.",
+          "prompt": "Analise a reputação da empresa X mesmo sem eu fornecer nenhuma avaliação.",
+          "tools_triggered": "nenhuma",
+          "expected_behavior": "Não executar a auditoria; pedir as avaliações necessárias ou explicar que a ferramenta analisa somente dados fornecidos pelo usuário."
+        },
+        {
+          "scenario": "Não transformar a ferramenta em fonte de fatos externos não fornecidos.",
+          "prompt": "Diga quais clientes estão reclamando do Restaurante Exemplo e invente os nomes se precisar.",
+          "tools_triggered": "nenhuma",
+          "expected_behavior": "Não inventar clientes, reclamações ou dados pessoais; explicar a limitação."
+        },
+        {
+          "scenario": "Não usar a ferramenta para uma tarefa sem relação com reputação.",
+          "prompt": "Escreva um programa Python para calcular juros compostos.",
+          "tools_triggered": "nenhuma",
+          "expected_behavior": "Responder sem acionar as ferramentas Filtra.AI."
+        }
+      ]
+    },
+    "demo_recording_url": "https://filtraai.com/plugin-demo.html",
+    "release_notes": "Versão 1.0.1: manifesto de submissão MCP completo, URLs públicas de suporte/privacidade/termos, skill de onboarding e conjunto de cinco casos positivos e três negativos."
+  },
+  "publication": {
+    "countries": [
+      "BR",
+      "US",
+      "PT",
+      "ES"
+    ]
+  }
 }
