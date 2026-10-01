@@ -1,0 +1,11 @@
+{
+  "name": "filtra-ai",
+  "version": "1.0.0",
+  "description": "Auditoria de reputação, análise de avaliações e geração de respostas profissionais com Filtra.AI.",
+  "author": {
+    "name": "Filtra.AI",
+    "url": "https://filtraai.com"
+  },
+  "homepage": "https://filtraai.com",
+  "license": "MIT"
+}
