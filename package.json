@@ -12,7 +12,8 @@
     "smtp:test": "tsx scripts/smtp-connectivity-test.ts",
     "checklist": "tsx scripts/checklist-saas.ts",
     "test": "tsx --test tests/**/*.test.ts",
-    "audit": "npm audit --omit=dev"
+    "audit": "npm audit --omit=dev",
+    "mcp:smoke": "tsx scripts/mcp-smoke-test.ts"
   },
   "engines": {
     "node": ">=20"
