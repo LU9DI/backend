@@ -212,7 +212,7 @@ async function getCandidates(db: any, batchSize = 2) {
         LIMIT ?)
       UPDATE leads l SET browser_status='processing', browser_last_at=CURRENT_TIMESTAMP
         FROM candidates c WHERE l.id=c.id
-      RETURNING l.id,l.nome_empresa,l.email,l.raw_json,l.acquisition_source,l.browser_attempts`, [MAX_ATTEMPTS]);
+      RETURNING l.id,l.nome_empresa,l.email,l.raw_json,l.acquisition_source,l.browser_attempts`, [MAX_ATTEMPTS, batchSize]);
 }
 function classifyChannel(channels: string[], phones: string[]) {
   if (channels.some(h => /(?:wa[.]me|whatsapp)/i.test(h))) return 'public_whatsapp';
