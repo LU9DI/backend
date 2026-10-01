@@ -8,7 +8,7 @@ import 'dotenv/config';
 import type { Server } from 'http';
 
 import { assertEnvOrExit } from './lib/env.js';
-import { initDB, getDb, dbEngine, pingDb } from './lib/db.js';
+import { initDB, getDb, dbEngine, pingDb, closeDB } from './lib/db.js';
 import { requireJwtSecret, setAuthCookie, autenticarToken } from './lib/auth.js';
 import { jwtRotationStatus } from './lib/jwtKeys.js';
 import { buildCorsOptions } from './lib/cors.js';
@@ -60,14 +60,14 @@ import { ensurePushSchema, pushConfigured, initWebPush } from './lib/push.js';
 import { ensureAiUsageSchema } from './lib/aiUsage.js';
 import { ensureOpsTables } from './lib/opsLog.js';
 import { ensureAuditSchema } from './lib/auditLog.js';
-import { ensureRetryQueue, startRetryWorker } from './lib/retryQueue.js';
+import { ensureRetryQueue, startRetryWorker, stopRetryWorker } from './lib/retryQueue.js';
 import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
 import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
 import { n8nConfigured } from './lib/n8n.js';
-import { ensureAcquisitionEngineSchema, startAcquisitionWorker } from './lib/acquisitionEngine.js';
-import { startAcquisitionReplenisher } from './lib/acquisitionReplenisher.js';
+import { ensureAcquisitionEngineSchema, startAcquisitionWorker, stopAcquisitionWorker } from './lib/acquisitionEngine.js';
+import { startAcquisitionReplenisher, stopAcquisitionReplenisher } from './lib/acquisitionReplenisher.js';
 import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
 import { ensureReportPdfSchema } from './lib/reportPdfStore.js';
 import {
@@ -216,23 +216,32 @@ async function runLgpdSweepOnBoot() {
   }
 }
 
-function gracefulShutdown(signal: string) {
+async function gracefulShutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`⏹  ${signal} — encerrando...`);
+  console.log(`⏹  ${signal} — encerramento gracioso iniciado...`);
+  stopAcquisitionWorker();
+  stopAcquisitionReplenisher();
+  stopRetryWorker();
   const force = setTimeout(() => {
     console.error('Force exit após timeout de shutdown');
     process.exit(1);
-  }, 10_000);
+  }, 25_000);
   force.unref();
 
-  if (server) {
-    server.close(() => {
+  try {
+    if (server) {
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
       console.log('HTTP fechado.');
-      process.exit(0);
-    });
-  } else {
+    }
+    await closeDB();
+    console.log('Banco fechado.');
+    clearTimeout(force);
     process.exit(0);
+  } catch (e: any) {
+    console.error('Erro no shutdown:', e?.message || e);
+    clearTimeout(force);
+    process.exit(1);
   }
 }
 
@@ -381,8 +390,8 @@ async function main() {
   server.keepAliveTimeout = 65_000;
   server.headersTimeout = 66_000;
 
-  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.once('SIGTERM', () => void gracefulShutdown('SIGTERM'));
+  process.once('SIGINT', () => void gracefulShutdown('SIGINT'));
 }
 
 main().catch((e) => {
