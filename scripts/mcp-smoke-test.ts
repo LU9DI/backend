@@ -55,8 +55,90 @@ async function notification(method: string, params: Record<string, unknown> = {}
   }
 }
 
+
+async function modernRpc(
+  id: number,
+  method: string,
+  params: Record<string, unknown> = {},
+) {
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      'MCP-Protocol-Version': '2026-07-28',
+      'Mcp-Method': method,
+      ...(method === 'tools/call' && typeof params.name === 'string' ? { 'Mcp-Name': params.name } : {}),
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+  });
+
+  const text = await response.text();
+  let body: any;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    throw new Error(`Modern MCP returned non-JSON (HTTP ${response.status}): ${text.slice(0, 500)}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(`Modern MCP HTTP ${response.status}: ${JSON.stringify(body)}`);
+  }
+
+  if (!body?.result) {
+    throw new Error(`Modern MCP JSON-RPC error: ${JSON.stringify(body)}`);
+  }
+
+  return body.result;
+}
+
+async function modernSmoke() {
+  const discover = await modernRpc(100, 'server/discover', {
+    _meta: {
+      'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+      'io.modelcontextprotocol/clientInfo': { name: 'filtra-mcp-modern-smoke', version: '1.0.0' },
+      'io.modelcontextprotocol/clientCapabilities': {},
+    },
+  });
+
+  if (!Array.isArray(discover.supportedVersions) || !discover.supportedVersions.includes('2026-07-28')) {
+    throw new Error(`Modern discovery does not advertise 2026-07-28: ${JSON.stringify(discover)}`);
+  }
+
+  console.log('✓ modern server/discover: 2026-07-28');
+
+  const meta = {
+    'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+    'io.modelcontextprotocol/clientInfo': { name: 'filtra-mcp-modern-smoke', version: '1.0.0' },
+    'io.modelcontextprotocol/clientCapabilities': {},
+  };
+
+  const listed = await modernRpc(101, 'tools/list', { _meta: meta });
+  const tools = Array.isArray(listed?.tools) ? listed.tools : [];
+  const names = tools.map((tool: any) => tool?.name).filter(Boolean);
+  for (const name of ['auditar_reputacao', 'gerar_resposta_avaliacao', 'iniciar_teste_filtraai', 'sobre_filtraai']) {
+    if (!names.includes(name)) throw new Error(`Modern MCP missing tool: ${name}`);
+  }
+  console.log(`✓ modern tools/list: ${names.join(', ')}`);
+
+  const result = await modernRpc(102, 'tools/call', {
+    name: 'sobre_filtraai',
+    arguments: {},
+    _meta: meta,
+  });
+
+  if (result?.isError || !result?.structuredContent) {
+    throw new Error(`Modern MCP tool call failed: ${JSON.stringify(result)}`);
+  }
+
+  console.log('✓ modern tools/call: sobre_filtraai');
+}
+
 async function main() {
   console.log(`MCP smoke test: ${endpoint}`);
+
+  await modernSmoke();
+  console.log('✓ modern MCP smoke complete');
 
   const init = await rpc(1, 'initialize', {
     protocolVersion: '2025-06-18',
