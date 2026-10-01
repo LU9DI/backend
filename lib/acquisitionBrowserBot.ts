@@ -183,7 +183,9 @@ async function ensureSchema(db: any) {
 
 async function sentToday(db: any) {
   const row = await db.get(
-    `SELECT COUNT(*) AS c FROM leads WHERE browser_status='sent' AND browser_last_at >= date_trunc('day', CURRENT_TIMESTAMP)`
+    `SELECT COUNT(*) AS c FROM leads
+      WHERE browser_status IN ('sent','contact_attempted')
+        AND browser_last_at >= date_trunc('day', CURRENT_TIMESTAMP)`
   );
   return Number(row?.c || 0);
 }
@@ -287,7 +289,10 @@ async function runOne(lead: any) {
       } catch {}
     }
 
-    if (!contactLinks.length) throw new Error('formulario_contato_nao_encontrado');
+    if (!contactLinks.length) {
+      if (homepageChannelPayload) throw new Error(JSON.stringify(homepageChannelPayload));
+      throw new Error('formulario_contato_nao_encontrado');
+    }
     let lastError = 'formulario_contato_nao_encontrado';
 
     for (const contact of contactLinks) {
@@ -331,11 +336,19 @@ async function runOne(lead: any) {
         const emails = Array.from(new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+[.][A-Z]{2,}/gi) || [])
           .map(x => x.toLowerCase())
           .filter(x => !/example[.]|noreply@|no-reply@/i.test(x)))).slice(0, 5);
-        if (emails.length) throw new Error(JSON.stringify({
-          reason: 'manual_channel_available',
-          channel: 'public_email',
-          channels: emails.map(email => `mailto:${email}`)
-        }));
+        const discoveredChannels = normalizePublicChannels([
+          ...(homepageChannelPayload?.channels || []),
+          ...pageChannels,
+          ...pagePhones,
+          ...emails.map(email => `mailto:${email}`)
+        ]);
+        if (discoveredChannels.length) {
+          const payload = channelPayload(
+            discoveredChannels.filter(x => !/^\+?\d[\d .()-]{7,}\d$/.test(x)),
+            discoveredChannels.filter(x => /^\+?\d[\d .()-]{7,}\d$/.test(x))
+          );
+          throw new Error(JSON.stringify(payload));
+        }
         lastError = 'nenhum_formulario'; continue;
       }
 
@@ -432,6 +445,9 @@ async function runOne(lead: any) {
       };
     }
 
+    if (homepageChannelPayload) {
+      throw new Error(JSON.stringify(homepageChannelPayload));
+    }
     throw new Error(lastError);
   } finally {
     await browser.close();
