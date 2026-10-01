@@ -108,7 +108,12 @@ Filtra.AI Team`,
 function extractWebsite(raw: string) {
   try {
     const obj = JSON.parse(raw || '{}');
-    return clean(obj?.website || obj?.profile?.website || obj?.profile?.contact?.website, 2000);
+    const candidates = [
+      obj?.website, obj?.websiteUri, obj?.url,
+      obj?.profile?.website, obj?.profile?.websiteUri, obj?.profile?.contact?.website,
+      obj?.contact?.website
+    ];
+    return candidates.map((v:any) => clean(v,2000)).find((v:string) => !!validUrl(v)) || '';
   } catch { return ''; }
 }
 
