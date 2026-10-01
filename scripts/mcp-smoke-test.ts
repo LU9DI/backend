@@ -169,7 +169,9 @@ async function main() {
     if (!names.includes(name)) throw new Error(`Missing MCP tool: ${name}`);
   }
 
-  console.log(`✓ tools/list: ${names.join(', ')}`);\n\n  const auditTool = tools.find((tool: any) => tool?.name === 'auditar_reputacao');
+  console.log(`✓ tools/list: ${names.join(', ')}`);
+
+  const auditTool = tools.find((tool: any) => tool?.name === 'auditar_reputacao');
   if (!auditTool?.inputSchema || !auditTool?.outputSchema) {
     throw new Error('auditar_reputacao is missing inputSchema/outputSchema');
   }
