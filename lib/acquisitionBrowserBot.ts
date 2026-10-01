@@ -255,7 +255,7 @@ async function assertPublicHost(url: URL) {
   }
 }
 
-async function preflightWebsite(base: URL) {
+async function preflightWebsite(base: URL): Promise<URL> {
   let current = new URL(base.toString());
   for (let hop = 0; hop < 3; hop += 1) {
     await assertPublicHost(current);
@@ -271,13 +271,13 @@ async function preflightWebsite(base: URL) {
       if (response.status >= 500) throw new Error(`site_http_${response.status}`);
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get('location');
-        if (!location) return response.status;
+        if (!location) return current;
         const next = validUrl(new URL(location, current).toString());
         if (!next) throw new Error('site_redirect_invalid');
         current = next;
         continue;
       }
-      return response.status;
+      return current;
     } catch (e: any) {
       const message = clean(e?.message || e, 300);
       if (/aborted|abort/i.test(message)) throw new Error('site_preflight_timeout_4s');
@@ -299,7 +299,7 @@ async function runOne(lead: any) {
   if (!base) throw new Error('site_oficial_ausente');
 
   // Cheap DNS/HTTP reachability check before launching Chromium.
-  await preflightWebsite(base);
+  const reachableBase = await preflightWebsite(base);
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -312,7 +312,7 @@ async function runOne(lead: any) {
     await page.setUserAgent('FiltraAI-Acquisition/1.0 (+https://filtraai.com)');
     await page.setViewport({ width: 1365, height: 900 });
     try {
-      await page.goto(base.toString(), { waitUntil: 'domcontentloaded', timeout: 8_000 });
+      await page.goto(reachableBase.toString(), { waitUntil: 'domcontentloaded', timeout: 8_000 });
     } catch (e: any) {
       const message = clean(e?.message || e, 500);
       if (!/Navigation timeout/i.test(message)) throw e;
@@ -328,7 +328,7 @@ async function runOne(lead: any) {
     })).filter(x => x.href));
 
     const sameOrigin = (href: string) => {
-      try { return new URL(href).origin === base.origin; } catch { return false; }
+      try { return new URL(href).origin === reachableBase.origin; } catch { return false; }
     };
 
     const publicChannels = normalizePublicChannels(links
