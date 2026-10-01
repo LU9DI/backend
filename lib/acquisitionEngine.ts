@@ -338,6 +338,10 @@ export async function queueEligibleAcquisition(limit = 25) {
     const institutional = (candidates || []).filter((lead: any) => isInstitutionalLead(lead));
     const general = (candidates || []).filter((lead: any) => !isInstitutionalLead(lead));
     const institutionalTake = Math.min(take, institutionalRemaining);
+    // acquisition_eligible is the operational authorization to prospect.
+    // acquisition_opted_in_at is retained as an explicit-consent audit field,
+    // but it is not a prerequisite for legitimate B2B acquisition. Suppression
+    // remains an unconditional block.
     const leads = [
       ...institutional.slice(0, institutionalTake),
       ...general.slice(0, take - institutionalTake)
@@ -410,7 +414,7 @@ export async function acquisitionEngineStatus() {
     db.get(`SELECT COUNT(*) AS c FROM acquisition_sends WHERE status='failed'`),
     db.get(`SELECT COUNT(*) AS c FROM leads WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0`),
     db.get(`SELECT COUNT(*) AS c FROM leads
-      WHERE acquisition_eligible=1 AND acquisition_opted_in_at IS NOT NULL
+      WHERE acquisition_eligible=1
         AND COALESCE(acquisition_suppressed,0)=0
         AND email IS NOT NULL AND TRIM(email)!=''
         AND (acquisition_next_at IS NULL OR acquisition_next_at <= ?)
@@ -444,7 +448,7 @@ export async function processAcquisitionEmail(sendId: string) {
       [`reputation_pause:${reputation.reason}`, sendId]);
     throw new Error(`Envio pausado por reputação: ${reputation.reason}`);
   }
-  if (Number(send.acquisition_eligible) !== 1 || !send.acquisition_opted_in_at || Number(send.acquisition_suppressed || 0) === 1) {
+  if (Number(send.acquisition_eligible) !== 1 || Number(send.acquisition_suppressed || 0) === 1) {
     await db.run(`UPDATE acquisition_sends SET status='failed',failed_at=CURRENT_TIMESTAMP,last_error='lead não elegível/suprimido',updated_at=CURRENT_TIMESTAMP WHERE id=?`, [sendId]);
     return;
   }
