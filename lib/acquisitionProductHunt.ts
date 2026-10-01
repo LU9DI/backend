@@ -5,6 +5,8 @@ const INTERVAL_MS = Math.max(15 * 60_000, Number(process.env.PRODUCT_HUNT_ACQUIS
 const BATCH_SIZE = Math.max(1, Math.min(50, Number(process.env.PRODUCT_HUNT_ACQUISITION_BATCH_SIZE || 20)));
 const TOKEN = () => (process.env.PRODUCT_HUNT_ACCESS_TOKEN || '').trim();
 const COMMERCIAL_APPROVED = () => process.env.PRODUCT_HUNT_COMMERCIAL_APPROVED === '1';
+const WEBSITE_TIMEOUT_MS = Math.max(5000, Number(process.env.PRODUCT_HUNT_WEBSITE_TIMEOUT_MS || 12000));
+const CONTACT_RE = /(?:contact|contato|contacto|fale|sales|commercial|business|partnership|support|about)/i;
 
 let started = false;
 let running = false;
@@ -91,13 +93,49 @@ async function fetchPosts(): Promise<ProductHuntPost[]> {
   return (body.data?.posts?.edges || []).map((x: any) => x.node).filter((x: any) => x?.id && x?.name);
 }
 
+async function inspectOfficialWebsite(website: string) {
+  const result = { website, contact_urls: [] as string[], emails: [] as string[] };
+  if (!website) return result;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), WEBSITE_TIMEOUT_MS);
+  try {
+    const response = await fetch(website, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: { accept: 'text/html,application/xhtml+xml', 'user-agent': 'FiltraAI-Acquisition/1.0 (+https://filtraai.com)' },
+    });
+    if (!response.ok) return result;
+    const html = (await response.text()).slice(0, 400000);
+    const base = validUrl(response.url) || website;
+    const host = new URL(base).hostname;
+    for (const match of html.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>([\\s\\S]*?)<\\/a>/gi)) {
+      const href = clean(match[1], 2000);
+      const text = clean(match[2].replace(/<[^>]+>/g, ' '), 500);
+      if (!CONTACT_RE.test(href) && !CONTACT_RE.test(text)) continue;
+      try {
+        const url = new URL(href, base);
+        if (/^https?:$/.test(url.protocol) && url.hostname === host) result.contact_urls.push(url.toString());
+      } catch {}
+    }
+    const matches = html.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi) || [];
+    result.emails = [...new Set(matches.map(x => x.toLowerCase()).filter(x => !/example\\.|sentry|wix|wordpress/i.test(x)))].slice(0, 10);
+    result.contact_urls = [...new Set(result.contact_urls)].slice(0, 5);
+  } catch {
+    // Best effort: the browser adapter can still use the official website.
+  } finally {
+    clearTimeout(timer);
+  }
+  return result;
+}
+
 async function upsertPost(post: ProductHuntPost): Promise<boolean> {
   const db = getDb();
   const website = validUrl(post.website);
   const mapsUrl = validUrl(post.url);
-  const raw = JSON.stringify({ source: 'product_hunt', fetched_at: new Date().toISOString(), post });
+  const websiteInfo = website ? await inspectOfficialWebsite(website) : { website: '', contact_urls: [] as string[], emails: [] as string[] };
+  const raw = JSON.stringify({ source: 'product_hunt', fetched_at: new Date().toISOString(), website: websiteInfo.website || '', contact_urls: websiteInfo.contact_urls, emails: websiteInfo.emails, post });
   const company = clean(post.name, 300);
-  const source = 'product_hunt';
+  const source = websiteInfo.website ? 'Product Hunt + official website' : 'product_hunt';
   const segment = 'startup_product';
   const score = scorePost(post);
   const qualification = score >= 55 ? 'prospect' : 'prospect';
@@ -117,7 +155,7 @@ async function upsertPost(post: ProductHuntPost): Promise<boolean> {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 'pending', 1, 0, 'eligible', ?, ?)`,
     [
       company,
-      null,
+      websiteInfo.emails[0] || null,
       null,
       score,
       qualification,
