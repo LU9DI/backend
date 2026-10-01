@@ -28,6 +28,12 @@ export function dbEngine(): 'sqlite' | 'postgres' {
   return _engine;
 }
 
+export async function closeDB(): Promise<void> {
+  const db = _db as any;
+  _db = null;
+  if (db && typeof db.close === 'function') await db.close();
+}
+
 export async function pingDb(): Promise<{ ok: boolean; engine: string; error?: string }> {
   try {
     const db = getDb();
