@@ -5,7 +5,7 @@ import { getDb } from './db.js';
 const ENABLED = process.env.ACQUISITION_BROWSER_BOT === '1';
 const INTERVAL_MS = Math.max(60_000, Number(process.env.ACQUISITION_BROWSER_INTERVAL_MS || 300_000));
 const DAILY_CAP = Math.max(1, Math.min(30, Number(process.env.ACQUISITION_BROWSER_DAILY_CAP || 10)));
-const CONCURRENCY = Math.max(1, Math.min(2, Number(process.env.ACQUISITION_BROWSER_CONCURRENCY || 2)));
+const CONCURRENCY = Math.max(1, Math.min(2, Number(process.env.ACQUISITION_BROWSER_CONCURRENCY || 1)));
 const MAX_ATTEMPTS = 2;
 let started = false;
 let running = false;
@@ -498,7 +498,7 @@ async function processLead(db: any, lead: any) {
   try {
     const result = await Promise.race([
       runOne(lead),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('browser_timeout_45s')), 45_000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error('browser_timeout_30s')), 30_000))
     ]);
     const serialized = JSON.stringify(result).slice(0, 5000);
     if (result?.status === 'submitted_unconfirmed') {
