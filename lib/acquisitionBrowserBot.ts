@@ -194,42 +194,24 @@ async function sentToday(db: any) {
 }
 
 async function getCandidates(db: any) {
-  // Multiple Render instances can overlap during zero-downtime deploys. Claim
-  // rows atomically so two workers never process the same lead at the same time.
-  await db.run(
-    `UPDATE leads
-        SET browser_status='pending'
-      WHERE browser_status='processing'
-        AND browser_last_at < CURRENT_TIMESTAMP - INTERVAL '10 minutes'`
-  );
-  return db.all(
-    `WITH candidates AS (
-       SELECT id
-         FROM leads
-        WHERE acquisition_eligible=1
-          AND COALESCE(acquisition_suppressed,0)=0
-          AND browser_status='pending'
+  await db.run(`UPDATE leads SET browser_status='pending' WHERE browser_status='processing' AND browser_last_at < CURRENT_TIMESTAMP - INTERVAL '10 minutes'`);
+  return db.all(`WITH candidates AS (
+       SELECT id FROM leads
+        WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0
+          AND browser_status IN ('pending','channel_found','contact_attempted')
           AND COALESCE(browser_attempts,0) < ?
           AND (browser_next_at IS NULL OR browser_next_at <= CURRENT_TIMESTAMP)
-          AND (
-            NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'website','')), '') IS NOT NULL
+          AND (NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'website','')), '') IS NOT NULL
             OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'websiteUri','')), '') IS NOT NULL
             OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'website','')), '') IS NOT NULL
-            OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'websiteUri','')), '') IS NOT NULL
-          )
-        ORDER BY criado_em ASC
-        LIMIT 10
-      )
-      UPDATE leads l
-         SET browser_status='processing',
-             browser_last_at=CURRENT_TIMESTAMP
-        FROM candidates c
-       WHERE l.id=c.id
-      RETURNING l.id,l.nome_empresa,l.email,l.raw_json,l.acquisition_source,l.browser_attempts`,
-    [MAX_ATTEMPTS]
-  );
+            OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'websiteUri','')), '') IS NOT NULL)
+        ORDER BY CASE browser_status WHEN 'channel_found' THEN 0 WHEN 'pending' THEN 1 WHEN 'contact_attempted' THEN 2 ELSE 3 END,
+          CASE WHEN browser_last_result ILIKE '%site_http_5%' THEN 3 WHEN browser_last_result ILIKE '%preflight_timeout%' THEN 4 WHEN browser_last_result ILIKE '%unreachable%' THEN 5 WHEN browser_last_result ILIKE '%ERR_NAME_NOT_RESOLVED%' THEN 6 ELSE 0 END, criado_em ASC
+        LIMIT 10)
+      UPDATE leads l SET browser_status='processing', browser_last_at=CURRENT_TIMESTAMP
+        FROM candidates c WHERE l.id=c.id
+      RETURNING l.id,l.nome_empresa,l.email,l.raw_json,l.acquisition_source,l.browser_attempts`, [MAX_ATTEMPTS]);
 }
-
 function classifyChannel(channels: string[], phones: string[]) {
   if (channels.some(h => /(?:wa[.]me|whatsapp)/i.test(h))) return 'public_whatsapp';
   if (channels.some(h => /^tel:/i.test(h)) || phones.length) return 'public_phone';
@@ -541,6 +523,10 @@ async function runOne(lead: any) {
   }
 }
 
+async function queueMetrics(db: any) {
+  return db.all(`SELECT browser_status, COUNT(*)::int AS count FROM leads WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0 GROUP BY browser_status ORDER BY browser_status`);
+}
+
 async function tick() {
   if (!ENABLED || running) return;
   running = true;
@@ -549,12 +535,12 @@ async function tick() {
     await ensureSchema(db);
     const used = await sentToday(db);
     if (used >= DAILY_CAP) {
-      console.log('[acquisition-browser] tick', { used, candidates: 0, cap: DAILY_CAP, concurrency: CONCURRENCY, reason: 'daily_cap' });
+      console.log('[acquisition-browser] tick', { used, candidates: 0, cap: DAILY_CAP, concurrency: CONCURRENCY, reason: 'daily_cap', metrics: await queueMetrics(db) });
       return;
     }
     const candidates = await getCandidates(db);
     const queue = candidates.slice(0, DAILY_CAP - used);
-    console.log('[acquisition-browser] tick', { used, candidates: candidates.length, selected: queue.length, cap: DAILY_CAP, concurrency: CONCURRENCY, reason: queue.length ? 'processing' : 'no_candidates' });
+    console.log('[acquisition-browser] tick', { used, candidates: candidates.length, selected: queue.length, cap: DAILY_CAP, concurrency: CONCURRENCY, reason: queue.length ? 'processing' : 'no_candidates', metrics: await queueMetrics(db) });
     for (let i = 0; i < queue.length; i += CONCURRENCY) {
       await Promise.all(queue.slice(i, i + CONCURRENCY).map((lead) => processLead(db, lead)));
     }
@@ -584,7 +570,7 @@ async function processLead(db: any, lead: any) {
     try { channelPayloadParsed = JSON.parse(rawError); } catch {}
     const error = clean(channelPayloadParsed ? JSON.stringify(channelPayloadParsed) : rawError, 5000);
     const channelFound = channelPayloadParsed?.reason === 'manual_channel_available';
-    await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=CASE WHEN ? THEN ? ELSE NULL END,browser_channel_data=CASE WHEN ? THEN ? ELSE NULL END,browser_status=CASE WHEN ? THEN 'channel_found' WHEN browser_attempts+1 >= ? THEN 'failed' ELSE 'pending' END,browser_next_at=CASE WHEN ? THEN NULL ELSE CURRENT_TIMESTAMP + INTERVAL '6 hours' END,acquisition_stage=CASE WHEN ? THEN 'manual_channel' ELSE acquisition_stage END WHERE id=?`, [error, channelFound, channelPayloadParsed?.channel || 'manual', channelFound, JSON.stringify(channelPayloadParsed || {}).slice(0,5000), channelFound, MAX_ATTEMPTS, channelFound, channelFound, lead.id]);
+    await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=CASE WHEN ? THEN ? ELSE NULL END,browser_channel_data=CASE WHEN ? THEN ? ELSE NULL END,browser_status=CASE WHEN ? THEN 'channel_found' WHEN browser_attempts+1 >= ? THEN 'failed' ELSE 'pending' END,browser_next_at=CASE WHEN ? THEN NULL WHEN error ILIKE '%site_http_404%' OR error ILIKE '%site_http_410%' OR error ILIKE '%ERR_NAME_NOT_RESOLVED%' OR error ILIKE '%site_private_or_unresolvable_host%' THEN CURRENT_TIMESTAMP + INTERVAL '72 hours' WHEN error ILIKE '%site_preflight_timeout%' OR error ILIKE '%browser_timeout_30s%' THEN CURRENT_TIMESTAMP + INTERVAL '12 hours' WHEN error ILIKE '%site_http_5%' THEN CURRENT_TIMESTAMP + INTERVAL '6 hours' ELSE CURRENT_TIMESTAMP + INTERVAL '6 hours' END,acquisition_stage=CASE WHEN ? THEN 'manual_channel' ELSE acquisition_stage END WHERE id=?`, [error, channelFound, channelPayloadParsed?.channel || 'manual', channelFound, JSON.stringify(channelPayloadParsed || {}).slice(0,5000), channelFound, MAX_ATTEMPTS, channelFound, channelFound, lead.id]);
     console.warn('[acquisition-browser]', lead.id, error);
   }
 }
