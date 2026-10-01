@@ -346,6 +346,10 @@ export async function queueEligibleAcquisition(limit = 25) {
       ...general.slice(0, take - institutionalTake)
     ];
 
+    if (!leads.length) {
+      return { queued: 0, skipped: 0, capacity, used_before: used, reason: 'no_candidates', sendable_candidates: candidates?.length || 0, resend_fallback: resendFallback };
+    }
+
     let queued = 0;
     let skipped = 0;
     for (const lead of leads || []) {
@@ -389,13 +393,12 @@ export async function queueEligibleAcquisition(limit = 25) {
 }
 
 export function startAcquisitionWorker() {
-  if (started || process.env.ACQUISITION_ENGINE !== '1') return;
+  if (started || process.env.ACQUISITION_ENGINE === '0') return;
   started = true;
+  console.log('[acquisition] worker enabled; explicit disable requires ACQUISITION_ENGINE=0');
   const tick = () => {
     queueEligibleAcquisition(25)
-      .then(r => {
-        if (r.queued || r.reason === 'daily_cap') console.log('[acquisition]', r);
-      })
+      .then(r => console.log('[acquisition]', r))
       .catch(e => console.warn('[acquisition worker]', e?.message || e));
   };
   tick();
