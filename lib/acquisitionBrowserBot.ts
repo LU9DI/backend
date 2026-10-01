@@ -310,12 +310,12 @@ async function inspectContactSurface(base: URL) {
     const html = (await response.text()).slice(0, 300_000);
     const contactPattern = /(contact|contato|contacto|fale|fale-conosco|habla|kontakt|contatti|comercial|sales|business|partnership|support|atendimento|suporte)/i;
     const captchaPattern = /(captcha|recaptcha|hcaptcha|turnstile)/i;
-    const forms = html.match(/<form\\b[\\s\\S]{0,16000}?<\\/form>/gi) || [];
+    const forms = html.match(/<form\b[\s\S]{0,16000}?<\/form>/gi) || [];
     const safeForm = forms.some(form => !captchaPattern.test(form) && /(?:<textarea\\b|name=["'][^"']*(?:message|mensagem|mensaje|comments?|inquiry|enquiry|consulta|request)[^"']*["']|id=["'][^"']*(?:message|mensagem|mensaje|comments?|inquiry|enquiry|consulta|request)[^"']*["'])/i.test(form));
     const anyForm = forms.length > 0;
     const captchaForm = anyForm && !safeForm && forms.some(form => captchaPattern.test(form));
     const hrefs = [...html.matchAll(/(?:href|data-href)=["']([^"']+)["']/gi)].map(m => m[1]);
-    const channels = normalizePublicChannels(hrefs.filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\\.me|api\\.whatsapp\\.com|whatsapp\\.com\\/send)/i.test(h)));
+    const channels = normalizePublicChannels(hrefs.filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\.me|api\.whatsapp\.com|whatsapp\.com\/send)/i.test(h)));
     const contactLinks = hrefs
       .filter(h => contactPattern.test(h))
       .map(h => { try { return new URL(h, base).toString(); } catch { return ''; } })
