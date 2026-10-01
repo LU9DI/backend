@@ -311,7 +311,7 @@ async function inspectContactSurface(base: URL) {
     const contactPattern = /(contact|contato|contacto|fale|fale-conosco|habla|kontakt|contatti|comercial|sales|business|partnership|support|atendimento|suporte)/i;
     const captchaPattern = /(captcha|recaptcha|hcaptcha|turnstile)/i;
     const forms = html.match(/<form\b[\s\S]{0,16000}?<\/form>/gi) || [];
-    const safeForm = forms.some(form => !captchaPattern.test(form) && /(?:<textarea\\b|name=["'][^"']*(?:message|mensagem|mensaje|comments?|inquiry|enquiry|consulta|request)[^"']*["']|id=["'][^"']*(?:message|mensagem|mensaje|comments?|inquiry|enquiry|consulta|request)[^"']*["'])/i.test(form));
+    const safeForm = forms.some(form => !captchaPattern.test(form) && /(?:<textarea\b|name=["'][^"']*(?:message|mensagem|mensaje|comments?|inquiry|enquiry|consulta|request)[^"']*["']|id=["'][^"']*(?:message|mensagem|mensaje|comments?|inquiry|enquiry|consulta|request)[^"']*["'])/i.test(form));
     const anyForm = forms.length > 0;
     const captchaForm = anyForm && !safeForm && forms.some(form => captchaPattern.test(form));
     const hrefs = [...html.matchAll(/(?:href|data-href)=["']([^"']+)["']/gi)].map(m => m[1]);
