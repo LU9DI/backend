@@ -189,7 +189,7 @@ async function runOne(lead: any) {
       .filter(h => /^(mailto:|tel:)/i.test(h))
       .slice(0, 10);
     if (!contactLinks.length && publicChannels.length) {
-      return { ok: false, channel: 'public_contact_link', channels: publicChannels, reason: 'manual_channel_available' };
+      throw new Error(JSON.stringify({ reason: 'manual_channel_available', channel: 'public_contact_link', channels: publicChannels }));
     }
     if (!contactLinks.length) throw new Error('formulario_contato_nao_encontrado');
     let lastError = 'formulario_contato_nao_encontrado';
@@ -207,7 +207,7 @@ async function runOne(lead: any) {
 
       const pageChannels = await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '').filter((h: string) => /^(mailto:|tel:)/i.test(h)).slice(0, 10));
       if (pageChannels.length) {
-        return { ok: false, channel: 'public_contact_link', channels: pageChannels, reason: 'manual_channel_available' };
+        throw new Error(JSON.stringify({ reason: 'manual_channel_available', channel: 'public_contact_link', channels: pageChannels }));
       }
       const formInfo: any = await page.evaluate(() => {
         const forms = Array.from(document.querySelectorAll('form'));
@@ -229,7 +229,7 @@ async function runOne(lead: any) {
         const emails = Array.from(new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi) || [])
           .map(x => x.toLowerCase())
           .filter(x => !/example\\.|noreply@|no-reply@/i.test(x)))).slice(0, 5);
-        if (emails.length) return { ok: false, channel: 'public_email', emails, reason: 'manual_channel_available' };
+        if (emails.length) throw new Error(JSON.stringify({ reason: 'manual_channel_available', channel: 'public_email', emails }));
         lastError = 'nenhum_formulario'; continue;
       }
       const usableForms = formInfo.filter((f: any) => !/captcha|recaptcha|hcaptcha|turnstile/i.test(JSON.stringify(f)));
@@ -310,8 +310,11 @@ async function tick() {
         );
         console.log('[acquisition-browser] sent', lead.id, result);
       } catch (e: any) {
-        const error = clean(e?.message || e, 500);
-        const channelFound = /manual_channel_available/.test(error);
+        const rawError = String(e?.message || e || '');
+        let channelPayload: any = null;
+        try { channelPayload = JSON.parse(rawError); } catch {}
+        const error = clean(channelPayload ? JSON.stringify(channelPayload) : rawError, 5000);
+        const channelFound = channelPayload?.reason === 'manual_channel_available';
         await db.run(
           `UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_status=CASE WHEN ? THEN 'channel_found' WHEN browser_attempts+1 >= ? THEN 'failed' ELSE 'pending' END,browser_next_at=CASE WHEN ? THEN NULL ELSE CURRENT_TIMESTAMP + INTERVAL '6 hours' END WHERE id=?`,
           [error, channelFound, MAX_ATTEMPTS, channelFound, lead.id]
