@@ -499,7 +499,11 @@ async function tick() {
 }
 
 export async function startAcquisitionBrowserBot() {
-  if (started || !ENABLED) return;
+  if (started) return;
+  if (!ENABLED) {
+    console.log('[acquisition-browser] OFF — defina ACQUISITION_BROWSER_BOT=1 para ativar');
+    return;
+  }
   started = true;
   const db = getDb();
   await ensureSchema(db);
