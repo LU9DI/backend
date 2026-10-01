@@ -142,7 +142,7 @@ async function getCandidates(db: any) {
         AND browser_status='pending'
         AND COALESCE(browser_attempts,0) < ?
         AND (browser_next_at IS NULL OR browser_next_at <= CURRENT_TIMESTAMP)
-        AND acquisition_source ILIKE '%official website%'
+        AND (acquisition_source ILIKE '%official website%' OR raw_json ILIKE '%"website"%')
       ORDER BY criado_em ASC
       LIMIT 10`,
     [MAX_ATTEMPTS]
@@ -206,7 +206,7 @@ async function runOne(lead: any) {
       await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 8_000 }).catch(() => null);
 
       const pageChannels = await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '').filter((h: string) => /^(mailto:|tel:)/i.test(h)).slice(0, 10));
-      if (pageChannels.length && !page.url().includes('http')) {
+      if (pageChannels.length) {
         return { ok: false, channel: 'public_contact_link', channels: pageChannels, reason: 'manual_channel_available' };
       }
       const formInfo: any = await page.evaluate(() => {
@@ -224,7 +224,14 @@ async function runOne(lead: any) {
         }));
       });
 
-      if (!formInfo.length) { lastError = 'nenhum_formulario'; continue; }
+      if (!formInfo.length) {
+        const text = await page.evaluate(() => (document.body?.innerText || '').slice(0,12000));
+        const emails = Array.from(new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi) || [])
+          .map(x => x.toLowerCase())
+          .filter(x => !/example\\.|noreply@|no-reply@/i.test(x)))).slice(0, 5);
+        if (emails.length) return { ok: false, channel: 'public_email', emails, reason: 'manual_channel_available' };
+        lastError = 'nenhum_formulario'; continue;
+      }
       const usableForms = formInfo.filter((f: any) => !/captcha|recaptcha|hcaptcha|turnstile/i.test(JSON.stringify(f)));
       if (!usableForms.length) { lastError = 'captcha_requer_intervencao'; continue; }
       const form = usableForms.find((f: any) => f.fields.some((x:any)=>/textarea/i.test(x.tag)))
