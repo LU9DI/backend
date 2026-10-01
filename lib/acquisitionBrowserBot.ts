@@ -180,8 +180,12 @@ async function runOne(lead: any) {
       text: (a.textContent || '').trim(),
       href: (a as HTMLAnchorElement).href
     })).filter(x => x.href));
-    const contact = links.find(x => /(contact|contato|contacto|fale|habla|kontakt|contatti|comercial|sales|business|partnership)/i.test(x.text));
-    if (!contact) throw new Error('formulario_contato_nao_encontrado');
+    const contactLinks = links
+      .filter(x => /(contact|contato|contacto|fale|habla|kontakt|contatti|comercial|sales|business|partnership)/i.test(x.text))
+      .filter(x => !/javascript:|#/.test(x.href))
+      .slice(0, 5);
+    if (!contactLinks.length) throw new Error('formulario_contato_nao_encontrado');
+    let contact = contactLinks[0];
 
     try {
       await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 12_000 });
@@ -213,9 +217,14 @@ async function runOne(lead: any) {
     });
 
     if (!formInfo.length) throw new Error('nenhum_formulario');
-    const form = formInfo.find((f: any) => f.fields.some((x:any)=>/textarea/i.test(x.tag))) || formInfo[0];
-    const hasCaptcha = /captcha|recaptcha|hcaptcha|turnstile/i.test(JSON.stringify(form));
-    if (hasCaptcha) throw new Error('captcha_requer_intervencao');
+
+    // A contact page may expose several forms. Skip only the form that requires CAPTCHA;
+    // never attempt to solve or bypass it. Prefer a usable message form without CAPTCHA.
+    const usableForms = formInfo.filter((f: any) => !/captcha|recaptcha|hcaptcha|turnstile/i.test(JSON.stringify(f)));
+    if (!usableForms.length) throw new Error('captcha_requer_intervencao');
+    const form = usableForms.find((f: any) => f.fields.some((x:any)=>/textarea/i.test(x.tag)))
+      || usableForms.find((f: any) => f.fields.some((x:any)=>/message|mensagem|mensaje|nachricht|comments?|inquiry|enquiry/i.test([x.name,x.id,x.placeholder,x.aria].join(' '))))
+      || usableForms[0];
 
     const fields = form.fields;
     const pick = (rx: RegExp) => fields.find((f:any) => rx.test([f.name,f.id,f.placeholder,f.aria].join(' ')));
