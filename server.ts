@@ -48,6 +48,7 @@ import { mountAdminPasswordResetRoutes } from './adminPasswordReset.js';
 import { mountMfaRoutes } from './mfa.js';
 import { mountStripeRoutes } from './stripeRoutes.js';
 import { mountFiscalRoutes } from './routes/fiscalRoutes.js';
+import { handleFiltraMcp } from './filtraMcp.js';
 import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
 import { paypalConfigured } from './lib/paypal.js';
 import { mpConfigured } from './lib/mercadopago.js';
@@ -349,6 +350,9 @@ async function main() {
   mountAcquisitionRoutes(app);
   mountTelegramRoutes(app);
   mountFiscalRoutes(app);
+
+  // ChatGPT / MCP integration — public read-only reputation tools.
+  app.all('/mcp', (req, res) => void handleFiltraMcp(req, res));
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
