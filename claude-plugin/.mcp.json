@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "filtra-ai": {
+      "type": "http",
+      "url": "https://api.filtraai.com/mcp"
+    }
+  }
+}
