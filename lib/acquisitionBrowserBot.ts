@@ -149,7 +149,12 @@ async function getCandidates(db: any) {
         AND browser_status='pending'
         AND COALESCE(browser_attempts,0) < ?
         AND (browser_next_at IS NULL OR browser_next_at <= CURRENT_TIMESTAMP)
-        AND (acquisition_source ILIKE '%official website%' OR raw_json ILIKE '%"website"%')
+        AND (
+          NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'website','')), '') IS NOT NULL
+          OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'websiteUri','')), '') IS NOT NULL
+          OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'website','')), '') IS NOT NULL
+          OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'websiteUri','')), '') IS NOT NULL
+        )
       ORDER BY criado_em ASC
       LIMIT 10`,
     [MAX_ATTEMPTS]
