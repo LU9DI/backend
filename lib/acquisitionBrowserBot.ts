@@ -294,6 +294,52 @@ async function preflightWebsite(base: URL): Promise<URL> {
   throw new Error('site_redirect_limit');
 }
 
+async function inspectContactSurface(base: URL) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2_500);
+  try {
+    const response = await fetch(base.toString(), {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: { 'user-agent': 'FiltraAI-Acquisition/1.0 (+https://filtraai.com)' },
+    });
+    if (response.status >= 500) throw new Error(`site_http_${response.status}`);
+    const contentType = response.headers.get('content-type') || '';
+    if (!/text\/html|application\/xhtml\+xml/i.test(contentType)) throw new Error('site_non_html');
+    const html = (await response.text()).slice(0, 300_000);
+    const contactPattern = /(contact|contato|contacto|fale|fale-conosco|habla|kontakt|contatti|comercial|sales|business|partnership|support|atendimento|suporte)/i;
+    const captchaPattern = /(captcha|recaptcha|hcaptcha|turnstile)/i;
+    const forms = html.match(/<form\\b[\\s\\S]{0,16000}?<\\/form>/gi) || [];
+    const safeForm = forms.some(form => !captchaPattern.test(form) && /(?:<textarea\\b|name=["'][^"']*(?:message|mensagem|mensaje|comments?|inquiry|enquiry|consulta|request)[^"']*["']|id=["'][^"']*(?:message|mensagem|mensaje|comments?|inquiry|enquiry|consulta|request)[^"']*["'])/i.test(form));
+    const anyForm = forms.length > 0;
+    const captchaForm = anyForm && !safeForm && forms.some(form => captchaPattern.test(form));
+    const hrefs = [...html.matchAll(/(?:href|data-href)=["']([^"']+)["']/gi)].map(m => m[1]);
+    const channels = normalizePublicChannels(hrefs.filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\\.me|api\\.whatsapp\\.com|whatsapp\\.com\\/send)/i.test(h)));
+    const contactLinks = hrefs
+      .filter(h => contactPattern.test(h))
+      .map(h => { try { return new URL(h, base).toString(); } catch { return ''; } })
+      .filter(Boolean)
+      .filter(h => { try { return new URL(h).origin === base.origin; } catch { return false; } })
+      .slice(0, 2);
+    const hasContactText = contactPattern.test(html);
+    if (safeForm) return { kind: 'form' as const, channels, contactLinks };
+    if (channels.length && !contactLinks.length && !anyForm) return { kind: 'manual_channel' as const, channels, contactLinks };
+    if (captchaForm) return { kind: 'captcha' as const, channels, contactLinks };
+    if (contactLinks.length || hasContactText || anyForm) return { kind: 'contact_page' as const, channels, contactLinks };
+    return { kind: 'none' as const, channels, contactLinks };
+  } catch (e: any) {
+    const message = clean(e?.message || e, 300);
+    if (/aborted|abort/i.test(message)) throw new Error('site_static_timeout');
+    if (/ENOTFOUND|EAI_AGAIN|ENETUNREACH|ECONNREFUSED|ECONNRESET|fetch failed/i.test(message)) {
+      throw new Error(`site_static_unreachable:${message}`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function runOne(lead: any) {
   const db = getDb();
   const website = extractWebsite(lead.raw_json);
@@ -302,6 +348,15 @@ async function runOne(lead: any) {
 
   // Cheap DNS/HTTP reachability check before launching Chromium.
   const reachableBase = await preflightWebsite(base);
+
+  // Probe the rendered source cheaply before spending a Chromium cycle. This
+  // never submits a form; it only identifies whether a contact surface exists.
+  const surface = await inspectContactSurface(reachableBase);
+  if (surface.kind === 'manual_channel' && surface.channels.length) {
+    throw new Error(JSON.stringify(channelPayload(surface.channels, [])));
+  }
+  if (surface.kind === 'none') throw new Error('site_no_contact_surface');
+  if (surface.kind === 'captcha') throw new Error('captcha_requer_intervencao');
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -581,7 +636,7 @@ async function processLead(db: any, lead: any) {
     try { channelPayloadParsed = JSON.parse(rawError); } catch {}
     const error = clean(channelPayloadParsed ? JSON.stringify(channelPayloadParsed) : rawError, 5000);
     const channelFound = channelPayloadParsed?.reason === 'manual_channel_available';
-    await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=CASE WHEN ? THEN ? ELSE NULL END,browser_channel_data=CASE WHEN ? THEN ? ELSE NULL END,browser_status=CASE WHEN ? THEN 'channel_found' WHEN browser_attempts+1 >= ? THEN 'failed' ELSE 'pending' END,browser_next_at=CASE WHEN ? THEN NULL WHEN ? ILIKE '%site_http_404%' OR ? ILIKE '%site_http_410%' OR ? ILIKE '%ERR_NAME_NOT_RESOLVED%' OR ? ILIKE '%site_private_or_unresolvable_host%' THEN CURRENT_TIMESTAMP + INTERVAL '72 hours' WHEN ? ILIKE '%site_preflight_timeout%' OR ? ILIKE '%browser_timeout_20s%' THEN CURRENT_TIMESTAMP + INTERVAL '12 hours' WHEN ? ILIKE '%site_http_5%' THEN CURRENT_TIMESTAMP + INTERVAL '6 hours' ELSE CURRENT_TIMESTAMP + INTERVAL '6 hours' END,acquisition_stage=CASE WHEN ? THEN 'manual_channel' ELSE acquisition_stage END WHERE id=?`, [error, channelFound, channelPayloadParsed?.channel || 'manual', channelFound, JSON.stringify(channelPayloadParsed || {}).slice(0,5000), channelFound, MAX_ATTEMPTS, channelFound, error, error, error, error, error, error, error, channelFound, lead.id]);
+    await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=CASE WHEN ? THEN ? ELSE NULL END,browser_channel_data=CASE WHEN ? THEN ? ELSE NULL END,browser_status=CASE WHEN ? THEN 'channel_found' WHEN browser_attempts+1 >= ? THEN 'failed' ELSE 'pending' END,browser_next_at=CASE WHEN ? THEN NULL WHEN ? ILIKE '%site_http_404%' OR ? ILIKE '%site_http_410%' OR ? ILIKE '%ERR_NAME_NOT_RESOLVED%' OR ? ILIKE '%site_private_or_unresolvable_host%' THEN CURRENT_TIMESTAMP + INTERVAL '72 hours' WHEN ? ILIKE '%site_preflight_timeout%' OR ? ILIKE '%site_static_timeout%' OR ? ILIKE '%browser_timeout_20s%' THEN CURRENT_TIMESTAMP + INTERVAL '12 hours' WHEN ? ILIKE '%site_no_contact_surface%' OR ? ILIKE '%site_non_html%' OR ? ILIKE '%captcha_requer_intervencao%' THEN CURRENT_TIMESTAMP + INTERVAL '72 hours' WHEN ? ILIKE '%site_http_5%' THEN CURRENT_TIMESTAMP + INTERVAL '6 hours' ELSE CURRENT_TIMESTAMP + INTERVAL '6 hours' END,acquisition_stage=CASE WHEN ? THEN 'manual_channel' ELSE acquisition_stage END WHERE id=?`, [error, channelFound, channelPayloadParsed?.channel || 'manual', channelFound, JSON.stringify(channelPayloadParsed || {}).slice(0,5000), channelFound, MAX_ATTEMPTS, channelFound, error, error, error, error, error, error, error, error, error, error, channelFound, lead.id]);
     console.warn('[acquisition-browser]', lead.id, error);
   }
 }
