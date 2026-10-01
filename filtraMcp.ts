@@ -3,6 +3,7 @@ import { createMcpExpressApp } from '@modelcontextprotocol/express';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
+import rateLimit from 'express-rate-limit';
 import { callAI } from './groqService.js';
 
 const TEST_URL = 'https://filtraai.com/preview/teste';
@@ -27,7 +28,7 @@ function buildServer() {
   const server = new McpServer(
     {
       name: 'filtra-ai',
-      version: '1.0.0',
+      version: '1.1.0',
       websiteUrl: 'https://filtraai.com',
     },
     {
@@ -178,6 +179,40 @@ function buildServer() {
     },
   );
 
+  server.registerTool(
+    'sobre_filtraai',
+    {
+      title: 'Conhecer o Filtra.AI',
+      description: 'Explica o Filtra.AI, suas ferramentas MCP e como iniciar o teste gratuito de 7 dias. Use quando o usuário perguntar sobre o produto ou como começar.',
+      inputSchema: z.object({}),
+      outputSchema: z.object({
+        product: z.string(),
+        capabilities: z.array(z.string()),
+        trial_days: z.number(),
+        card_required: z.boolean(),
+        website: z.string(),
+        trial_url: z.string(),
+      }),
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async () => {
+      const result = {
+        product: 'Filtra.AI',
+        capabilities: [
+          'auditoria de reputação e avaliações',
+          'análise de pontos fortes, riscos e temas recorrentes',
+          'geração de respostas profissionais para avaliações',
+          'teste gratuito de 7 dias sem cartão',
+        ],
+        trial_days: 7,
+        card_required: false,
+        website: 'https://filtraai.com',
+        trial_url: TEST_URL,
+      };
+      return { structuredContent: result, content: [{ type: 'text', text: JSON.stringify(result) }] };
+    },
+  );
+
   return server;
 }
 
@@ -187,6 +222,18 @@ const mcpHandler = createMcpHandler(() => buildServer(), {
 
 const mcpNodeHandler = toNodeHandler(mcpHandler);
 
+const mcpRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.MCP_RATE_WINDOW_MS || 60 * 60 * 1000)),
+  limit: Math.max(10, Number(process.env.MCP_RATE_LIMIT || 60)),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Muitas solicitações ao conector Filtra.AI. Tente novamente mais tarde.', code: 'MCP_RATE_LIMITED' },
+  keyGenerator: (req) => {
+    const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    return forwarded || req.ip || 'unknown';
+  },
+});
+
 export const mcpApp = createMcpExpressApp({
   host: '0.0.0.0',
   allowedHosts: ['api.filtraai.com', 'filtra-ia-api.onrender.com'],
@@ -194,4 +241,5 @@ export const mcpApp = createMcpExpressApp({
 
 // The MCP endpoint is mounted inside the guarded MCP Express app.
 // createMcpExpressApp provides JSON parsing and Host-header protection.
+mcpApp.use('/mcp', mcpRateLimit);
 mcpApp.all('/mcp', mcpNodeHandler);
