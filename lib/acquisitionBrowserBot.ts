@@ -310,7 +310,7 @@ async function runOne(lead: any) {
       const pageChannels = normalizePublicChannels(await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
         .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa[.]me|api[.]whatsapp[.]com|whatsapp[.]com\/send)/i.test(h)).slice(0, 10)));
       const pageText = await page.evaluate(() => document.body?.innerText || '');
-      const pagePhones = normalizePublicPhones(pageText.match(/(?:\+?\d[\d .()-]{7,}\d)/g) || []);
+      const pagePhones = normalizePublicPhones(pageText.match(/(?:\+\d[\d .()-]{7,}\d|\(\d{2}\)[ .-]?\d{4,5}[ .-]?\d{4}|\b\d{2}[ .-]?\d{4,5}[ .-]?\d{4}\b)/g) || []);
       if (pageChannels.length || pagePhones.length) {
         // Keep looking for a form on this page. A discovered channel is useful,
         // but a safe first-party form is the actionable automated contact path.
