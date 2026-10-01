@@ -106,6 +106,10 @@ function buildServer() {
       if (!analysis) {
         throw new Error('Não foi possível estruturar a auditoria.');
       }
+      const parsed = auditAnalysisSchema.safeParse(analysis);
+      if (!parsed.success) {
+        throw new Error('A análise de reputação retornou um formato inválido.');
+      }
       const result = {
         company,
         review_count: items.length,
@@ -113,7 +117,7 @@ function buildServer() {
         positive_count: items.filter((r) => r.rating >= 4).length,
         negative_count: items.filter((r) => r.rating <= 2).length,
         distribution,
-        ...analysis,
+        ...parsed.data,
       };
       return {
         structuredContent: result,
