@@ -5,6 +5,7 @@ import { getDb } from './db.js';
 const ENABLED = process.env.ACQUISITION_BROWSER_BOT === '1';
 const INTERVAL_MS = Math.max(60_000, Number(process.env.ACQUISITION_BROWSER_INTERVAL_MS || 300_000));
 const DAILY_CAP = Math.max(1, Math.min(30, Number(process.env.ACQUISITION_BROWSER_DAILY_CAP || 10)));
+const CONCURRENCY = Math.max(1, Math.min(2, Number(process.env.ACQUISITION_BROWSER_CONCURRENCY || 2)));
 const MAX_ATTEMPTS = 2;
 let started = false;
 let running = false;
@@ -446,11 +447,38 @@ async function runOne(lead: any) {
     }
 
     if (homepageChannelPayload) {
-      throw new Error(JSON.stringify(homepageChannelPayload));
+      throw new Error(JSON.stringify(homepageasync function processLead(db: any, lead: any) {
+  console.log('[acquisition-browser] start', lead.id, lead.nome_empresa || '');
+  try {
+    const result = await Promise.race([
+      runOne(lead),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('browser_timeout_45s')), 45_000))
+    ]);
+    const serialized = JSON.stringify(result).slice(0, 5000);
+    if (result?.status === 'submitted_unconfirmed') {
+      await db.run(
+        `UPDATE leads SET browser_status='contact_attempted',browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=NULL,browser_channel_data=NULL,browser_attempts=browser_attempts+1,browser_next_at=CURRENT_TIMESTAMP + INTERVAL '24 hours',acquisition_stage='contacted' WHERE id=?`,
+        [serialized, lead.id]
+      );
+      console.log('[acquisition-browser] submitted_unconfirmed', lead.id, result);
+    } else {
+      await db.run(
+        `UPDATE leads SET browser_status='sent',browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=NULL,browser_channel_data=NULL,browser_attempts=browser_attempts+1,browser_next_at=NULL,acquisition_stage='contacted' WHERE id=?`,
+        [serialized, lead.id]
+      );
+      console.log('[acquisition-browser] sent', lead.id, result);
     }
-    throw new Error(lastError);
-  } finally {
-    await browser.close();
+  } catch (e: any) {
+    const rawError = String(e?.message || e || '');
+    let channelPayloadParsed: any = null;
+    try { channelPayloadParsed = JSON.parse(rawError); } catch {}
+    const error = clean(channelPayloadParsed ? JSON.stringify(channelPayloadParsed) : rawError, 5000);
+    const channelFound = channelPayloadParsed?.reason === 'manual_channel_available';
+    await db.run(
+      `UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=CASE WHEN ? THEN ? ELSE NULL END,browser_channel_data=CASE WHEN ? THEN ? ELSE NULL END,browser_status=CASE WHEN ? THEN 'channel_found' WHEN browser_attempts+1 >= ? THEN 'failed' ELSE 'pending' END,browser_next_at=CASE WHEN ? THEN NULL ELSE CURRENT_TIMESTAMP + INTERVAL '6 hours' END,acquisition_stage=CASE WHEN ? THEN 'manual_channel' ELSE acquisition_stage END WHERE id=?`,
+      [error, channelFound, channelPayloadParsed?.channel || 'manual', channelFound, JSON.stringify(channelPayloadParsed || {}).slice(0,5000), channelFound, MAX_ATTEMPTS, channelFound, channelFound, lead.id]
+    );
+    console.warn('[acquisition-browser]', lead.id, error);
   }
 }
 
@@ -462,44 +490,14 @@ async function tick() {
     await ensureSchema(db);
     const used = await sentToday(db);
     if (used >= DAILY_CAP) {
-      console.log('[acquisition-browser] tick', { used, candidates: 0, cap: DAILY_CAP, reason: 'daily_cap' });
+      console.log('[acquisition-browser] tick', { used, candidates: 0, cap: DAILY_CAP, concurrency: CONCURRENCY, reason: 'daily_cap' });
       return;
     }
     const candidates = await getCandidates(db);
-    console.log('[acquisition-browser] tick', { used, candidates: candidates.length, cap: DAILY_CAP, reason: candidates.length ? 'processing' : 'no_candidates' });
-    for (const lead of candidates.slice(0, DAILY_CAP - used)) {
-      console.log('[acquisition-browser] start', lead.id, lead.nome_empresa || '');
-      try {
-        const result = await Promise.race([
-          runOne(lead),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('browser_timeout_45s')), 45_000))
-        ]);
-        const serialized = JSON.stringify(result).slice(0, 5000);
-        if (result?.status === 'submitted_unconfirmed') {
-          await db.run(
-            `UPDATE leads SET browser_status='contact_attempted',browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=NULL,browser_channel_data=NULL,browser_attempts=browser_attempts+1,browser_next_at=CURRENT_TIMESTAMP + INTERVAL '24 hours',acquisition_stage='contacted' WHERE id=?`,
-            [serialized, lead.id]
-          );
-          console.log('[acquisition-browser] submitted_unconfirmed', lead.id, result);
-        } else {
-          await db.run(
-            `UPDATE leads SET browser_status='sent',browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=NULL,browser_channel_data=NULL,browser_attempts=browser_attempts+1,browser_next_at=NULL,acquisition_stage='contacted' WHERE id=?`,
-            [serialized, lead.id]
-          );
-          console.log('[acquisition-browser] sent', lead.id, result);
-        }
-      } catch (e: any) {
-        const rawError = String(e?.message || e || '');
-        let channelPayloadParsed: any = null;
-        try { channelPayloadParsed = JSON.parse(rawError); } catch {}
-        const error = clean(channelPayloadParsed ? JSON.stringify(channelPayloadParsed) : rawError, 5000);
-        const channelFound = channelPayloadParsed?.reason === 'manual_channel_available';
-        await db.run(
-          `UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=CASE WHEN ? THEN ? ELSE NULL END,browser_channel_data=CASE WHEN ? THEN ? ELSE NULL END,browser_status=CASE WHEN ? THEN 'channel_found' WHEN browser_attempts+1 >= ? THEN 'failed' ELSE 'pending' END,browser_next_at=CASE WHEN ? THEN NULL ELSE CURRENT_TIMESTAMP + INTERVAL '6 hours' END,acquisition_stage=CASE WHEN ? THEN 'manual_channel' ELSE acquisition_stage END WHERE id=?`,
-          [error, channelFound, channelPayloadParsed?.channel || 'manual', channelFound, JSON.stringify(channelPayloadParsed || {}).slice(0,5000), channelFound, MAX_ATTEMPTS, channelFound, channelFound, lead.id]
-        );
-        console.warn('[acquisition-browser]', lead.id, error);
-      }
+    const queue = candidates.slice(0, DAILY_CAP - used);
+    console.log('[acquisition-browser] tick', { used, candidates: candidates.length, selected: queue.length, cap: DAILY_CAP, concurrency: CONCURRENCY, reason: queue.length ? 'processing' : 'no_candidates' });
+    for (let i = 0; i < queue.length; i += CONCURRENCY) {
+      await Promise.all(queue.slice(i, i + CONCURRENCY).map((lead) => processLead(db, lead)));
     }
   } finally {
     running = false;
