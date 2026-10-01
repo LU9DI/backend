@@ -126,7 +126,7 @@ export async function notificarTrialAtivado(opts: {
               'Trial ativado',
               `<p>Seu período de 7 dias grátis de <strong style="color:#fafafa">${opts.nomeEmpresa}</strong> está ativo.</p>
                <p>Expira em: <strong style="color:#fafafa">${exp}</strong></p>
-               <p><a href="${painel}" style="color:#818cf8">Abrir painel (entrar com CNPJ e senha)</a> · <a href="${avaliacao}" style="color:#818cf8">Link de avaliação</a></p>
+               <p><a href="${painel}" style="color:#818cf8">Abrir painel (entrar com e-mail e senha)</a> · <a href="${avaliacao}" style="color:#818cf8">Link de avaliação</a></p>
                <p style="margin-top:12px">Compartilhe o link com clientes. Críticas ficam privadas e geram alerta por e-mail.</p>`
             ),
           };
@@ -208,7 +208,7 @@ export async function notificarCriticaPrivada(opts: {
        ${opts.aiReply ? `<p><em>IA:</em> ${String(opts.aiReply).replace(/</g, '')}</p>` : ''}
        ${wa ? `<p><a href="${wa}" style="color:#34d399">WhatsApp do cliente</a></p>` : ''}
        <p style="margin-top:16px"><a href="${painel}" style="display:inline-block;background:#4f46e5;color:#fff;padding:10px 18px;border-radius:10px;text-decoration:none;font-weight:600">Abrir painel (entrar)</a></p>
-       <p style="font-size:12px;color:#71717a">É preciso entrar com CNPJ e senha. Depois você volta ao painel automaticamente.</p>`
+       <p style="font-size:12px;color:#71717a">Entre com seu e-mail e senha. Depois você volta ao painel automaticamente.</p>`
     ),
   });
 }
