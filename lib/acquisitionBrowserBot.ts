@@ -14,6 +14,55 @@ const validUrl = (v: unknown) => {
   try { const u = new URL(clean(v, 2000)); return /^https?:$/.test(u.protocol) ? u : null; } catch { return null; }
 };
 
+function normalizePublicPhones(values: string[]) {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of values) {
+    const value = clean(raw, 160).replace(/\s+/g, ' ').trim();
+    const digits = value.replace(/\D/g, '');
+    if (digits.length < 8 || digits.length > 15) continue;
+    // Never classify IPs, dates, ZIP/postal codes, IDs or other long numeric fragments as phone numbers.
+    if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)) continue;
+    if (/\b(?:cep|zip|postal|c[oó]digo|code|id|cnpj|cpf)\b/i.test(value)) continue;
+    const key = digits.replace(/^00/, '+');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+    if (out.length >= 5) break;
+  }
+  return out;
+}
+
+function normalizePublicChannels(values: string[]) {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of values) {
+    const value = clean(raw, 500);
+    if (!value) continue;
+    let key = value.toLowerCase();
+    try {
+      const u = new URL(value);
+      if (/^(?:wa\.me|api\.whatsapp\.com|web\.whatsapp\.com)$/i.test(u.hostname)) {
+        const phone = u.searchParams.get('phone') || u.pathname.replace(/^\/+/, '');
+        const digits = phone.replace(/\D/g, '');
+        if (digits.length < 10 || digits.length > 15) continue;
+        key = 'whatsapp:' + digits;
+      } else if (/^tel:/i.test(value)) {
+        const digits = value.replace(/\D/g, '');
+        if (digits.length < 8 || digits.length > 15) continue;
+        key = 'tel:' + digits;
+      } else if (/^mailto:/i.test(value)) {
+        key = 'mailto:' + value.slice(7).split('?')[0].trim().toLowerCase();
+      }
+    } catch {}
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+    if (out.length >= 10) break;
+  }
+  return out;
+}
+
 function detectLanguage(html: string, url: URL) {
   const lang = (html.match(/<html[^>]+lang=["']([^"']+)["']/i)?.[1] || '').toLowerCase();
   if (lang.startsWith('pt')) return 'pt';
@@ -207,12 +256,11 @@ async function runOne(lead: any) {
         if (!contactLinks.some(x => x.href === href)) contactLinks.push({ text: path, href });
       } catch {}
     }
-    const publicChannels = links
+    const publicChannels = normalizePublicChannels(links
       .map(x => x.href)
-      .filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\.me|api\.whatsapp\.com|whatsapp\.com\/send)/i.test(h))
-      .slice(0, 10);
-    const visiblePhone = (await page.evaluate(() => document.body?.innerText || ''))
-      .match(/(?:\+?\d[\d .()-]{7,}\d)/g)?.slice(0, 5) || [];
+      .filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\.me|api\.whatsapp\.com|whatsapp\.com\/send)/i.test(h)));
+    const visiblePhone = normalizePublicPhones((await page.evaluate(() => document.body?.innerText || ''))
+      .match(/(?:\+?\d[\d .()-]{7,}\d)/g) || []);
     if (!contactLinks.length && (publicChannels.length || visiblePhone.length)) {
       throw new Error(JSON.stringify({ reason: 'manual_channel_available', channel: publicChannels.some(h => /whatsapp/i.test(h) || /wa[.]me/i.test(h)) ? 'public_whatsapp' : publicChannels.some(h => /^tel:/i.test(h)) || visiblePhone.length ? 'public_phone' : 'public_email', channels: [...publicChannels, ...visiblePhone].slice(0, 10) }));
     }
@@ -230,10 +278,10 @@ async function runOne(lead: any) {
       }
       await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 8_000 }).catch(() => null);
 
-      const pageChannels = await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
-        .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa[.]me|api[.]whatsapp[.]com|whatsapp[.]com\/send)/i.test(h)).slice(0, 10));
+      const pageChannels = normalizePublicChannels(await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
+        .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa[.]me|api[.]whatsapp[.]com|whatsapp[.]com\/send)/i.test(h)).slice(0, 10)));
       const pageText = await page.evaluate(() => document.body?.innerText || '');
-      const pagePhones = pageText.match(/(?:\+?\d[\d .()-]{7,}\d)/g)?.slice(0, 5) || [];
+      const pagePhones = normalizePublicPhones(pageText.match(/(?:\+?\d[\d .()-]{7,}\d)/g) || []);
       if (pageChannels.length || pagePhones.length) {
         const channel = pageChannels.some((h: string) => /(?:wa[.]me|whatsapp)/i.test(h)) ? 'public_whatsapp'
           : pageChannels.some((h: string) => /^tel:/i.test(h)) || pagePhones.length ? 'public_phone'
