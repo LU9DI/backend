@@ -1,5 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
-import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
+import { createMcpExpressApp } from '@modelcontextprotocol/express';
+import { toNodeHandler } from '@modelcontextprotocol/node';
+import { createMcpHandler } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { callAI } from './groqService.js';
 
@@ -179,26 +181,18 @@ function buildServer() {
   return server;
 }
 
-export async function handleFiltraMcp(req: any, res: any) {
-  const transport = new NodeStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
-  });
-  res.on('close', () => {
-    void transport.close().catch(() => undefined);
-  });
-  const server = buildServer();
-  try {
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-  } catch (error: any) {
-    console.error('[mcp] request failed:', error?.message || error);
-    if (!res.headersSent) {
-      res.status(500).json({
-        jsonrpc: '2.0',
-        error: { code: -32603, message: 'Internal server error' },
-        id: null,
-      });
-    }
-  }
+const mcpHandler = createMcpHandler(() => buildServer(), {
+  responseMode: 'json',
+  maxRequestBodySize: 1024 * 1024,
+});
+
+const mcpNodeHandler = toNodeHandler(mcpHandler);
+
+export const mcpApp = createMcpExpressApp({
+  host: '0.0.0.0',
+  allowedHosts: ['api.filtraai.com', 'filtra-ia-api.onrender.com'],
+});
+
+export function handleFiltraMcp(req: any, res: any) {
+  return mcpNodeHandler(req, res, req.body);
 }
