@@ -348,7 +348,7 @@ export async function queueEligibleAcquisition(limit = 25) {
     ];
 
     if (!leads.length) {
-      return { queued: 0, skipped: 0, capacity, used_before: used, reason: 'no_candidates', sendable_candidates: candidates?.length || 0, resend_fallback: resendFallback };
+      return { queued: 0, skipped: 0, capacity, used_before: used, reason: candidates?.length ? 'email_opt_in_required' : 'no_candidates', sendable_candidates: candidates?.length || 0, resend_fallback: resendFallback };
     }
 
     let queued = 0;
