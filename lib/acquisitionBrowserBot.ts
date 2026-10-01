@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import dns from 'node:dns/promises';
+import net from 'node:net';
 import puppeteer from 'puppeteer-core';
 import { getDb } from './db.js';
 
@@ -243,11 +245,79 @@ function channelPayload(channels: string[], phones: string[]) {
   };
 }
 
+function isPrivateAddress(address: string) {
+  if (net.isIP(address) === 4) {
+    const [a, b] = address.split('.').map(Number);
+    return a === 10 || a === 127 || (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  }
+  if (net.isIP(address) === 6) {
+    const normalized = address.toLowerCase();
+    return normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd') ||
+      normalized.startsWith('fe8') || normalized.startsWith('fe9') ||
+      normalized.startsWith('fea') || normalized.startsWith('feb') ||
+      normalized.startsWith('::ffff:127.') || normalized.startsWith('::ffff:10.') ||
+      normalized.startsWith('::ffff:192.168.');
+  }
+  return true;
+}
+
+async function assertPublicHost(url: URL) {
+  const host = url.hostname;
+  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) {
+    throw new Error('site_private_host');
+  }
+  const addresses = await dns.lookup(host, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some(entry => isPrivateAddress(entry.address))) {
+    throw new Error('site_private_or_unresolvable_host');
+  }
+}
+
+async function preflightWebsite(base: URL) {
+  let current = new URL(base.toString());
+  for (let hop = 0; hop < 3; hop += 1) {
+    await assertPublicHost(current);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4_000);
+    try {
+      const response = await fetch(current.toString(), {
+        method: 'HEAD',
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: { 'user-agent': 'FiltraAI-Acquisition/1.0 (+https://filtraai.com)' },
+      });
+      if (response.status >= 500) throw new Error(`site_http_${response.status}`);
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location');
+        if (!location) return response.status;
+        const next = validUrl(new URL(location, current).toString());
+        if (!next) throw new Error('site_redirect_invalid');
+        current = next;
+        continue;
+      }
+      return response.status;
+    } catch (e: any) {
+      const message = clean(e?.message || e, 300);
+      if (/aborted|abort/i.test(message)) throw new Error('site_preflight_timeout_4s');
+      if (/ENOTFOUND|EAI_AGAIN|ENETUNREACH|ECONNREFUSED|ECONNRESET|fetch failed/i.test(message)) {
+        throw new Error(`site_preflight_unreachable:${message}`);
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new Error('site_redirect_limit');
+}
+
 async function runOne(lead: any) {
   const db = getDb();
   const website = extractWebsite(lead.raw_json);
   const base = validUrl(website);
   if (!base) throw new Error('site_oficial_ausente');
+
+  // Cheap DNS/HTTP reachability check before launching Chromium.
+  await preflightWebsite(base);
 
   const browser = await puppeteer.launch({
     headless: true,
