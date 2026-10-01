@@ -370,7 +370,7 @@ async function main() {
   mountFiscalRoutes(app);
 
   // ChatGPT / MCP integration. The MCP sub-app owns /mcp and its host/origin guards.
-  app.use(mcpApp);
+  app.use('/mcp', mcpApp);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
