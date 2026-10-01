@@ -4,6 +4,8 @@ import { enqueueRetry } from './retryQueue.js';
 import { enviarEmailAquisicao } from './mailer.js';
 
 const DAILY_CAP = Math.min(80, Math.max(1, Number(process.env.ACQUISITION_DAILY_CAP || 80)));
+const INSTITUTIONAL_DAILY_TARGET = Math.min(30, DAILY_CAP);
+const INSTITUTIONAL_KEYWORDS = /(associa[cç][aã]o|associacao|sindicato|federa[cç][aã]o|federacao|c[aâ]mara de com[eé]rcio|camara de comercio|entidade empresarial|uni[aã]o empresarial|conselho empresarial|instituto empresarial|confedera[cç][aã]o|confederacao)/i;
 const ENGINE_INTERVAL_MS = Math.max(30_000, Number(process.env.ACQUISITION_ENGINE_INTERVAL_MS || 60_000));
 const RESEND_SYNC_PAGE_SIZE = Math.min(100, Math.max(1, Number(process.env.RESEND_CONTACT_SYNC_PAGE_SIZE || 100)));
 const RESEND_SYNC_MAX_PAGES = Math.min(20, Math.max(1, Number(process.env.RESEND_CONTACT_SYNC_MAX_PAGES || 5)));
@@ -74,7 +76,8 @@ export async function ensureAcquisitionEngineSchema(db = getDb()) {
     ['acquisition_next_at', 'TIMESTAMPTZ'],
     ['acquisition_last_sent_at', 'TIMESTAMPTZ'],
     ['acquisition_source', 'TEXT'],
-    ['acquisition_timezone', 'TEXT']
+    ['acquisition_timezone', 'TEXT'],
+    ['acquisition_segment', `TEXT NOT NULL DEFAULT 'business'`]
   ];
   for (const [name, type] of leadColumns) {
     try { await db.exec(`ALTER TABLE leads ADD COLUMN ${name} ${type}`); } catch {}
@@ -225,19 +228,54 @@ export async function syncResendContacts(db = getDb()) {
   return { enabled: true, fetched, created, existing, suppressed, pages };
 }
 
+function isInstitutionalLead(lead: any) {
+  if (String(lead?.acquisition_segment || '').toLowerCase() === 'institutional') return true;
+  const haystack = [lead?.nome_empresa, lead?.fonte, lead?.acquisition_source, lead?.raw_json].map(v => clean(v, 20000)).join(' ');
+  return INSTITUTIONAL_KEYWORDS.test(haystack);
+}
+
+async function institutionalSentToday(db: any) {
+  const from = localDayStartUtcIso();
+  const rows = await db.all(
+    `SELECT l.nome_empresa,l.fonte,l.raw_json,l.acquisition_source,l.acquisition_segment
+       FROM acquisition_sends s JOIN leads l ON l.id=s.lead_id
+      WHERE s.channel='email' AND s.status IN ('queued','sent') AND s.scheduled_at >= ?`,
+    [from]
+  );
+  return (rows || []).filter((row: any) => isInstitutionalLead(row)).length;
+}
+
 function buildMessage(lead: any) {
   const company = clean(lead.nome_empresa, 180) || 'sua empresa';
+  const institutional = isInstitutionalLead(lead);
   const variant = crypto.createHash('sha256').update(String(lead.id)).digest('hex').charCodeAt(0) % 2 === 0 ? 'A' : 'B';
-  const subject = variant === 'A'
-    ? `Uma pergunta rápida sobre as avaliações da ${company}`
-    : `Podemos fazer uma auditoria da ${company}?`;
+  const subject = institutional
+    ? `Parceria com ${company}: auditoria gratuita para seus associados`
+    : (variant === 'A'
+      ? `Uma pergunta rápida sobre as avaliações da ${company}`
+      : `Podemos fazer uma auditoria da ${company}?`);
   const url = 'https://filtraai.com/auditoria-gratuita?utm_source=acquisition&utm_medium=email&utm_campaign=2026-09&utm_content=' + variant.toLowerCase();
   const trackingBase = 'https://api.filtraai.com/api/public/acquisition';
   const unsubscribeUrl = trackingBase + '/unsubscribe?l=' + encodeURIComponent(String(lead.id)) + '&t=' + encodeURIComponent(unsubscribeToken(String(lead.id)));
   const clickUrl = trackingBase + '/click?l=' + encodeURIComponent(String(lead.id)) + '&u=' + encodeURIComponent(url);
   const openUrl = trackingBase + '/open?l=' + encodeURIComponent(String(lead.id));
-  const body =
-`Olá,
+  const body = institutional
+    ? `Olá,
+
+A Filtra.AI está oferecendo à ${company} uma iniciativa gratuita que pode ser disponibilizada aos seus associados: uma auditoria de reputação no Google.
+
+A auditoria mostra a evolução das avaliações e notas, principais pontos de atenção nos comentários recentes, oportunidades de melhoria na reputação online e avaliações que ainda não receberam resposta.
+
+Não há custo para a entidade. Os associados interessados também podem testar o Filtra.AI gratuitamente por 7 dias, sem cartão, para acompanhar avaliações, organizar feedback e utilizar a análise com IA.
+
+A auditoria e o teste podem ser acessados diretamente:
+
+${url}
+
+Equipe Filtra.AI
+
+Se não quiser receber novas comunicações da Filtra.AI, cancele aqui: ${unsubscribeUrl}`
+    : `Olá,
 
 Queria fazer uma pergunta rápida: vocês acompanham de forma estruturada o que os clientes estão dizendo nas avaliações?
 
@@ -255,19 +293,9 @@ Se não quiser receber novas comunicações da Filtra.AI, cancele aqui: ${unsubs
   const safeCompany = company.replace(/[&<>"]/g, (m: string) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m] || m));
   const safeClickUrl = clickUrl.replace(/&/g, '&amp;');
   const safeUnsubscribeUrl = unsubscribeUrl.replace(/&/g, '&amp;');
-  const html =
-`<!doctype html><html lang="pt-BR"><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#202124;line-height:1.55">
-<div style="max-width:600px;margin:auto">
-<p>Olá,</p>
-<p>Queria fazer uma pergunta rápida: vocês acompanham de forma estruturada o que os clientes estão dizendo nas avaliações?</p>
-<p>A <strong>Filtra.AI</strong> transforma avaliações e feedback em oportunidades práticas para melhorar experiência, reputação e crescimento.</p>
-<p>Podemos preparar uma auditoria gratuita da <strong>${safeCompany}</strong>, sem compromisso?</p>
-<p><a href="${safeClickUrl}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:700">Ver auditoria gratuita</a></p>
-<p>Depois, se fizer sentido, você pode testar a plataforma por 7 dias.</p>
-<p>Equipe filtra.ai</p>
-<p style="font-size:12px;color:#6b7280">Se não quiser receber novas comunicações da Filtra.AI, <a href="${safeUnsubscribeUrl}">clique aqui para cancelar</a>.</p>
-<img src="${openUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px" />
-</div></body></html>`;
+  const html = institutional
+    ? `<!doctype html><html lang="pt-BR"><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#202124;line-height:1.55"><div style="max-width:600px;margin:auto"><p>Olá <strong>${safeCompany}</strong>,</p><p>A <strong>Filtra.AI</strong> está oferecendo à entidade uma iniciativa gratuita que pode ser disponibilizada aos seus associados: uma auditoria de reputação no Google.</p><p>A auditoria mostra a evolução das avaliações e notas, principais pontos de atenção nos comentários recentes, oportunidades de melhoria na reputação online e avaliações que ainda não receberam resposta.</p><p>Não há custo para a entidade. Os associados interessados também podem testar o Filtra.AI gratuitamente por <strong>7 dias, sem cartão</strong>, para acompanhar avaliações, organizar feedback e utilizar a análise com IA.</p><p><a href="${safeClickUrl}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:700">Acessar auditoria gratuita</a></p><p>Auditoria e teste: <a href="https://filtraai.com">filtraai.com</a></p><p>Equipe Filtra.AI</p><p style="font-size:12px;color:#6b7280">Se não quiser receber novas comunicações da Filtra.AI, <a href="${safeUnsubscribeUrl}">clique aqui para cancelar</a>.</p><img src="${openUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px" /></div></body></html>`
+    : `<!doctype html><html lang="pt-BR"><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#202124;line-height:1.55"><div style="max-width:600px;margin:auto"><p>Olá,</p><p>Queria fazer uma pergunta rápida: vocês acompanham de forma estruturada o que os clientes estão dizendo nas avaliações?</p><p>A <strong>Filtra.AI</strong> transforma avaliações e feedback em oportunidades práticas para melhorar experiência, reputação e crescimento.</p><p>Podemos preparar uma auditoria gratuita da <strong>${safeCompany}</strong>, sem compromisso?</p><p><a href="${safeClickUrl}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:700">Ver auditoria gratuita</a></p><p>Depois, se fizer sentido, você pode testar a plataforma por 7 dias.</p><p>Equipe filtra.ai</p><p style="font-size:12px;color:#6b7280">Se não quiser receber novas comunicações da Filtra.AI, <a href="${safeUnsubscribeUrl}">clique aqui para cancelar</a>.</p><img src="${openUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px" /></div></body></html>`;
   return { subject, body, html };
 }
 
@@ -290,8 +318,10 @@ export async function queueEligibleAcquisition(limit = 25) {
     if (!capacity) return { queued: 0, skipped: 0, reason: 'daily_cap', resend_fallback: resendFallback };
 
     const take = Math.min(capacity, Math.max(1, limit));
-    const leads = await db.all(
-      `SELECT id,nome_empresa,email,acquisition_stage,acquisition_next_at
+    const institutionalSent = await institutionalSentToday(db);
+    const institutionalRemaining = Math.max(0, INSTITUTIONAL_DAILY_TARGET - institutionalSent);
+    const candidates = await db.all(
+      `SELECT id,nome_empresa,email,fonte,raw_json,acquisition_source,acquisition_segment,acquisition_stage,acquisition_next_at
        FROM leads
        WHERE acquisition_eligible=1
          AND acquisition_opted_in_at IS NOT NULL
@@ -301,8 +331,15 @@ export async function queueEligibleAcquisition(limit = 25) {
          AND acquisition_stage IN ('eligible','ready','followup')
        ORDER BY COALESCE(acquisition_next_at, criado_em) ASC
        LIMIT ?`,
-      [new Date().toISOString(), take]
+      [new Date().toISOString(), Math.max(take * 4, INSTITUTIONAL_DAILY_TARGET)]
     );
+    const institutional = (candidates || []).filter((lead: any) => isInstitutionalLead(lead));
+    const general = (candidates || []).filter((lead: any) => !isInstitutionalLead(lead));
+    const institutionalTake = Math.min(take, institutionalRemaining);
+    const leads = [
+      ...institutional.slice(0, institutionalTake),
+      ...general.slice(0, take - institutionalTake)
+    ];
 
     let queued = 0;
     let skipped = 0;
@@ -340,7 +377,7 @@ export async function queueEligibleAcquisition(limit = 25) {
         else throw e;
       }
     }
-    return { queued, skipped, capacity, used_before: used, resend_fallback: resendFallback };
+    return { queued, skipped, capacity, used_before: used, institutional_sent_before: institutionalSent, institutional_target: INSTITUTIONAL_DAILY_TARGET, institutional_queued: leads.filter((lead: any) => isInstitutionalLead(lead)).length, resend_fallback: resendFallback };
   } finally {
     running = false;
   }
