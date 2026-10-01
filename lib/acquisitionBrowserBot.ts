@@ -266,7 +266,7 @@ async function runOne(lead: any) {
       .map(x => x.href)
       .filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\.me|api\.whatsapp\.com|whatsapp\.com\/send)/i.test(h)));
     const visiblePhone = normalizePublicPhones((await page.evaluate(() => document.body?.innerText || ''))
-      .match(/(?:\+?\d[\d .()-]{7,}\d)/g) || []);
+      .match(/(?:\+\d[\d .()-]{7,}\d|\(\d{2}\)[ .-]?\d{4,5}[ .-]?\d{4}|\b\d{2}[ .-]?\d{4,5}[ .-]?\d{4}\b)/g) || []);
 
     // Preserve discovered public channels, but do not stop here: if the official
     // site also exposes a safe contact form, use that form. The user's goal is
