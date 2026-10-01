@@ -108,7 +108,7 @@ async function inspectOfficialWebsite(website: string) {
     const html = (await response.text()).slice(0, 400000);
     const base = validUrl(response.url) || website;
     const host = new URL(base).hostname;
-    for (const match of html.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>([\\s\\S]*?)<\\/a>/gi)) {
+    for (const match of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
       const href = clean(match[1], 2000);
       const text = clean(match[2].replace(/<[^>]+>/g, ' '), 500);
       if (!CONTACT_RE.test(href) && !CONTACT_RE.test(text)) continue;
@@ -117,8 +117,8 @@ async function inspectOfficialWebsite(website: string) {
         if (/^https?:$/.test(url.protocol) && url.hostname === host) result.contact_urls.push(url.toString());
       } catch {}
     }
-    const matches = html.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi) || [];
-    result.emails = [...new Set(matches.map(x => x.toLowerCase()).filter(x => !/example\\.|sentry|wix|wordpress/i.test(x)))].slice(0, 10);
+    const matches = html.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+    result.emails = [...new Set(matches.map(x => x.toLowerCase()).filter(x => !/example\.|sentry|wix|wordpress/i.test(x)))].slice(0, 10);
     result.contact_urls = [...new Set(result.contact_urls)].slice(0, 5);
   } catch {
     // Best effort: the browser adapter can still use the official website.
@@ -138,11 +138,11 @@ async function upsertPost(post: ProductHuntPost): Promise<boolean> {
   const source = websiteInfo.website ? 'Product Hunt + official website' : 'product_hunt';
   const segment = 'startup_product';
   const score = scorePost(post);
-  const qualification = score >= 55 ? 'prospect' : 'prospect';
+  const qualification = 'prospect';
 
   const existing = await db.get<{ id: any }>(
-    `SELECT id FROM leads WHERE acquisition_source = ? AND raw_json::text LIKE ? LIMIT 1`,
-    [source, `%"id":"${String(post.id).replace(/"/g, '')}"%`]
+    `SELECT id FROM leads WHERE raw_json::text LIKE ? LIMIT 1`,
+    [`%"id":"${String(post.id).replace(/"/g, '')}"%`]
   );
   if (existing) return false;
 
