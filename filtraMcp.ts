@@ -82,7 +82,7 @@ function buildServer() {
         count: items.filter((r) => r.rating === rating).length,
       }));
       const system =
-        'Você é o analista de reputação da Filtra.AI. Analise somente as avaliações fornecidas. Não invente fatos, métricas, clientes, canais ou causas. Responda em JSON válido com as chaves: summary, strengths, risks, recurring_themes, actions, confidence. Cada afirmação deve ser sustentada pelo texto recebido. Locale: ' +
+        'Você é o analista de reputação da Filtra.AI. Analise somente as avaliações fornecidas. Não invente fatos, métricas, clientes, canais ou causas. Responda em JSON válido com tipos exatos: summary é string; strengths, risks, recurring_themes e actions são arrays de strings; confidence é número entre 0 e 1. Não use objetos nessas cinco listas. Cada afirmação deve ser sustentada pelo texto recebido. Locale: ' +
         locale +
         '.';
       const user = JSON.stringify({
