@@ -266,12 +266,13 @@ async function runOne(lead: any) {
     const visiblePhone = normalizePublicPhones((await page.evaluate(() => document.body?.innerText || ''))
       .match(/(?:\+?\d[\d .()-]{7,}\d)/g) || []);
 
-    // Prefer a real public channel over guessing a contact path. This avoids losing
-    // actionable email/phone/WhatsApp findings simply because a generic /contact
-    // route exists on the site.
-    if (publicChannels.length || visiblePhone.length) {
-      throw new Error(JSON.stringify(channelPayload(publicChannels, visiblePhone)));
-    }
+    // Preserve discovered public channels, but do not stop here: if the official
+    // site also exposes a safe contact form, use that form. The user's goal is
+    // contact, not merely discovery. Public channels remain available for manual
+    // follow-up when no safe form exists.
+    const homepageChannelPayload = (publicChannels.length || visiblePhone.length)
+      ? channelPayload(publicChannels, visiblePhone)
+      : null;
 
     const contactPattern = /(contact|contato|contacto|fale|fale-conosco|habla|kontakt|contatti|comercial|sales|business|partnership|support|atendimento|suporte)/i;
     const contactLinks = links
@@ -306,7 +307,8 @@ async function runOne(lead: any) {
       const pageText = await page.evaluate(() => document.body?.innerText || '');
       const pagePhones = normalizePublicPhones(pageText.match(/(?:\+?\d[\d .()-]{7,}\d)/g) || []);
       if (pageChannels.length || pagePhones.length) {
-        throw new Error(JSON.stringify(channelPayload(pageChannels, pagePhones)));
+        // Keep looking for a form on this page. A discovered channel is useful,
+        // but a safe first-party form is the actionable automated contact path.
       }
 
       const formInfo: any = await page.evaluate(() => {
@@ -337,7 +339,15 @@ async function runOne(lead: any) {
         lastError = 'nenhum_formulario'; continue;
       }
 
-      const usableForms = formInfo.filter((f: any) => !/captcha|recaptcha|hcaptcha|turnstile/i.test(JSON.stringify(f)));
+      const usableForms = formInfo.filter((f: any) => {
+        if (/captcha|recaptcha|hcaptcha|turnstile/i.test(JSON.stringify(f))) return false;
+        try {
+          const action = new URL(f.action || contact.href, page.url());
+          return action.origin === base.origin;
+        } catch {
+          return false;
+        }
+      });
       if (!usableForms.length) { lastError = 'captcha_requer_intervencao'; continue; }
 
       const form = usableForms.find((f: any) => f.fields.some((x:any)=>/textarea/i.test(x.tag)))
@@ -392,10 +402,34 @@ async function runOne(lead: any) {
       const finalUrl = await page.url();
       const confirmation = await page.evaluate(() => document.body.innerText.slice(0,5000));
       const looksSuccessful = /(thank you|thanks|obrigad|gracias|merci|danke|grazie|sent successfully|mensagem enviada|enviado com sucesso|message sent)/i.test(confirmation);
-      if (looksSuccessful || finalUrl !== contact.href) {
-        return { ok: true, lang, form_url: contact.href, final_url: finalUrl };
+      if (looksSuccessful) {
+        return {
+          ok: true,
+          status: 'sent',
+          lang,
+          form_url: contact.href,
+          final_url: finalUrl,
+          discovered_channels: [
+            ...(homepageChannelPayload?.channels || []),
+            ...pageChannels,
+            ...pagePhones,
+          ].slice(0, 10),
+        };
       }
-      lastError = 'resultado_de_envio_nao_confirmado';
+      // A redirect alone is not proof that the form was accepted. Preserve the
+      // attempt as unconfirmed instead of claiming a successful contact.
+      return {
+        ok: false,
+        status: 'submitted_unconfirmed',
+        lang,
+        form_url: contact.href,
+        final_url: finalUrl,
+        discovered_channels: [
+          ...(homepageChannelPayload?.channels || []),
+          ...pageChannels,
+          ...pagePhones,
+        ].slice(0, 10),
+      };
     }
 
     throw new Error(lastError);
@@ -416,11 +450,20 @@ async function tick() {
     for (const lead of candidates.slice(0, DAILY_CAP - used)) {
       try {
         const result = await runOne(lead);
-        await db.run(
-          `UPDATE leads SET browser_status='sent',browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=NULL,browser_channel_data=NULL,browser_attempts=browser_attempts+1 WHERE id=?`,
-          [JSON.stringify(result).slice(0,5000), lead.id]
-        );
-        console.log('[acquisition-browser] sent', lead.id, result);
+        const serialized = JSON.stringify(result).slice(0, 5000);
+        if (result?.status === 'submitted_unconfirmed') {
+          await db.run(
+            `UPDATE leads SET browser_status='contact_attempted',browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=NULL,browser_channel_data=NULL,browser_attempts=browser_attempts+1,browser_next_at=CURRENT_TIMESTAMP + INTERVAL '24 hours',acquisition_stage='contacted' WHERE id=?`,
+            [serialized, lead.id]
+          );
+          console.log('[acquisition-browser] submitted_unconfirmed', lead.id, result);
+        } else {
+          await db.run(
+            `UPDATE leads SET browser_status='sent',browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=NULL,browser_channel_data=NULL,browser_attempts=browser_attempts+1,browser_next_at=NULL,acquisition_stage='contacted' WHERE id=?`,
+            [serialized, lead.id]
+          );
+          console.log('[acquisition-browser] sent', lead.id, result);
+        }
       } catch (e: any) {
         const rawError = String(e?.message || e || '');
         let channelPayloadParsed: any = null;
