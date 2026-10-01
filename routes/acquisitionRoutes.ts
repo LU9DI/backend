@@ -139,10 +139,22 @@ export function mountAcquisitionRoutes(app: Express) {
     if(!leadId) return res.status(400).json({error:'lead_id obrigatório.'});
     const exists=await db.get('SELECT id FROM leads WHERE id=?',[leadId]);
     if(!exists) return res.status(404).json({error:'Lead não encontrado.'});
-    const now=eligible?nowIso():null;
-    await db.run(`UPDATE leads SET acquisition_eligible=?, acquisition_opted_in_at=?, acquisition_suppressed=?, acquisition_stage=? WHERE id=?`,
-      [eligible?1:0,now,eligible?0:1,eligible?'ready':'suppressed',leadId]);
-    res.json({success:true,lead_id:leadId,eligible,requires_explicit_opt_in:true});
+    const explicitConsent=req.body?.consent===true;
+    if (eligible) {
+      await db.run(`UPDATE leads
+        SET acquisition_eligible=1,
+            acquisition_stage=CASE WHEN COALESCE(acquisition_suppressed,0)=1 THEN 'suppressed' ELSE 'ready' END
+        WHERE id=?`, [leadId]);
+      if (explicitConsent) {
+        await db.run(`UPDATE leads SET acquisition_opted_in_at=COALESCE(acquisition_opted_in_at,CURRENT_TIMESTAMP) WHERE id=? AND COALESCE(acquisition_suppressed,0)=0`, [leadId]);
+        await db.run(`INSERT INTO acquisition_events (id,lead_id,event_type,source,occurred_at,metadata_json)
+          VALUES (?,?,?,?,CURRENT_TIMESTAMP,?)`,
+          [crypto.randomUUID(),leadId,'consent','n8n',JSON.stringify({source:'n8n',consent:true,consent_at:nowIso()}).slice(0,20000)]);
+      }
+    } else {
+      await db.run(`UPDATE leads SET acquisition_eligible=0, acquisition_suppressed=1, acquisition_stage='suppressed', acquisition_next_at=NULL WHERE id=?`, [leadId]);
+    }
+    res.json({success:true,lead_id:leadId,eligible,explicit_consent_recorded:explicitConsent});
   }));
 
   app.get('/api/n8n/acquisition/status', limiter, asyncHandler(async (req,res) => {
