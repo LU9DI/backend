@@ -21,7 +21,6 @@ function normalizePublicPhones(values: string[]) {
     const value = clean(raw, 160).replace(/\s+/g, ' ').trim();
     const digits = value.replace(/\D/g, '');
     if (digits.length < 8 || digits.length > 15) continue;
-    // Never classify IPs, dates, ZIP/postal codes, IDs or other long numeric fragments as phone numbers.
     if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)) continue;
     if (/\b(?:cep|zip|postal|c[oó]digo|code|id|cnpj|cpf)\b/i.test(value)) continue;
     const key = digits.replace(/^00/, '+');
@@ -210,6 +209,21 @@ async function getCandidates(db: any) {
   );
 }
 
+function classifyChannel(channels: string[], phones: string[]) {
+  if (channels.some(h => /(?:wa[.]me|whatsapp)/i.test(h))) return 'public_whatsapp';
+  if (channels.some(h => /^tel:/i.test(h)) || phones.length) return 'public_phone';
+  if (channels.some(h => /^mailto:/i.test(h))) return 'public_email';
+  return 'public_contact_link';
+}
+
+function channelPayload(channels: string[], phones: string[]) {
+  return {
+    reason: 'manual_channel_available',
+    channel: classifyChannel(channels, phones),
+    channels: [...channels, ...phones].slice(0, 10),
+  };
+}
+
 async function runOne(lead: any) {
   const db = getDb();
   const website = extractWebsite(lead.raw_json);
@@ -241,9 +255,24 @@ async function runOne(lead: any) {
       text: (a.textContent || '').trim(),
       href: (a as HTMLAnchorElement).href
     })).filter(x => x.href));
+
     const sameOrigin = (href: string) => {
       try { return new URL(href).origin === base.origin; } catch { return false; }
     };
+
+    const publicChannels = normalizePublicChannels(links
+      .map(x => x.href)
+      .filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\.me|api\.whatsapp\.com|whatsapp\.com\/send)/i.test(h)));
+    const visiblePhone = normalizePublicPhones((await page.evaluate(() => document.body?.innerText || ''))
+      .match(/(?:\+?\d[\d .()-]{7,}\d)/g) || []);
+
+    // Prefer a real public channel over guessing a contact path. This avoids losing
+    // actionable email/phone/WhatsApp findings simply because a generic /contact
+    // route exists on the site.
+    if (publicChannels.length || visiblePhone.length) {
+      throw new Error(JSON.stringify(channelPayload(publicChannels, visiblePhone)));
+    }
+
     const contactPattern = /(contact|contato|contacto|fale|fale-conosco|habla|kontakt|contatti|comercial|sales|business|partnership|support|atendimento|suporte)/i;
     const contactLinks = links
       .filter(x => contactPattern.test(`${x.text} ${x.href}`))
@@ -256,16 +285,10 @@ async function runOne(lead: any) {
         if (!contactLinks.some(x => x.href === href)) contactLinks.push({ text: path, href });
       } catch {}
     }
-    const publicChannels = normalizePublicChannels(links
-      .map(x => x.href)
-      .filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\.me|api\.whatsapp\.com|whatsapp\.com\/send)/i.test(h)));
-    const visiblePhone = normalizePublicPhones((await page.evaluate(() => document.body?.innerText || ''))
-      .match(/(?:\+?\d[\d .()-]{7,}\d)/g) || []);
-    if (!contactLinks.length && (publicChannels.length || visiblePhone.length)) {
-      throw new Error(JSON.stringify({ reason: 'manual_channel_available', channel: publicChannels.some(h => /whatsapp/i.test(h) || /wa[.]me/i.test(h)) ? 'public_whatsapp' : publicChannels.some(h => /^tel:/i.test(h)) || visiblePhone.length ? 'public_phone' : 'public_email', channels: [...publicChannels, ...visiblePhone].slice(0, 10) }));
-    }
+
     if (!contactLinks.length) throw new Error('formulario_contato_nao_encontrado');
     let lastError = 'formulario_contato_nao_encontrado';
+
     for (const contact of contactLinks) {
       try {
         await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 12_000 });
@@ -283,11 +306,9 @@ async function runOne(lead: any) {
       const pageText = await page.evaluate(() => document.body?.innerText || '');
       const pagePhones = normalizePublicPhones(pageText.match(/(?:\+?\d[\d .()-]{7,}\d)/g) || []);
       if (pageChannels.length || pagePhones.length) {
-        const channel = pageChannels.some((h: string) => /(?:wa[.]me|whatsapp)/i.test(h)) ? 'public_whatsapp'
-          : pageChannels.some((h: string) => /^tel:/i.test(h)) || pagePhones.length ? 'public_phone'
-          : 'public_email';
-        throw new Error(JSON.stringify({ reason: 'manual_channel_available', channel, channels: [...pageChannels, ...pagePhones].slice(0, 10) }));
+        throw new Error(JSON.stringify(channelPayload(pageChannels, pagePhones)));
       }
+
       const formInfo: any = await page.evaluate(() => {
         const forms = Array.from(document.querySelectorAll('form'));
         return forms.map((form: any) => ({
@@ -308,11 +329,17 @@ async function runOne(lead: any) {
         const emails = Array.from(new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+[.][A-Z]{2,}/gi) || [])
           .map(x => x.toLowerCase())
           .filter(x => !/example[.]|noreply@|no-reply@/i.test(x)))).slice(0, 5);
-        if (emails.length) throw new Error(JSON.stringify({ reason: 'manual_channel_available', channel: 'public_email', emails }));
+        if (emails.length) throw new Error(JSON.stringify({
+          reason: 'manual_channel_available',
+          channel: 'public_email',
+          channels: emails.map(email => `mailto:${email}`)
+        }));
         lastError = 'nenhum_formulario'; continue;
       }
+
       const usableForms = formInfo.filter((f: any) => !/captcha|recaptcha|hcaptcha|turnstile/i.test(JSON.stringify(f)));
       if (!usableForms.length) { lastError = 'captcha_requer_intervencao'; continue; }
+
       const form = usableForms.find((f: any) => f.fields.some((x:any)=>/textarea/i.test(x.tag)))
         || usableForms.find((f: any) => f.fields.some((x:any)=>/message|mensagem|mensaje|nachricht|comments?|inquiry|enquiry/i.test([x.name,x.id,x.placeholder,x.aria].join(' '))))
         || usableForms[0];
@@ -342,6 +369,7 @@ async function runOne(lead: any) {
         await page.keyboard.press('Backspace');
         await page.keyboard.type(value);
       };
+
       await fill(name, 'Equipe Filtra.AI');
       await fill(email, clean(process.env.ACQUISITION_BROWSER_FROM_EMAIL || process.env.SMTP_FROM || 'contato@filtraai.com', 320));
       await fill(company, 'Filtra.AI');
@@ -350,14 +378,17 @@ async function runOne(lead: any) {
 
       const requiredCheckboxes = await page.$eval('input[type="checkbox"][required]', els => els.length);
       if (requiredCheckboxes > 0) { lastError = 'checkbox_obrigatorio_requer_intervencao'; continue; }
+
       const formSelector = form.fields.some((f:any) => /textarea/i.test(f.tag)) ? 'form:has(textarea)' : 'form';
       const submit = await page.$(`${formSelector} button[type="submit"],${formSelector} input[type="submit"],${formSelector} button`);
       if (!submit) { lastError = 'botao_envio_nao_encontrado'; continue; }
+
       await Promise.all([
         page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 12_000 }).catch(() => null),
         submit.click(),
       ]);
       await page.waitForTimeout(1200);
+
       const finalUrl = await page.url();
       const confirmation = await page.evaluate(() => document.body.innerText.slice(0,5000));
       const looksSuccessful = /(thank you|thanks|obrigad|gracias|merci|danke|grazie|sent successfully|mensagem enviada|enviado com sucesso|message sent)/i.test(confirmation);
@@ -366,7 +397,9 @@ async function runOne(lead: any) {
       }
       lastError = 'resultado_de_envio_nao_confirmado';
     }
-    throw new Error(lastError);  } finally {
+
+    throw new Error(lastError);
+  } finally {
     await browser.close();
   }
 }
@@ -390,13 +423,13 @@ async function tick() {
         console.log('[acquisition-browser] sent', lead.id, result);
       } catch (e: any) {
         const rawError = String(e?.message || e || '');
-        let channelPayload: any = null;
-        try { channelPayload = JSON.parse(rawError); } catch {}
-        const error = clean(channelPayload ? JSON.stringify(channelPayload) : rawError, 5000);
-        const channelFound = channelPayload?.reason === 'manual_channel_available';
+        let channelPayloadParsed: any = null;
+        try { channelPayloadParsed = JSON.parse(rawError); } catch {}
+        const error = clean(channelPayloadParsed ? JSON.stringify(channelPayloadParsed) : rawError, 5000);
+        const channelFound = channelPayloadParsed?.reason === 'manual_channel_available';
         await db.run(
           `UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=CASE WHEN ? THEN ? ELSE NULL END,browser_channel_data=CASE WHEN ? THEN ? ELSE NULL END,browser_status=CASE WHEN ? THEN 'channel_found' WHEN browser_attempts+1 >= ? THEN 'failed' ELSE 'pending' END,browser_next_at=CASE WHEN ? THEN NULL ELSE CURRENT_TIMESTAMP + INTERVAL '6 hours' END,acquisition_stage=CASE WHEN ? THEN 'manual_channel' ELSE acquisition_stage END WHERE id=?`,
-          [error, channelFound, channelPayload?.channel || 'manual', channelFound, JSON.stringify(channelPayload || {}).slice(0,5000), channelFound, MAX_ATTEMPTS, channelFound, channelFound, lead.id]
+          [error, channelFound, channelPayloadParsed?.channel || 'manual', channelFound, JSON.stringify(channelPayloadParsed || {}).slice(0,5000), channelFound, MAX_ATTEMPTS, channelFound, channelFound, lead.id]
         );
         console.warn('[acquisition-browser]', lead.id, error);
       }
