@@ -119,6 +119,8 @@ async function ensureSchema(db: any) {
     ['browser_next_at', 'TIMESTAMPTZ'],
     ['browser_last_at', 'TIMESTAMPTZ'],
     ['browser_last_result', 'TEXT'],
+    ['browser_channel', 'TEXT'],
+    ['browser_channel_data', 'TEXT'],
   ];
   for (const [name, type] of columns) {
     try { await db.exec(`ALTER TABLE leads ADD COLUMN ${name} ${type}`); } catch {}
@@ -305,7 +307,7 @@ async function tick() {
       try {
         const result = await runOne(lead);
         await db.run(
-          `UPDATE leads SET browser_status='sent',browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_attempts=browser_attempts+1 WHERE id=?`,
+          `UPDATE leads SET browser_status='sent',browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=NULL,browser_channel_data=NULL,browser_attempts=browser_attempts+1 WHERE id=?`,
           [JSON.stringify(result).slice(0,5000), lead.id]
         );
         console.log('[acquisition-browser] sent', lead.id, result);
@@ -316,8 +318,8 @@ async function tick() {
         const error = clean(channelPayload ? JSON.stringify(channelPayload) : rawError, 5000);
         const channelFound = channelPayload?.reason === 'manual_channel_available';
         await db.run(
-          `UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_status=CASE WHEN ? THEN 'channel_found' WHEN browser_attempts+1 >= ? THEN 'failed' ELSE 'pending' END,browser_next_at=CASE WHEN ? THEN NULL ELSE CURRENT_TIMESTAMP + INTERVAL '6 hours' END WHERE id=?`,
-          [error, channelFound, MAX_ATTEMPTS, channelFound, lead.id]
+          `UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=CASE WHEN ? THEN ? ELSE NULL END,browser_channel_data=CASE WHEN ? THEN ? ELSE NULL END,browser_status=CASE WHEN ? THEN 'channel_found' WHEN browser_attempts+1 >= ? THEN 'failed' ELSE 'pending' END,browser_next_at=CASE WHEN ? THEN NULL ELSE CURRENT_TIMESTAMP + INTERVAL '6 hours' END,acquisition_stage=CASE WHEN ? THEN 'manual_channel' ELSE acquisition_stage END WHERE id=?`,
+          [error, channelFound, channelPayload?.channel || 'manual', channelFound, JSON.stringify(channelPayload || {}).slice(0,5000), channelFound, MAX_ATTEMPTS, channelFound, channelFound, lead.id]
         );
         console.warn('[acquisition-browser]', lead.id, error);
       }
