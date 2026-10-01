@@ -169,7 +169,16 @@ async function main() {
     if (!names.includes(name)) throw new Error(`Missing MCP tool: ${name}`);
   }
 
-  console.log(`✓ tools/list: ${names.join(', ')}`);
+  console.log(`✓ tools/list: ${names.join(', ')}`);\n\n  const auditTool = tools.find((tool: any) => tool?.name === 'auditar_reputacao');
+  if (!auditTool?.inputSchema || !auditTool?.outputSchema) {
+    throw new Error('auditar_reputacao is missing inputSchema/outputSchema');
+  }
+  const auditOutput = auditTool.outputSchema;
+  const required = Array.isArray(auditOutput.required) ? auditOutput.required : [];
+  for (const field of ['summary', 'strengths', 'risks', 'recurring_themes', 'actions', 'confidence']) {
+    if (!required.includes(field)) throw new Error(`auditar_reputacao outputSchema missing required field: ${field}`);
+  }
+  console.log('✓ tools/list schema contract: auditar_reputacao');
 
   const calls = [
     [3, 'sobre_filtraai', {}],
@@ -190,6 +199,18 @@ async function main() {
       locale: 'pt-BR',
     }],
   ] as const;
+
+  const invalid = await rpc(7, 'tools/call', {
+    name: 'auditar_reputacao',
+    arguments: {
+      company: 'x',
+      reviews: [],
+    },
+  }, sessionHeaders);
+  if (!invalid.body.result?.isError) {
+    throw new Error(`Invalid input was not rejected: ${JSON.stringify(invalid.body.result)}`);
+  }
+  console.log('✓ input validation: invalid auditar_reputacao rejected');
 
   for (const [id, name, args] of calls) {
     const called = await rpc(id, 'tools/call', { name, arguments: args }, sessionHeaders);
