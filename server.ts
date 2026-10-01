@@ -105,6 +105,10 @@ app.use((req, res, next) => {
 app.use('/api/n8n/acquisition/email-events', express.raw({ type: 'application/json', limit: '100kb' }));
 app.use(cors(buildCorsOptions()));
 
+// MCP must be mounted before the HTTP listener starts so a newly started
+// Render instance can answer /mcp immediately, without waiting for DB/schema boot.
+app.use(mcpApp);
+
 app.get('/api/live', (_req, res) => {
   res.status(200).json({ ok: true, live: true, build: BUILD, time: new Date().toISOString() });
 });
@@ -368,9 +372,6 @@ async function main() {
   mountAcquisitionRoutes(app);
   mountTelegramRoutes(app);
   mountFiscalRoutes(app);
-
-  // ChatGPT / MCP integration. The MCP app owns the canonical /mcp route.
-  app.use(mcpApp);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
