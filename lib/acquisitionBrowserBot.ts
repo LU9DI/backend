@@ -177,7 +177,14 @@ async function runOne(lead: any) {
     const contact = links.find(x => /(contact|contato|contacto|fale|habla|kontakt|contatti|comercial|sales|business|partnership)/i.test(x.text));
     if (!contact) throw new Error('formulario_contato_nao_encontrado');
 
-    await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 25_000 });
+    try {
+      await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 12_000 });
+    } catch (e: any) {
+      // Some sites keep loading analytics/third-party resources indefinitely. If the document is usable, continue.
+      const message = clean(e?.message || e, 500);
+      if (!/Navigation timeout/i.test(message)) throw e;
+    }
+    await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 8_000 }).catch(() => null);
     const formInfo: any = await page.evaluate(() => {
       const forms = Array.from(document.querySelectorAll('form'));
       return forms.map((form: any) => ({
@@ -192,6 +199,7 @@ async function runOne(lead: any) {
           aria: el.getAttribute('aria-label') || '',
           required: !!el.required,
           value: el.value || '',
+          contenteditable: el.getAttribute('contenteditable') || '',
           options: el.tagName.toLowerCase()==='select' ? Array.from(el.options).slice(0,8).map((o:any)=>o.text) : []
         })),
         text: (form.innerText || '').slice(0,5000)
@@ -209,17 +217,23 @@ async function runOne(lead: any) {
     const email = pick(/email|e-mail|correo|courriel/i);
     const company = pick(/company|empresa|sociedad|entreprise|firma/i);
     const subject = pick(/subject|assunto|asunto|objet|betreff/i);
-    const msg = pick(/message|mensagem|mensaje|message|nachricht|comments?|coment[aá]rio/i);
+    let msg = pick(/message|mensagem|mensaje|nachricht|comments?|coment[aá]rio|inquiry|enquiry|request|consulta|solicita/i);
+    if (!msg) {
+      const editable = await page.locator('[contenteditable="true"]').first();
+      if (await editable.count()) msg = { id: '', name: '', placeholder: '', aria: '', contenteditable: 'true' };
+    }
     if (!msg) throw new Error('campo_mensagem_nao_encontrado');
 
     const fill = async (field: any, value: string) => {
       if (!field || !value) return;
       const escapeAttr = (value: string) => value.replace(/\\/g, '\\\\').replace(/"/g, '\\\"');
-      const selector = field.id
-        ? `[id="${escapeAttr(field.id)}"]`
-        : field.name
-          ? `[name="${escapeAttr(field.name)}"]`
-          : '';
+      const selector = field.contenteditable === 'true'
+        ? '[contenteditable="true"]'
+        : field.id
+          ? `[id="${escapeAttr(field.id)}"]`
+          : field.name
+            ? `[name="${escapeAttr(field.name)}"]`
+            : '';
       if (!selector) return;
       await page.locator(selector).first().fill(value);
     };
@@ -233,7 +247,10 @@ async function runOne(lead: any) {
     const requiredCheckboxes = await page.locator('input[type="checkbox"][required]').count();
     if (requiredCheckboxes > 0) throw new Error('checkbox_obrigatorio_requer_intervencao');
 
-    const submit = page.locator('form').filter({ has: page.locator('textarea') }).locator('button[type="submit"],input[type="submit"],button').first();
+    const formSelector = form.fields.some((f:any) => /textarea/i.test(f.tag))
+      ? 'form:has(textarea)'
+      : 'form';
+    const submit = page.locator(formSelector).locator('button[type="submit"],input[type="submit"],button').first();
     if (!(await submit.count())) throw new Error('botao_envio_nao_encontrado');
     await Promise.all([
       page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 12_000 }).catch(() => null),
