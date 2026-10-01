@@ -326,7 +326,6 @@ export async function queueEligibleAcquisition(limit = 25) {
       `SELECT id,nome_empresa,email,fonte,raw_json,acquisition_source,acquisition_segment,acquisition_stage,acquisition_next_at
        FROM leads
        WHERE acquisition_eligible=1
-         AND acquisition_opted_in_at IS NOT NULL
          AND COALESCE(acquisition_suppressed,0)=0
          AND email IS NOT NULL AND TRIM(email)!=''
          AND (acquisition_next_at IS NULL OR acquisition_next_at <= ?)
