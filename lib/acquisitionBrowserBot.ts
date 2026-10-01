@@ -192,16 +192,29 @@ async function runOne(lead: any) {
       text: (a.textContent || '').trim(),
       href: (a as HTMLAnchorElement).href
     })).filter(x => x.href));
+    const sameOrigin = (href: string) => {
+      try { return new URL(href).origin === base.origin; } catch { return false; }
+    };
+    const contactPattern = /(contact|contato|contacto|fale|fale-conosco|habla|kontakt|contatti|comercial|sales|business|partnership|support|atendimento|suporte)/i;
     const contactLinks = links
-      .filter(x => /(contact|contato|contacto|fale|habla|kontakt|contatti|comercial|sales|business|partnership|support|atendimento)/i.test(`${x.text} ${x.href}`))
-      .filter(x => !/javascript:|#/.test(x.href))
+      .filter(x => contactPattern.test(`${x.text} ${x.href}`))
+      .filter(x => sameOrigin(x.href) && !/javascript:|#/.test(x.href))
       .slice(0, 8);
+    const guessedPaths = ['/contato','/contact','/contact-us','/fale-conosco','/atendimento','/suporte','/support','/comercial','/sales'];
+    for (const path of guessedPaths) {
+      try {
+        const href = new URL(path, base).toString();
+        if (!contactLinks.some(x => x.href === href)) contactLinks.push({ text: path, href });
+      } catch {}
+    }
     const publicChannels = links
       .map(x => x.href)
-      .filter(h => /^(mailto:|tel:)/i.test(h))
+      .filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\.me|api\.whatsapp\.com|whatsapp\.com\/send)/i.test(h))
       .slice(0, 10);
-    if (!contactLinks.length && publicChannels.length) {
-      throw new Error(JSON.stringify({ reason: 'manual_channel_available', channel: 'public_contact_link', channels: publicChannels }));
+    const visiblePhone = (await page.evaluate(() => document.body?.innerText || ''))
+      .match(/(?:\\+?\\d[\\d .()\\-]{7,}\\d)/g)?.slice(0, 5) || [];
+    if (!contactLinks.length && (publicChannels.length || visiblePhone.length)) {
+      throw new Error(JSON.stringify({ reason: 'manual_channel_available', channel: publicChannels.some(h => /whatsapp/i.test(h) || /wa\\.me/i.test(h)) ? 'public_whatsapp' : publicChannels.some(h => /^tel:/i.test(h)) || visiblePhone.length ? 'public_phone' : 'public_email', channels: [...publicChannels, ...visiblePhone].slice(0, 10) }));
     }
     if (!contactLinks.length) throw new Error('formulario_contato_nao_encontrado');
     let lastError = 'formulario_contato_nao_encontrado';
@@ -217,9 +230,15 @@ async function runOne(lead: any) {
       }
       await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 8_000 }).catch(() => null);
 
-      const pageChannels = await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '').filter((h: string) => /^(mailto:|tel:)/i.test(h)).slice(0, 10));
-      if (pageChannels.length) {
-        throw new Error(JSON.stringify({ reason: 'manual_channel_available', channel: 'public_contact_link', channels: pageChannels }));
+      const pageChannels = await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
+        .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa\\.me|api\\.whatsapp\\.com|whatsapp\\.com\\/send)/i.test(h)).slice(0, 10));
+      const pageText = await page.evaluate(() => document.body?.innerText || '');
+      const pagePhones = pageText.match(/(?:\\+?\\d[\\d .()\\-]{7,}\\d)/g)?.slice(0, 5) || [];
+      if (pageChannels.length || pagePhones.length) {
+        const channel = pageChannels.some((h: string) => /(?:wa\\.me|whatsapp)/i.test(h)) ? 'public_whatsapp'
+          : pageChannels.some((h: string) => /^tel:/i.test(h)) || pagePhones.length ? 'public_phone'
+          : 'public_email';
+        throw new Error(JSON.stringify({ reason: 'manual_channel_available', channel, channels: [...pageChannels, ...pagePhones].slice(0, 10) }));
       }
       const formInfo: any = await page.evaluate(() => {
         const forms = Array.from(document.querySelectorAll('form'));
