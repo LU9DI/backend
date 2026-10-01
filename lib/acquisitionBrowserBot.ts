@@ -461,11 +461,19 @@ async function tick() {
     const db = getDb();
     await ensureSchema(db);
     const used = await sentToday(db);
-    if (used >= DAILY_CAP) return;
+    if (used >= DAILY_CAP) {
+      console.log('[acquisition-browser] tick', { used, candidates: 0, cap: DAILY_CAP, reason: 'daily_cap' });
+      return;
+    }
     const candidates = await getCandidates(db);
+    console.log('[acquisition-browser] tick', { used, candidates: candidates.length, cap: DAILY_CAP, reason: candidates.length ? 'processing' : 'no_candidates' });
     for (const lead of candidates.slice(0, DAILY_CAP - used)) {
+      console.log('[acquisition-browser] start', lead.id, lead.nome_empresa || '');
       try {
-        const result = await runOne(lead);
+        const result = await Promise.race([
+          runOne(lead),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('browser_timeout_60s')), 60_000))
+        ]);
         const serialized = JSON.stringify(result).slice(0, 5000);
         if (result?.status === 'submitted_unconfirmed') {
           await db.run(
