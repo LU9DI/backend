@@ -257,7 +257,7 @@ async function runOne(lead: any) {
 
       if (!formInfo.length) {
         const text = await page.evaluate(() => (document.body?.innerText || '').slice(0,12000));
-        const emails = Array.from(new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi) || [])
+        const emails = Array.from(new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+[.][A-Z]{2,}/gi) || [])
           .map(x => x.toLowerCase())
           .filter(x => !/example[.]|noreply@|no-reply@/i.test(x)))).slice(0, 5);
         if (emails.length) throw new Error(JSON.stringify({ reason: 'manual_channel_available', channel: 'public_email', emails }));
