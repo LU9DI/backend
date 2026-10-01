@@ -28,7 +28,7 @@ function buildServer() {
   const server = new McpServer(
     {
       name: 'filtra-ai',
-      version: '1.1.0',
+      version: '1.2.0',
       websiteUrl: 'https://filtraai.com',
     },
     {
@@ -67,6 +67,7 @@ function buildServer() {
         actions: z.any(),
         confidence: z.any(),
       }),
+      securitySchemes: [{ type: 'noauth' }],
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -125,6 +126,7 @@ function buildServer() {
         locale: z.string().max(10).optional(),
       }),
       outputSchema: z.object({ response: z.string() }),
+      securitySchemes: [{ type: 'noauth' }],
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -164,6 +166,7 @@ function buildServer() {
         trial_days: z.number(),
         card_required: z.boolean(),
       }),
+      securitySchemes: [{ type: 'noauth' }],
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -193,6 +196,7 @@ function buildServer() {
         website: z.string(),
         trial_url: z.string(),
       }),
+      securitySchemes: [{ type: 'noauth' }],
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     async () => {
