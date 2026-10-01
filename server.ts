@@ -69,6 +69,7 @@ import { n8nConfigured } from './lib/n8n.js';
 import { ensureAcquisitionEngineSchema, startAcquisitionWorker } from './lib/acquisitionEngine.js';
 import { startAcquisitionReplenisher } from './lib/acquisitionReplenisher.js';
 import { startAcquisitionBrowserBot } from './lib/acquisitionBrowserBot.js';
+import { startProductHuntAcquisition } from './lib/acquisitionProductHunt.js';
 import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
 import { ensureReportPdfSchema } from './lib/reportPdfStore.js';
 import {
@@ -318,6 +319,7 @@ async function main() {
     startAcquisitionWorker();
     startAcquisitionReplenisher();
     await startAcquisitionBrowserBot();
+    await startProductHuntAcquisition();
   } catch (e) {
     console.warn('acquisition engine:', e);
   }
