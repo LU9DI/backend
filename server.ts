@@ -191,6 +191,12 @@ let shuttingDown = false;
 
 
 
+server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 API Filtra.IA em http://0.0.0.0:${PORT}`);
+});
+server.keepAliveTimeout = 65_000;
+server.headersTimeout = 66_000;
+
 async function runSentimentBackfillOnBoot() {
   if (process.env.BACKFILL_SENTIMENT !== '1') return;
   try {
@@ -386,12 +392,6 @@ async function main() {
   if (!wechatConfigured()) {
     console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
   }
-
-  server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 API Filtra.IA em http://0.0.0.0:${PORT}`);
-  });
-  server.keepAliveTimeout = 65_000;
-  server.headersTimeout = 66_000;
 
   process.once('SIGTERM', () => void gracefulShutdown('SIGTERM'));
   process.once('SIGINT', () => void gracefulShutdown('SIGINT'));
