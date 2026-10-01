@@ -246,4 +246,4 @@ export const mcpApp = createMcpExpressApp({
 // The MCP endpoint is mounted inside the guarded MCP Express app.
 // createMcpExpressApp provides JSON parsing and Host-header protection.
 mcpApp.use('/mcp', mcpRateLimit);
-mcpApp.all('/mcp', mcpNodeHandler);
+mcpApp.all('/', (req, res) => void mcpNodeHandler(req, res, req.body));
