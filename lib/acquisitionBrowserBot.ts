@@ -507,7 +507,7 @@ export async function startAcquisitionBrowserBot() {
   started = true;
   const db = getDb();
   await ensureSchema(db);
-  await tick();
-  setInterval(() => void tick(), INTERVAL_MS);
+  setInterval(() => void tick().catch((e) => console.error('[acquisition-browser] tick failed:', e?.message || e)), INTERVAL_MS);
   console.log(`[acquisition-browser] ON cap=${DAILY_CAP} interval=${INTERVAL_MS}ms`);
+  void tick().catch((e) => console.error('[acquisition-browser] initial tick failed:', e?.message || e));
 }
