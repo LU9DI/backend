@@ -375,8 +375,8 @@ async function main() {
     console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
   }
 
-  server = app.listen(PORT, () => {
-    console.log(`🚀 API Filtra.IA em http://localhost:${PORT}`);
+  server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 API Filtra.IA em http://0.0.0.0:${PORT}`);
   });
   server.keepAliveTimeout = 65_000;
   server.headersTimeout = 66_000;
