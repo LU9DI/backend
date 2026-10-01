@@ -66,7 +66,7 @@ export async function autenticarToken(req: AuthRequest, res: Response, next: Nex
   const token = extrairToken(req);
   if (!token) {
     return res.status(401).json({
-      error: 'Faça login com CNPJ e senha para acessar o painel.',
+      error: 'Faça login com e-mail e senha para acessar o painel.',
       code: 'AUTH_REQUIRED',
     });
   }
