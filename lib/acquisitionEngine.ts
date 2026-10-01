@@ -306,9 +306,11 @@ export async function queueEligibleAcquisition(limit = 25) {
     const db = getDb();
     await ensureAcquisitionEngineSchema(db);
 
-    // Optional contact-management fallback. It requires a separate
-    // RESEND_CONTACTS_API_KEY; the production sending key is never reused here.
-    const resendFallback = await syncResendContacts(db);
+    // Contact synchronization is owned by the replenisher. Do not enumerate
+    // Resend contacts on every engine tick: on a Free Render web service this
+    // creates unnecessary outbound traffic and makes the web process carry
+    // background work that is not required for each send decision.
+    const resendFallback = { enabled: false, fetched: 0, created: 0, existing: 0, suppressed: 0, pages: 0, reason: 'managed_by_replenisher' };
 
     const reputation = await acquisitionReputationGuard(db);
     if (reputation.paused) return { queued: 0, skipped: 0, reason: 'reputation_pause', reputation };
