@@ -212,9 +212,9 @@ async function runOne(lead: any) {
       .filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\.me|api\.whatsapp\.com|whatsapp\.com\/send)/i.test(h))
       .slice(0, 10);
     const visiblePhone = (await page.evaluate(() => document.body?.innerText || ''))
-      .match(/(?:\\+?\\d[\\d .()\\-]{7,}\\d)/g)?.slice(0, 5) || [];
+      .match(/(?:\+?\d[\d .()-]{7,}\d)/g)?.slice(0, 5) || [];
     if (!contactLinks.length && (publicChannels.length || visiblePhone.length)) {
-      throw new Error(JSON.stringify({ reason: 'manual_channel_available', channel: publicChannels.some(h => /whatsapp/i.test(h) || /wa\\.me/i.test(h)) ? 'public_whatsapp' : publicChannels.some(h => /^tel:/i.test(h)) || visiblePhone.length ? 'public_phone' : 'public_email', channels: [...publicChannels, ...visiblePhone].slice(0, 10) }));
+      throw new Error(JSON.stringify({ reason: 'manual_channel_available', channel: publicChannels.some(h => /whatsapp/i.test(h) || /wa[.]me/i.test(h)) ? 'public_whatsapp' : publicChannels.some(h => /^tel:/i.test(h)) || visiblePhone.length ? 'public_phone' : 'public_email', channels: [...publicChannels, ...visiblePhone].slice(0, 10) }));
     }
     if (!contactLinks.length) throw new Error('formulario_contato_nao_encontrado');
     let lastError = 'formulario_contato_nao_encontrado';
@@ -231,11 +231,11 @@ async function runOne(lead: any) {
       await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 8_000 }).catch(() => null);
 
       const pageChannels = await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
-        .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa\\.me|api\\.whatsapp\\.com|whatsapp\\.com\\/send)/i.test(h)).slice(0, 10));
+        .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa[.]me|api[.]whatsapp[.]com|whatsapp[.]com\/send)/i.test(h)).slice(0, 10));
       const pageText = await page.evaluate(() => document.body?.innerText || '');
-      const pagePhones = pageText.match(/(?:\\+?\\d[\\d .()\\-]{7,}\\d)/g)?.slice(0, 5) || [];
+      const pagePhones = pageText.match(/(?:\+?\d[\d .()-]{7,}\d)/g)?.slice(0, 5) || [];
       if (pageChannels.length || pagePhones.length) {
-        const channel = pageChannels.some((h: string) => /(?:wa\\.me|whatsapp)/i.test(h)) ? 'public_whatsapp'
+        const channel = pageChannels.some((h: string) => /(?:wa[.]me|whatsapp)/i.test(h)) ? 'public_whatsapp'
           : pageChannels.some((h: string) => /^tel:/i.test(h)) || pagePhones.length ? 'public_phone'
           : 'public_email';
         throw new Error(JSON.stringify({ reason: 'manual_channel_available', channel, channels: [...pageChannels, ...pagePhones].slice(0, 10) }));
@@ -259,7 +259,7 @@ async function runOne(lead: any) {
         const text = await page.evaluate(() => (document.body?.innerText || '').slice(0,12000));
         const emails = Array.from(new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi) || [])
           .map(x => x.toLowerCase())
-          .filter(x => !/example\\.|noreply@|no-reply@/i.test(x)))).slice(0, 5);
+          .filter(x => !/example[.]|noreply@|no-reply@/i.test(x)))).slice(0, 5);
         if (emails.length) throw new Error(JSON.stringify({ reason: 'manual_channel_available', channel: 'public_email', emails }));
         lastError = 'nenhum_formulario'; continue;
       }
@@ -271,7 +271,7 @@ async function runOne(lead: any) {
 
       const fields = form.fields;
       const pick = (rx: RegExp) => fields.find((f:any) => rx.test([f.name,f.id,f.placeholder,f.aria].join(' ')));
-      const name = pick(/(^|\\b)(name|nome|nombre|nom|full.?name|contact.?name)(\\b|$)/i);
+      const name = pick(/(^|\b)(name|nome|nombre|nom|full.?name|contact.?name)(\b|$)/i);
       const email = pick(/email|e-mail|correo|courriel/i);
       const company = pick(/company|empresa|sociedad|entreprise|firma/i);
       const subject = pick(/subject|assunto|asunto|objet|betreff/i);
