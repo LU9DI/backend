@@ -181,9 +181,16 @@ async function runOne(lead: any) {
       href: (a as HTMLAnchorElement).href
     })).filter(x => x.href));
     const contactLinks = links
-      .filter(x => /(contact|contato|contacto|fale|habla|kontakt|contatti|comercial|sales|business|partnership)/i.test(x.text))
+      .filter(x => /(contact|contato|contacto|fale|habla|kontakt|contatti|comercial|sales|business|partnership|support|atendimento)/i.test(`${x.text} ${x.href}`))
       .filter(x => !/javascript:|#/.test(x.href))
-      .slice(0, 5);
+      .slice(0, 8);
+    const publicChannels = links
+      .map(x => x.href)
+      .filter(h => /^(mailto:|tel:)/i.test(h))
+      .slice(0, 10);
+    if (!contactLinks.length && publicChannels.length) {
+      return { ok: false, channel: 'public_contact_link', channels: publicChannels, reason: 'manual_channel_available' };
+    }
     if (!contactLinks.length) throw new Error('formulario_contato_nao_encontrado');
     let lastError = 'formulario_contato_nao_encontrado';
     for (const contact of contactLinks) {
@@ -198,6 +205,10 @@ async function runOne(lead: any) {
       }
       await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 8_000 }).catch(() => null);
 
+      const pageChannels = await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '').filter((h: string) => /^(mailto:|tel:)/i.test(h)).slice(0, 10));
+      if (pageChannels.length && !page.url().includes('http')) {
+        return { ok: false, channel: 'public_contact_link', channels: pageChannels, reason: 'manual_channel_available' };
+      }
       const formInfo: any = await page.evaluate(() => {
         const forms = Array.from(document.querySelectorAll('form'));
         return forms.map((form: any) => ({
@@ -293,9 +304,10 @@ async function tick() {
         console.log('[acquisition-browser] sent', lead.id, result);
       } catch (e: any) {
         const error = clean(e?.message || e, 500);
+        const channelFound = /manual_channel_available/.test(error);
         await db.run(
-          `UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_status=CASE WHEN browser_attempts+1 >= ? THEN 'failed' ELSE 'pending' END,browser_next_at=CURRENT_TIMESTAMP + INTERVAL '6 hours' WHERE id=?`,
-          [error, MAX_ATTEMPTS, lead.id]
+          `UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_status=CASE WHEN ? THEN 'channel_found' WHEN browser_attempts+1 >= ? THEN 'failed' ELSE 'pending' END,browser_next_at=CASE WHEN ? THEN NULL ELSE CURRENT_TIMESTAMP + INTERVAL '6 hours' END WHERE id=?`,
+          [error, channelFound, MAX_ATTEMPTS, channelFound, lead.id]
         );
         console.warn('[acquisition-browser]', lead.id, error);
       }
