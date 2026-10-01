@@ -68,6 +68,7 @@ import { smtpConfigured } from './lib/mailer.js';
 import { n8nConfigured } from './lib/n8n.js';
 import { ensureAcquisitionEngineSchema, startAcquisitionWorker } from './lib/acquisitionEngine.js';
 import { startAcquisitionReplenisher } from './lib/acquisitionReplenisher.js';
+import { startAcquisitionBrowserBot } from './lib/acquisitionBrowserBot.js';
 import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
 import { ensureReportPdfSchema } from './lib/reportPdfStore.js';
 import {
@@ -83,7 +84,7 @@ assertEnvOrExit();
 const JWT_SECRET = requireJwtSecret();
 
 const BUILD = {
-  version: '1.2.0',
+  version: '1.3.0',
   marker: 'puppeteer-pdf-v1',
   started_at: new Date().toISOString(),
 };
@@ -316,6 +317,7 @@ async function main() {
     await ensureAcquisitionEngineSchema(getDb());
     startAcquisitionWorker();
     startAcquisitionReplenisher();
+    await startAcquisitionBrowserBot();
   } catch (e) {
     console.warn('acquisition engine:', e);
   }
