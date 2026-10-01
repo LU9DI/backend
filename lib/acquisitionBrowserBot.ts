@@ -165,7 +165,13 @@ async function runOne(lead: any) {
     const page = await browser.newPage();
     await page.setUserAgent('FiltraAI-Acquisition/1.0 (+https://filtraai.com)');
     await page.setViewport({ width: 1365, height: 900 });
-    await page.goto(base.toString(), { waitUntil: 'domcontentloaded', timeout: 25_000 });
+    try {
+      await page.goto(base.toString(), { waitUntil: 'domcontentloaded', timeout: 12_000 });
+    } catch (e: any) {
+      const message = clean(e?.message || e, 500);
+      if (!/Navigation timeout/i.test(message)) throw e;
+    }
+    await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 8_000 }).catch(() => null);
     const html = await page.content();
     const lang = detectLanguage(html, base);
     const target = message(lang, clean(lead.nome_empresa, 180));
@@ -219,7 +225,7 @@ async function runOne(lead: any) {
     const subject = pick(/subject|assunto|asunto|objet|betreff/i);
     let msg = pick(/message|mensagem|mensaje|nachricht|comments?|coment[aá]rio|inquiry|enquiry|request|consulta|solicita/i);
     if (!msg) {
-      const editable = await page.locator('[contenteditable="true"]').first();
+      const editable = await page.locator('[contenteditable="true"]');
       if (await editable.count()) msg = { id: '', name: '', placeholder: '', aria: '', contenteditable: 'true' };
     }
     if (!msg) throw new Error('campo_mensagem_nao_encontrado');
@@ -235,7 +241,7 @@ async function runOne(lead: any) {
             ? `[name="${escapeAttr(field.name)}"]`
             : '';
       if (!selector) return;
-      await page.locator(selector).first().fill(value);
+      await page.locator(selector).fill(value);
     };
     await fill(name, 'Equipe Filtra.AI');
     await fill(email, clean(process.env.ACQUISITION_BROWSER_FROM_EMAIL || process.env.SMTP_FROM || 'contato@filtraai.com', 320));
@@ -250,7 +256,7 @@ async function runOne(lead: any) {
     const formSelector = form.fields.some((f:any) => /textarea/i.test(f.tag))
       ? 'form:has(textarea)'
       : 'form';
-    const submit = page.locator(formSelector).locator('button[type="submit"],input[type="submit"],button').first();
+    const submit = page.locator(formSelector).locator('button[type="submit"],input[type="submit"],button');
     if (!(await submit.count())) throw new Error('botao_envio_nao_encontrado');
     await Promise.all([
       page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 12_000 }).catch(() => null),
