@@ -193,21 +193,23 @@ async function sentToday(db: any) {
   return Number(row?.c || 0);
 }
 
-async function getCandidates(db: any) {
+async function getCandidates(db: any, batchSize = 2) {
   await db.run(`UPDATE leads SET browser_status='pending' WHERE browser_status='processing' AND browser_last_at < CURRENT_TIMESTAMP - INTERVAL '10 minutes'`);
   return db.all(`WITH candidates AS (
        SELECT id FROM leads
         WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0
-          AND browser_status IN ('pending','channel_found','contact_attempted')
+          AND browser_status IN ('pending','contact_attempted')
           AND COALESCE(browser_attempts,0) < ?
           AND (browser_next_at IS NULL OR browser_next_at <= CURRENT_TIMESTAMP)
           AND (NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'website','')), '') IS NOT NULL
             OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'websiteUri','')), '') IS NOT NULL
             OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'website','')), '') IS NOT NULL
             OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'websiteUri','')), '') IS NOT NULL)
-        ORDER BY CASE browser_status WHEN 'channel_found' THEN 0 WHEN 'pending' THEN 1 WHEN 'contact_attempted' THEN 2 ELSE 3 END,
-          CASE WHEN browser_last_result ILIKE '%site_http_5%' THEN 3 WHEN browser_last_result ILIKE '%preflight_timeout%' THEN 4 WHEN browser_last_result ILIKE '%unreachable%' THEN 5 WHEN browser_last_result ILIKE '%ERR_NAME_NOT_RESOLVED%' THEN 6 ELSE 0 END, criado_em ASC
-        LIMIT 10)
+        ORDER BY CASE browser_status WHEN 'pending' THEN 0 WHEN 'contact_attempted' THEN 1 ELSE 2 END,
+          CASE WHEN browser_attempts = 0 THEN 0 ELSE 1 END,
+          CASE WHEN browser_last_result ILIKE '%site_http_5%' THEN 3 WHEN browser_last_result ILIKE '%preflight_timeout%' THEN 4 WHEN browser_last_result ILIKE '%unreachable%' THEN 5 ELSE 0 END,
+          criado_em ASC
+        LIMIT ?)
       UPDATE leads l SET browser_status='processing', browser_last_at=CURRENT_TIMESTAMP
         FROM candidates c WHERE l.id=c.id
       RETURNING l.id,l.nome_empresa,l.email,l.raw_json,l.acquisition_source,l.browser_attempts`, [MAX_ATTEMPTS]);
@@ -546,7 +548,8 @@ async function tick() {
       console.log('[acquisition-browser] tick', { used, candidates: 0, cap: DAILY_CAP, concurrency: CONCURRENCY, reason: 'daily_cap', metrics: await queueMetrics(db) });
       return;
     }
-    const candidates = await getCandidates(db);
+    const batchSize = Math.max(1, Math.min(CONCURRENCY * 2, 3));
+    const candidates = await getCandidates(db, batchSize);
     const queue = candidates.slice(0, DAILY_CAP - used);
     console.log('[acquisition-browser] tick', { used, candidates: candidates.length, selected: queue.length, cap: DAILY_CAP, concurrency: CONCURRENCY, reason: queue.length ? 'processing' : 'no_candidates', metrics: await queueMetrics(db) });
     for (let i = 0; i < queue.length; i += CONCURRENCY) {
