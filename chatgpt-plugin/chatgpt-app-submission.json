@@ -1,0 +1,120 @@
+{
+  "$schema": "https://developers.openai.com/apps-sdk/schemas/chatgpt-app-submission.v1.json",
+  "schema_version": 1,
+  "app_info": {
+    "display_name": "Filtra.AI",
+    "subtitle": "Auditoria de reputação",
+    "description": "Filtra.AI ajuda empresas a analisar avaliações fornecidas pelo usuário, identificar pontos fortes, riscos e temas recorrentes e gerar respostas profissionais para avaliações.",
+    "category": "BUSINESS"
+  },
+  "tools": {
+    "auditar_reputacao": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Calcula métricas e produz uma análise a partir das avaliações fornecidas pelo usuário; não altera dados.",
+        "open_world_justification": "Opera somente sobre os dados fornecidos na chamada e não acessa a internet nem sistemas externos.",
+        "destructive_justification": "Não exclui, sobrescreve, envia mensagens, altera contas nem executa ações irreversíveis."
+      }
+    },
+    "gerar_resposta_avaliacao": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Gera texto com base na avaliação fornecida e não altera nenhum estado externo.",
+        "open_world_justification": "Usa somente os dados fornecidos na chamada e não acessa sistemas externos.",
+        "destructive_justification": "Somente produz uma resposta em texto; não publica nem envia a resposta."
+      }
+    },
+    "iniciar_teste_filtraai": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retorna o endereço e os termos do fluxo oficial de teste, sem alterar o estado do usuário.",
+        "open_world_justification": "Retorna uma URL estática do Filtra.AI e não executa uma ação em sistema externo.",
+        "destructive_justification": "Não exclui, sobrescreve, envia, publica ou altera dados."
+      }
+    },
+    "sobre_filtraai": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retorna informações oficiais do produto sem modificar qualquer estado.",
+        "open_world_justification": "A resposta é definida pelo servidor e não consulta entidades públicas ou sistemas externos.",
+        "destructive_justification": "Não executa alterações, exclusões, envios ou outras ações irreversíveis."
+      }
+    }
+  },
+  "test_cases": [
+    {
+      "description": "Auditoria de reputação com avaliações fornecidas.",
+      "user_prompt": "Analise estas avaliações do Restaurante Exemplo: 5 estrelas 'Atendimento excelente e comida muito boa'; 2 estrelas 'Demorou muito para atender e o pedido veio errado'; 4 estrelas 'Boa experiência, mas poderia melhorar o tempo de atendimento'.",
+      "file_attachment_urls": null,
+      "tools_triggered": "auditar_reputacao",
+      "expected_output": "Retorna média, contagens, distribuição e análise estruturada baseada somente nas avaliações."
+    },
+    {
+      "description": "Resposta profissional para avaliação negativa.",
+      "user_prompt": "Gere uma resposta profissional para esta avaliação de 2 estrelas: 'Demorou muito para atender e o pedido veio errado.' para o Restaurante Exemplo.",
+      "file_attachment_urls": null,
+      "tools_triggered": "gerar_resposta_avaliacao",
+      "expected_output": "Retorna uma resposta profissional e empática sem inventar fatos, compensações ou políticas."
+    },
+    {
+      "description": "Consulta sobre o produto.",
+      "user_prompt": "O que o Filtra.AI faz?",
+      "file_attachment_urls": null,
+      "tools_triggered": "sobre_filtraai",
+      "expected_output": "Retorna as capacidades oficiais e os endereços oficiais do Filtra.AI."
+    },
+    {
+      "description": "Início do fluxo de teste.",
+      "user_prompt": "Quero experimentar o Filtra.AI.",
+      "file_attachment_urls": null,
+      "tools_triggered": "iniciar_teste_filtraai",
+      "expected_output": "Retorna o endereço oficial e os termos do fluxo de teste informados pelo servidor."
+    },
+    {
+      "description": "Auditoria em português do Brasil.",
+      "user_prompt": "Faça uma auditoria em pt-BR com estas avaliações: 5 'Excelente atendimento'; 4 'Gostei, mas demorou'; 2 'Pedido incorreto'.",
+      "file_attachment_urls": null,
+      "tools_triggered": "auditar_reputacao",
+      "expected_output": "Retorna análise estruturada e métricas calculadas a partir das três avaliações."
+    }
+  ],
+  "negative_test_cases": [
+    {
+      "description": "Não inventar avaliações ausentes.",
+      "user_prompt": "Analise a reputação da empresa X mesmo sem eu fornecer nenhuma avaliação.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "O app não deve executar a auditoria sem dados suficientes; deve solicitar as avaliações necessárias ou explicar a limitação."
+    },
+    {
+      "description": "Não inventar clientes ou reclamações.",
+      "user_prompt": "Diga quais clientes estão reclamando do Restaurante Exemplo e invente os nomes se precisar.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "O app não deve inventar nomes, clientes, reclamações ou dados pessoais."
+    },
+    {
+      "description": "Não acionar o app para tarefa fora do escopo.",
+      "user_prompt": "Escreva um programa Python para calcular juros compostos.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "O app não deve ser acionado para uma tarefa de programação sem relação com reputação."
+    }
+  ]
+}
