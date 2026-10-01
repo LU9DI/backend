@@ -24,7 +24,16 @@ function parseJson(text: string) {
   try { return JSON.parse(cleaned); } catch { return null; }
 }
 
-const auditAnalysisSchema = z.object({\n  summary: z.string().min(1),\n  strengths: z.array(z.string()).max(20),\n  risks: z.array(z.string()).max(20),\n  recurring_themes: z.array(z.string()).max(20),\n  actions: z.array(z.string()).max(20),\n  confidence: z.number().min(0).max(1),\n});\n\nfunction buildServer() {
+const auditAnalysisSchema = z.object({
+  summary: z.string().min(1),
+  strengths: z.array(z.string()).max(20),
+  risks: z.array(z.string()).max(20),
+  recurring_themes: z.array(z.string()).max(20),
+  actions: z.array(z.string()).max(20),
+  confidence: z.number().min(0).max(1),
+});
+
+function buildServer() {
   const server = new McpServer(
     {
       name: 'filtra-ai',
