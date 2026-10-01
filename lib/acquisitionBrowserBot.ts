@@ -243,12 +243,12 @@ async function runOne(lead: any) {
     await page.setUserAgent('FiltraAI-Acquisition/1.0 (+https://filtraai.com)');
     await page.setViewport({ width: 1365, height: 900 });
     try {
-      await page.goto(base.toString(), { waitUntil: 'domcontentloaded', timeout: 12_000 });
+      await page.goto(base.toString(), { waitUntil: 'domcontentloaded', timeout: 8_000 });
     } catch (e: any) {
       const message = clean(e?.message || e, 500);
       if (!/Navigation timeout/i.test(message)) throw e;
     }
-    await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 8_000 }).catch(() => null);
+    await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 4_000 }).catch(() => null);
     const html = await page.content();
     const lang = detectLanguage(html, base);
     const target = message(lang, clean(lead.nome_empresa, 180));
@@ -280,7 +280,7 @@ async function runOne(lead: any) {
     const contactLinks = links
       .filter(x => contactPattern.test(`${x.text} ${x.href}`))
       .filter(x => sameOrigin(x.href) && !/javascript:|#/.test(x.href))
-      .slice(0, 8);
+      .slice(0, 3);
     const guessedPaths = ['/contato','/contact','/contact-us','/fale-conosco','/atendimento','/suporte','/support','/comercial','/sales'];
     for (const path of guessedPaths) {
       try {
@@ -297,7 +297,7 @@ async function runOne(lead: any) {
 
     for (const contact of contactLinks) {
       try {
-        await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 12_000 });
+        await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 8_000 });
       } catch (e: any) {
         const navMessage = clean(e?.message || e, 500);
         if (!/Navigation timeout/i.test(navMessage)) {
@@ -305,7 +305,7 @@ async function runOne(lead: any) {
           continue;
         }
       }
-      await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 8_000 }).catch(() => null);
+      await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 4_000 }).catch(() => null);
 
       const pageChannels = normalizePublicChannels(await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
         .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa[.]me|api[.]whatsapp[.]com|whatsapp[.]com\/send)/i.test(h)).slice(0, 10)));
@@ -407,7 +407,7 @@ async function runOne(lead: any) {
       if (!submit) { lastError = 'botao_envio_nao_encontrado'; continue; }
 
       await Promise.all([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 12_000 }).catch(() => null),
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 8_000 }).catch(() => null),
         submit.click(),
       ]);
       await page.waitForTimeout(1200);
@@ -472,7 +472,7 @@ async function tick() {
       try {
         const result = await Promise.race([
           runOne(lead),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('browser_timeout_60s')), 60_000))
+          new Promise((_, reject) => setTimeout(() => reject(new Error('browser_timeout_45s')), 45_000))
         ]);
         const serialized = JSON.stringify(result).slice(0, 5000);
         if (result?.status === 'submitted_unconfirmed') {
