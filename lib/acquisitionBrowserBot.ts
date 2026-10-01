@@ -205,7 +205,7 @@ async function runOne(lead: any) {
 
     const fields = form.fields;
     const pick = (rx: RegExp) => fields.find((f:any) => rx.test([f.name,f.id,f.placeholder,f.aria].join(' ')));
-    const name = pick(/(^|\\b)(name|nome|nombre|nom|full.?name|contact.?name)(\\b|$)/i);
+    const name = pick(/(^|\b)(name|nome|nombre|nom|full.?name|contact.?name)(\b|$)/i);
     const email = pick(/email|e-mail|correo|courriel/i);
     const company = pick(/company|empresa|sociedad|entreprise|firma/i);
     const subject = pick(/subject|assunto|asunto|objet|betreff/i);
@@ -214,7 +214,12 @@ async function runOne(lead: any) {
 
     const fill = async (field: any, value: string) => {
       if (!field || !value) return;
-      const selector = field.id ? '#' + CSS.escape(field.id) : field.name ? `[name="${field.name.replace(/"/g,'\\\"')}"]` : '';
+      const escapeAttr = (value: string) => value.replace(/\\/g, '\\\\').replace(/"/g, '\\\"');
+      const selector = field.id
+        ? `[id="${escapeAttr(field.id)}"]`
+        : field.name
+          ? `[name="${escapeAttr(field.name)}"]`
+          : '';
       if (!selector) return;
       await page.locator(selector).first().fill(value);
     };
@@ -230,8 +235,11 @@ async function runOne(lead: any) {
 
     const submit = page.locator('form').filter({ has: page.locator('textarea') }).locator('button[type="submit"],input[type="submit"],button').first();
     if (!(await submit.count())) throw new Error('botao_envio_nao_encontrado');
-    await submit.click();
-    await page.waitForTimeout(1500);
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 12_000 }).catch(() => null),
+      submit.click(),
+    ]);
+    await page.waitForTimeout(1200);
 
     const finalUrl = await page.url();
     const confirmation = await page.evaluate(() => document.body.innerText.slice(0,5000));
