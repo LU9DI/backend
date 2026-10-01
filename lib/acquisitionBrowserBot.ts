@@ -192,22 +192,38 @@ async function sentToday(db: any) {
 }
 
 async function getCandidates(db: any) {
+  // Multiple Render instances can overlap during zero-downtime deploys. Claim
+  // rows atomically so two workers never process the same lead at the same time.
+  await db.run(
+    `UPDATE leads
+        SET browser_status='pending'
+      WHERE browser_status='processing'
+        AND browser_last_at < CURRENT_TIMESTAMP - INTERVAL '10 minutes'`
+  );
   return db.all(
-    `SELECT id,nome_empresa,email,raw_json,acquisition_source,browser_attempts
-       FROM leads
-      WHERE acquisition_eligible=1
-        AND COALESCE(acquisition_suppressed,0)=0
-        AND browser_status='pending'
-        AND COALESCE(browser_attempts,0) < ?
-        AND (browser_next_at IS NULL OR browser_next_at <= CURRENT_TIMESTAMP)
-        AND (
-          NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'website','')), '') IS NOT NULL
-          OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'websiteUri','')), '') IS NOT NULL
-          OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'website','')), '') IS NOT NULL
-          OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'websiteUri','')), '') IS NOT NULL
-        )
-      ORDER BY criado_em ASC
-      LIMIT 10`,
+    `WITH candidates AS (
+       SELECT id
+         FROM leads
+        WHERE acquisition_eligible=1
+          AND COALESCE(acquisition_suppressed,0)=0
+          AND browser_status='pending'
+          AND COALESCE(browser_attempts,0) < ?
+          AND (browser_next_at IS NULL OR browser_next_at <= CURRENT_TIMESTAMP)
+          AND (
+            NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'website','')), '') IS NOT NULL
+            OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'websiteUri','')), '') IS NOT NULL
+            OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'website','')), '') IS NOT NULL
+            OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'websiteUri','')), '') IS NOT NULL
+          )
+        ORDER BY criado_em ASC
+        LIMIT 10
+      )
+      UPDATE leads l
+         SET browser_status='processing',
+             browser_last_at=CURRENT_TIMESTAMP
+        FROM candidates c
+       WHERE l.id=c.id
+      RETURNING l.id,l.nome_empresa,l.email,l.raw_json,l.acquisition_source,l.browser_attempts`,
     [MAX_ATTEMPTS]
   );
 }
