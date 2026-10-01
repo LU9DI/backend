@@ -70,6 +70,7 @@ import { ensureAcquisitionEngineSchema, startAcquisitionWorker } from './lib/acq
 import { startAcquisitionReplenisher } from './lib/acquisitionReplenisher.js';
 import { startAcquisitionBrowserBot } from './lib/acquisitionBrowserBot.js';
 import { startProductHuntAcquisition } from './lib/acquisitionProductHunt.js';
+import { startHubSpotAcquisitionSync } from './lib/hubspotAcquisitionSync.js';
 import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
 import { ensureReportPdfSchema } from './lib/reportPdfStore.js';
 import {
@@ -320,6 +321,7 @@ async function main() {
     startAcquisitionReplenisher();
     await startAcquisitionBrowserBot();
     await startProductHuntAcquisition();
+    await startHubSpotAcquisitionSync();
   } catch (e) {
     console.warn('acquisition engine:', e);
   }
