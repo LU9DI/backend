@@ -185,105 +185,91 @@ async function runOne(lead: any) {
       .filter(x => !/javascript:|#/.test(x.href))
       .slice(0, 5);
     if (!contactLinks.length) throw new Error('formulario_contato_nao_encontrado');
-    let contact = contactLinks[0];
+    let lastError = 'formulario_contato_nao_encontrado';
+    for (const contact of contactLinks) {
+      try {
+        await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 12_000 });
+      } catch (e: any) {
+        const navMessage = clean(e?.message || e, 500);
+        if (!/Navigation timeout/i.test(navMessage)) {
+          lastError = navMessage;
+          continue;
+        }
+      }
+      await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 8_000 }).catch(() => null);
 
-    try {
-      await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 12_000 });
-    } catch (e: any) {
-      // Some sites keep loading analytics/third-party resources indefinitely. If the document is usable, continue.
-      const message = clean(e?.message || e, 500);
-      if (!/Navigation timeout/i.test(message)) throw e;
+      const formInfo: any = await page.evaluate(() => {
+        const forms = Array.from(document.querySelectorAll('form'));
+        return forms.map((form: any) => ({
+          action: form.action || location.href,
+          method: (form.method || 'post').toLowerCase(),
+          fields: Array.from(form.querySelectorAll('input,textarea,select')).map((el: any) => ({
+            tag: el.tagName.toLowerCase(), type: el.type || '', name: el.name || '', id: el.id || '',
+            placeholder: el.placeholder || '', aria: el.getAttribute('aria-label') || '', required: !!el.required,
+            value: el.value || '', contenteditable: el.getAttribute('contenteditable') || '',
+            options: el.tagName.toLowerCase()==='select' ? Array.from(el.options).slice(0,8).map((o:any)=>o.text) : []
+          })),
+          text: (form.innerText || '').slice(0,5000)
+        }));
+      });
+
+      if (!formInfo.length) { lastError = 'nenhum_formulario'; continue; }
+      const usableForms = formInfo.filter((f: any) => !/captcha|recaptcha|hcaptcha|turnstile/i.test(JSON.stringify(f)));
+      if (!usableForms.length) { lastError = 'captcha_requer_intervencao'; continue; }
+      const form = usableForms.find((f: any) => f.fields.some((x:any)=>/textarea/i.test(x.tag)))
+        || usableForms.find((f: any) => f.fields.some((x:any)=>/message|mensagem|mensaje|nachricht|comments?|inquiry|enquiry/i.test([x.name,x.id,x.placeholder,x.aria].join(' '))))
+        || usableForms[0];
+
+      const fields = form.fields;
+      const pick = (rx: RegExp) => fields.find((f:any) => rx.test([f.name,f.id,f.placeholder,f.aria].join(' ')));
+      const name = pick(/(^|\\b)(name|nome|nombre|nom|full.?name|contact.?name)(\\b|$)/i);
+      const email = pick(/email|e-mail|correo|courriel/i);
+      const company = pick(/company|empresa|sociedad|entreprise|firma/i);
+      const subject = pick(/subject|assunto|asunto|objet|betreff/i);
+      let msg = pick(/message|mensagem|mensaje|nachricht|comments?|coment[aá]rio|inquiry|enquiry|request|consulta|solicita/i);
+      if (!msg) {
+        const editable = await page.$('[contenteditable="true"]');
+        if (editable) msg = { id: '', name: '', placeholder: '', aria: '', contenteditable: 'true' };
+      }
+      if (!msg) { lastError = 'campo_mensagem_nao_encontrado'; continue; }
+
+      const fill = async (field: any, value: string) => {
+        if (!field || !value) return;
+        const escapeAttr = (value: string) => value.replace(/\\\\/g, '\\\\\\').replace(/"/g, '\\\\"');
+        const selector = field.contenteditable === 'true' ? '[contenteditable="true"]'
+          : field.id ? `[id="${escapeAttr(field.id)}"]`
+          : field.name ? `[name="${escapeAttr(field.name)}"]` : '';
+        if (!selector) return;
+        const el = await page.$(selector); if (!el) return;
+        await el.click({ clickCount: 3 });
+        await page.keyboard.press('Backspace');
+        await page.keyboard.type(value);
+      };
+      await fill(name, 'Equipe Filtra.AI');
+      await fill(email, clean(process.env.ACQUISITION_BROWSER_FROM_EMAIL || process.env.SMTP_FROM || 'contato@filtraai.com', 320));
+      await fill(company, 'Filtra.AI');
+      await fill(subject, target.subject);
+      await fill(msg, target.body);
+
+      const requiredCheckboxes = await page.$eval('input[type="checkbox"][required]', els => els.length);
+      if (requiredCheckboxes > 0) { lastError = 'checkbox_obrigatorio_requer_intervencao'; continue; }
+      const formSelector = form.fields.some((f:any) => /textarea/i.test(f.tag)) ? 'form:has(textarea)' : 'form';
+      const submit = await page.$(`${formSelector} button[type="submit"],${formSelector} input[type="submit"],${formSelector} button`);
+      if (!submit) { lastError = 'botao_envio_nao_encontrado'; continue; }
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 12_000 }).catch(() => null),
+        submit.click(),
+      ]);
+      await page.waitForTimeout(1200);
+      const finalUrl = await page.url();
+      const confirmation = await page.evaluate(() => document.body.innerText.slice(0,5000));
+      const looksSuccessful = /(thank you|thanks|obrigad|gracias|merci|danke|grazie|sent successfully|mensagem enviada|enviado com sucesso|message sent)/i.test(confirmation);
+      if (looksSuccessful || finalUrl !== contact.href) {
+        return { ok: true, lang, form_url: contact.href, final_url: finalUrl };
+      }
+      lastError = 'resultado_de_envio_nao_confirmado';
     }
-    await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 8_000 }).catch(() => null);
-    const formInfo: any = await page.evaluate(() => {
-      const forms = Array.from(document.querySelectorAll('form'));
-      return forms.map((form: any) => ({
-        action: form.action || location.href,
-        method: (form.method || 'post').toLowerCase(),
-        fields: Array.from(form.querySelectorAll('input,textarea,select')).map((el: any) => ({
-          tag: el.tagName.toLowerCase(),
-          type: el.type || '',
-          name: el.name || '',
-          id: el.id || '',
-          placeholder: el.placeholder || '',
-          aria: el.getAttribute('aria-label') || '',
-          required: !!el.required,
-          value: el.value || '',
-          contenteditable: el.getAttribute('contenteditable') || '',
-          options: el.tagName.toLowerCase()==='select' ? Array.from(el.options).slice(0,8).map((o:any)=>o.text) : []
-        })),
-        text: (form.innerText || '').slice(0,5000)
-      }));
-    });
-
-    if (!formInfo.length) throw new Error('nenhum_formulario');
-
-    // A contact page may expose several forms. Skip only the form that requires CAPTCHA;
-    // never attempt to solve or bypass it. Prefer a usable message form without CAPTCHA.
-    const usableForms = formInfo.filter((f: any) => !/captcha|recaptcha|hcaptcha|turnstile/i.test(JSON.stringify(f)));
-    if (!usableForms.length) throw new Error('captcha_requer_intervencao');
-    const form = usableForms.find((f: any) => f.fields.some((x:any)=>/textarea/i.test(x.tag)))
-      || usableForms.find((f: any) => f.fields.some((x:any)=>/message|mensagem|mensaje|nachricht|comments?|inquiry|enquiry/i.test([x.name,x.id,x.placeholder,x.aria].join(' '))))
-      || usableForms[0];
-
-    const fields = form.fields;
-    const pick = (rx: RegExp) => fields.find((f:any) => rx.test([f.name,f.id,f.placeholder,f.aria].join(' ')));
-    const name = pick(/(^|\b)(name|nome|nombre|nom|full.?name|contact.?name)(\b|$)/i);
-    const email = pick(/email|e-mail|correo|courriel/i);
-    const company = pick(/company|empresa|sociedad|entreprise|firma/i);
-    const subject = pick(/subject|assunto|asunto|objet|betreff/i);
-    let msg = pick(/message|mensagem|mensaje|nachricht|comments?|coment[aá]rio|inquiry|enquiry|request|consulta|solicita/i);
-    if (!msg) {
-      const editable = await page.$('[contenteditable="true"]');
-      if (editable) msg = { id: '', name: '', placeholder: '', aria: '', contenteditable: 'true' };
-    }
-    if (!msg) throw new Error('campo_mensagem_nao_encontrado');
-
-    const fill = async (field: any, value: string) => {
-      if (!field || !value) return;
-      const escapeAttr = (value: string) => value.replace(/\\/g, '\\\\').replace(/"/g, '\\\"');
-      const selector = field.contenteditable === 'true'
-        ? '[contenteditable="true"]'
-        : field.id
-          ? `[id="${escapeAttr(field.id)}"]`
-          : field.name
-            ? `[name="${escapeAttr(field.name)}"]`
-            : '';
-      if (!selector) return;
-      const el = await page.$(selector);
-      if (!el) return;
-      await el.click({ clickCount: 3 });
-      await page.keyboard.press('Backspace');
-      await page.keyboard.type(value);
-    };
-    await fill(name, 'Equipe Filtra.AI');
-    await fill(email, clean(process.env.ACQUISITION_BROWSER_FROM_EMAIL || process.env.SMTP_FROM || 'contato@filtraai.com', 320));
-    await fill(company, 'Filtra.AI');
-    await fill(subject, target.subject);
-    await fill(msg, target.body);
-
-    // Never accept legal/marketing consent on behalf of the recipient.
-    const requiredCheckboxes = await page.$eval('input[type="checkbox"][required]', els => els.length);
-    if (requiredCheckboxes > 0) throw new Error('checkbox_obrigatorio_requer_intervencao');
-
-    const formSelector = form.fields.some((f:any) => /textarea/i.test(f.tag))
-      ? 'form:has(textarea)'
-      : 'form';
-    const submit = await page.$(`${formSelector} button[type="submit"],${formSelector} input[type="submit"],${formSelector} button`);
-    if (!submit) throw new Error('botao_envio_nao_encontrado');
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 12_000 }).catch(() => null),
-      submit.click(),
-    ]);
-    await page.waitForTimeout(1200);
-
-    const finalUrl = await page.url();
-    const confirmation = await page.evaluate(() => document.body.innerText.slice(0,5000));
-    const looksSuccessful = /(thank you|thanks|obrigad|gracias|merci|danke|grazie|sent successfully|mensagem enviada|enviado com sucesso|message sent)/i.test(confirmation);
-    if (!looksSuccessful && finalUrl === contact.href) throw new Error('resultado_de_envio_nao_confirmado');
-
-    return { ok: true, lang, form_url: contact.href, final_url: finalUrl };
-  } finally {
+    throw new Error(lastError);  } finally {
     await browser.close();
   }
 }
