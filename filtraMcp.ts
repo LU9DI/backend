@@ -243,7 +243,7 @@ export const mcpApp = createMcpExpressApp({
   allowedHosts: ['api.filtraai.com', 'filtra-ia-api.onrender.com'],
 });
 
-// The MCP endpoint is mounted inside the guarded MCP Express app.
+// The MCP endpoint follows the SDK's canonical Express wiring.
 // createMcpExpressApp provides JSON parsing and Host-header protection.
 mcpApp.use(mcpRateLimit);
-mcpApp.all('/', (req, res) => void mcpNodeHandler(req, res, req.body));
+mcpApp.all('/mcp', (req, res) => void mcpNodeHandler(req, res, req.body));
