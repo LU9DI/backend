@@ -260,7 +260,7 @@ async function preflightWebsite(base: URL): Promise<URL> {
   for (let hop = 0; hop < 3; hop += 1) {
     await assertPublicHost(current);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4_000);
+    const timer = setTimeout(() => controller.abort(), 2_500);
     try {
       const response = await fetch(current.toString(), {
         method: 'HEAD',
@@ -280,7 +280,7 @@ async function preflightWebsite(base: URL): Promise<URL> {
       return current;
     } catch (e: any) {
       const message = clean(e?.message || e, 300);
-      if (/aborted|abort/i.test(message)) throw new Error('site_preflight_timeout_4s');
+      if (/aborted|abort/i.test(message)) throw new Error('site_preflight_timeout_3s');
       if (/ENOTFOUND|EAI_AGAIN|ENETUNREACH|ECONNREFUSED|ECONNRESET|fetch failed/i.test(message)) {
         throw new Error(`site_preflight_unreachable:${message}`);
       }
@@ -312,12 +312,12 @@ async function runOne(lead: any) {
     await page.setUserAgent('FiltraAI-Acquisition/1.0 (+https://filtraai.com)');
     await page.setViewport({ width: 1365, height: 900 });
     try {
-      await page.goto(reachableBase.toString(), { waitUntil: 'domcontentloaded', timeout: 8_000 });
+      await page.goto(reachableBase.toString(), { waitUntil: 'domcontentloaded', timeout: 6_000 });
     } catch (e: any) {
       const message = clean(e?.message || e, 500);
       if (!/Navigation timeout/i.test(message)) throw e;
     }
-    await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 4_000 }).catch(() => null);
+    await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 1_500 }).catch(() => null);
     const html = await page.content();
     const lang = detectLanguage(html, base);
     const target = message(lang, clean(lead.nome_empresa, 180));
@@ -349,8 +349,8 @@ async function runOne(lead: any) {
     const contactLinks = links
       .filter(x => contactPattern.test(`${x.text} ${x.href}`))
       .filter(x => sameOrigin(x.href) && !/javascript:|#/.test(x.href))
-      .slice(0, 3);
-    const guessedPaths = ['/contato','/contact','/contact-us','/fale-conosco','/atendimento','/suporte','/support','/comercial','/sales'];
+      .slice(0, 2);
+    const guessedPaths = lang === 'pt' ? ['/contato','/fale-conosco'] : lang === 'es' ? ['/contacto','/contact'] : lang === 'fr' ? ['/contact','/contacts'] : ['/contact','/contact-us'];
     for (const path of guessedPaths) {
       try {
         const href = new URL(path, base).toString();
@@ -366,7 +366,7 @@ async function runOne(lead: any) {
 
     for (const contact of contactLinks) {
       try {
-        await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 8_000 });
+        await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 5_000 });
       } catch (e: any) {
         const navMessage = clean(e?.message || e, 500);
         if (!/Navigation timeout/i.test(navMessage)) {
@@ -476,7 +476,7 @@ async function runOne(lead: any) {
       if (!submit) { lastError = 'botao_envio_nao_encontrado'; continue; }
 
       await Promise.all([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 8_000 }).catch(() => null),
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 5_000 }).catch(() => null),
         submit.click(),
       ]);
       await page.waitForTimeout(1200);
@@ -554,7 +554,7 @@ async function processLead(db: any, lead: any) {
   try {
     const result = await Promise.race([
       runOne(lead),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('browser_timeout_30s')), 30_000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error('browser_timeout_25s')), 25_000))
     ]);
     const serialized = JSON.stringify(result).slice(0, 5000);
     if (result?.status === 'submitted_unconfirmed') {
@@ -570,7 +570,7 @@ async function processLead(db: any, lead: any) {
     try { channelPayloadParsed = JSON.parse(rawError); } catch {}
     const error = clean(channelPayloadParsed ? JSON.stringify(channelPayloadParsed) : rawError, 5000);
     const channelFound = channelPayloadParsed?.reason === 'manual_channel_available';
-    await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=CASE WHEN ? THEN ? ELSE NULL END,browser_channel_data=CASE WHEN ? THEN ? ELSE NULL END,browser_status=CASE WHEN ? THEN 'channel_found' WHEN browser_attempts+1 >= ? THEN 'failed' ELSE 'pending' END,browser_next_at=CASE WHEN ? THEN NULL WHEN ? ILIKE '%site_http_404%' OR ? ILIKE '%site_http_410%' OR ? ILIKE '%ERR_NAME_NOT_RESOLVED%' OR ? ILIKE '%site_private_or_unresolvable_host%' THEN CURRENT_TIMESTAMP + INTERVAL '72 hours' WHEN ? ILIKE '%site_preflight_timeout%' OR ? ILIKE '%browser_timeout_30s%' THEN CURRENT_TIMESTAMP + INTERVAL '12 hours' WHEN ? ILIKE '%site_http_5%' THEN CURRENT_TIMESTAMP + INTERVAL '6 hours' ELSE CURRENT_TIMESTAMP + INTERVAL '6 hours' END,acquisition_stage=CASE WHEN ? THEN 'manual_channel' ELSE acquisition_stage END WHERE id=?`, [error, channelFound, channelPayloadParsed?.channel || 'manual', channelFound, JSON.stringify(channelPayloadParsed || {}).slice(0,5000), channelFound, MAX_ATTEMPTS, channelFound, error, error, error, error, error, error, error, channelFound, lead.id]);
+    await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=CASE WHEN ? THEN ? ELSE NULL END,browser_channel_data=CASE WHEN ? THEN ? ELSE NULL END,browser_status=CASE WHEN ? THEN 'channel_found' WHEN browser_attempts+1 >= ? THEN 'failed' ELSE 'pending' END,browser_next_at=CASE WHEN ? THEN NULL WHEN ? ILIKE '%site_http_404%' OR ? ILIKE '%site_http_410%' OR ? ILIKE '%ERR_NAME_NOT_RESOLVED%' OR ? ILIKE '%site_private_or_unresolvable_host%' THEN CURRENT_TIMESTAMP + INTERVAL '72 hours' WHEN ? ILIKE '%site_preflight_timeout%' OR ? ILIKE '%browser_timeout_25s%' THEN CURRENT_TIMESTAMP + INTERVAL '12 hours' WHEN ? ILIKE '%site_http_5%' THEN CURRENT_TIMESTAMP + INTERVAL '6 hours' ELSE CURRENT_TIMESTAMP + INTERVAL '6 hours' END,acquisition_stage=CASE WHEN ? THEN 'manual_channel' ELSE acquisition_stage END WHERE id=?`, [error, channelFound, channelPayloadParsed?.channel || 'manual', channelFound, JSON.stringify(channelPayloadParsed || {}).slice(0,5000), channelFound, MAX_ATTEMPTS, channelFound, error, error, error, error, error, error, error, channelFound, lead.id]);
     console.warn('[acquisition-browser]', lead.id, error);
   }
 }
