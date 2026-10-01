@@ -329,7 +329,13 @@ async function main() {
     await ensureAcquisitionEngineSchema(getDb());
     startAcquisitionWorker();
     startAcquisitionReplenisher();
-    await startAcquisitionBrowserBot();
+    try {
+      console.log('[acquisition-browser] bootstrap start');
+      await startAcquisitionBrowserBot();
+      console.log('[acquisition-browser] bootstrap complete');
+    } catch (e: any) {
+      console.error('[acquisition-browser] bootstrap failed:', e?.message || e);
+    }
     await startProductHuntAcquisition();
     await startHubSpotAcquisitionSync();
   } catch (e) {
