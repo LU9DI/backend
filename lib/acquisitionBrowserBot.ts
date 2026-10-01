@@ -21,8 +21,8 @@ function detectLanguage(html: string, url: URL) {
   if (lang.startsWith('fr')) return 'fr';
   if (lang.startsWith('de')) return 'de';
   if (lang.startsWith('it')) return 'it';
-  if (/\\.(pt|br)(?:$|\\/)/i.test(url.hostname + url.pathname)) return 'pt';
-  if (/\\.(es|mx|ar|cl|co)(?:$|\\/)/i.test(url.hostname + url.pathname)) return 'es';
+  if (/\.(pt|br)(?:$|\/)/i.test(url.hostname + url.pathname)) return 'pt';
+  if (/\.(es|mx|ar|cl|co)(?:$|\/)/i.test(url.hostname + url.pathname)) return 'es';
   return 'en';
 }
 
