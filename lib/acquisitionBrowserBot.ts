@@ -350,6 +350,15 @@ async function runOne(lead: any) {
       .filter(x => contactPattern.test(`${x.text} ${x.href}`))
       .filter(x => sameOrigin(x.href) && !/javascript:|#/.test(x.href))
       .slice(0, 2);
+
+    // If the homepage already exposes a public first-party channel and there is
+    // no explicit contact-page link, preserve it immediately. Do not waste the
+    // browser budget guessing URLs such as /contact on sites that do not expose
+    // them. The channel is an actionable contact path for manual follow-up.
+    if (!contactLinks.length && homepageChannelPayload) {
+      throw new Error(JSON.stringify(homepageChannelPayload));
+    }
+
     const guessedPaths = lang === 'pt' ? ['/contato','/fale-conosco'] : lang === 'es' ? ['/contacto','/contact'] : lang === 'fr' ? ['/contact','/contacts'] : ['/contact','/contact-us'];
     for (const path of guessedPaths) {
       try {
@@ -359,14 +368,13 @@ async function runOne(lead: any) {
     }
 
     if (!contactLinks.length) {
-      if (homepageChannelPayload) throw new Error(JSON.stringify(homepageChannelPayload));
       throw new Error('formulario_contato_nao_encontrado');
     }
     let lastError = 'formulario_contato_nao_encontrado';
 
     for (const contact of contactLinks) {
       try {
-        await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+        await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 4_000 });
       } catch (e: any) {
         const navMessage = clean(e?.message || e, 500);
         if (!/Navigation timeout/i.test(navMessage)) {
@@ -374,7 +382,7 @@ async function runOne(lead: any) {
           continue;
         }
       }
-      await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 4_000 }).catch(() => null);
+      await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 1_500 }).catch(() => null);
 
       const pageChannels = normalizePublicChannels(await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
         .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa[.]me|api[.]whatsapp[.]com|whatsapp[.]com\/send)/i.test(h)).slice(0, 10)));
@@ -554,7 +562,7 @@ async function processLead(db: any, lead: any) {
   try {
     const result = await Promise.race([
       runOne(lead),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('browser_timeout_25s')), 25_000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error('browser_timeout_20s')), 20_000))
     ]);
     const serialized = JSON.stringify(result).slice(0, 5000);
     if (result?.status === 'submitted_unconfirmed') {
