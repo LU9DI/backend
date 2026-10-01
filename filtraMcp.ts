@@ -183,7 +183,6 @@ function buildServer() {
 
 const mcpHandler = createMcpHandler(() => buildServer(), {
   responseMode: 'json',
-  maxRequestBodySize: 1024 * 1024,
 });
 
 const mcpNodeHandler = toNodeHandler(mcpHandler);
@@ -193,6 +192,6 @@ export const mcpApp = createMcpExpressApp({
   allowedHosts: ['api.filtraai.com', 'filtra-ia-api.onrender.com'],
 });
 
-export function handleFiltraMcp(req: any, res: any) {
-  return mcpNodeHandler(req, res, req.body);
-}
+// The MCP endpoint is mounted inside the guarded MCP Express app.
+// createMcpExpressApp provides JSON parsing and Host-header protection.
+mcpApp.all('/mcp', mcpNodeHandler);
