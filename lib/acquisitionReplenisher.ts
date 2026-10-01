@@ -14,6 +14,12 @@ let fullEnrichCooldownUntil = 0;
 
 const clean = (v: unknown, n = 5000) => String(v ?? '').trim().slice(0, n);
 const validEmail = (v: unknown) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean(v, 320));
+const institutionalKeywords = /(associa[cç][aã]o|associacao|sindicato|federa[cç][aã]o|federacao|c[aâ]mara de com[eé]rcio|camara de comercio|entidade empresarial|uni[aã]o empresarial|conselho empresarial|instituto empresarial|confedera[cç][aã]o|confederacao)/i;
+function acquisitionSegment(lead: any) {
+  const category = clean(lead?.profile?.category || lead?.profile?.types?.join?.(' ') || '', 1000);
+  const haystack = [lead?.company, lead?.source, category, JSON.stringify(lead?.profile || {})].join(' ');
+  return institutionalKeywords.test(haystack) || /trade_union|association|chamber|non_profit/i.test(haystack) ? 'institutional' : 'business';
+}
 const hash = (v: string) => crypto.createHash('sha256').update(v).digest('hex');
 
 const countries = ['Brazil', 'Portugal', 'Spain', 'Mexico', 'Argentina', 'Chile', 'Colombia'];
@@ -366,11 +372,11 @@ export async function replenishAcquisitionStock(force = false) {
       const id = clean(lead?.id, 180) || `provider-${hash(email).slice(0, 32)}`;
       try {
         await db.run(`INSERT INTO leads
-          (id,nome_empresa,email,fonte,raw_json,criado_em,acquisition_eligible,acquisition_suppressed,acquisition_stage,acquisition_next_at,acquisition_source,acquisition_timezone)
-          VALUES (?,?,?,?,?,CURRENT_TIMESTAMP,1,0,'eligible',CURRENT_TIMESTAMP,?,?)`,
+          (id,nome_empresa,email,fonte,raw_json,criado_em,acquisition_eligible,acquisition_suppressed,acquisition_stage,acquisition_next_at,acquisition_source,acquisition_timezone,acquisition_segment)
+          VALUES (?,?,?,?,?,CURRENT_TIMESTAMP,1,0,'eligible',CURRENT_TIMESTAMP,?,?,?)`,
           [id, clean(lead?.company || lead?.nome_empresa, 180) || null, email,
            clean(lead?.source, 120) || 'acquisition', JSON.stringify(lead?.profile || lead).slice(0, 20000),
-           clean(lead?.source, 120) || 'acquisition', clean(lead?.timezone, 120) || null]);
+           clean(lead?.source, 120) || 'acquisition', clean(lead?.timezone, 120) || null, acquisitionSegment(lead)]);
         imported++;
       } catch (e: any) {
         if (/duplicate|unique|constraint/i.test(String(e?.message || e))) skipped++;
