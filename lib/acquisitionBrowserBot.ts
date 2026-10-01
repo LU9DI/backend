@@ -340,7 +340,7 @@ async function inspectContactSurface(base: URL) {
   }
 }
 
-async function runOne(lead: any) {
+async function runOne(lead: any, signal?: AbortSignal) {
   const db = getDb();
   const website = extractWebsite(lead.raw_json);
   const base = validUrl(website);
@@ -361,6 +361,8 @@ async function runOne(lead: any) {
   const browser = await puppeteer.launch({
     headless: true,
     executablePath: process.env.CHROMIUM_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+    timeout: 8_000,
+    signal,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
   });
 
@@ -369,12 +371,12 @@ async function runOne(lead: any) {
     await page.setUserAgent('FiltraAI-Acquisition/1.0 (+https://filtraai.com)');
     await page.setViewport({ width: 1365, height: 900 });
     try {
-      await page.goto(reachableBase.toString(), { waitUntil: 'domcontentloaded', timeout: 6_000 });
+      await page.goto(reachableBase.toString(), { waitUntil: 'domcontentloaded', timeout: 6_000, signal });
     } catch (e: any) {
       const message = clean(e?.message || e, 500);
       if (!/Navigation timeout/i.test(message)) throw e;
     }
-    await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 1_500 }).catch(() => null);
+    await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 1_500, signal }).catch(() => null);
     const html = await page.content();
     const lang = detectLanguage(html, base);
     const target = message(lang, clean(lead.nome_empresa, 180));
@@ -431,7 +433,7 @@ async function runOne(lead: any) {
 
     for (const contact of contactLinks) {
       try {
-        await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 4_000 });
+        await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 4_000, signal });
       } catch (e: any) {
         const navMessage = clean(e?.message || e, 500);
         if (!/Navigation timeout/i.test(navMessage)) {
@@ -439,7 +441,7 @@ async function runOne(lead: any) {
           continue;
         }
       }
-      await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 1_500 }).catch(() => null);
+      await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 1_500, signal }).catch(() => null);
 
       const pageChannels = normalizePublicChannels(await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
         .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa[.]me|api[.]whatsapp[.]com|whatsapp[.]com\/send)/i.test(h)).slice(0, 10)));
@@ -541,7 +543,7 @@ async function runOne(lead: any) {
       if (!submit) { lastError = 'botao_envio_nao_encontrado'; continue; }
 
       await Promise.all([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 5_000 }).catch(() => null),
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 5_000, signal }).catch(() => null),
         submit.click(),
       ]);
       await page.waitForTimeout(1200);
@@ -618,10 +620,19 @@ async function tick() {
 async function processLead(db: any, lead: any) {
   console.log('[acquisition-browser] start', lead.id, lead.nome_empresa || '');
   try {
-    const result = await Promise.race([
-      runOne(lead),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('browser_timeout_20s')), 20_000))
-    ]);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+    let result: any;
+    try {
+      result = await runOne(lead, controller.signal);
+    } catch (e: any) {
+      if (controller.signal.aborted && !String(e?.message || e || '').includes('browser_timeout_20s')) {
+        throw new Error('browser_timeout_20s');
+      }
+      throw e;
+    } finally {
+      clearTimeout(timeout);
+    }
     const serialized = JSON.stringify(result).slice(0, 5000);
     if (result?.status === 'submitted_unconfirmed') {
       await db.run(`UPDATE leads SET browser_status='contact_attempted',browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=NULL,browser_channel_data=NULL,browser_attempts=browser_attempts+1,browser_next_at=CURRENT_TIMESTAMP + INTERVAL '24 hours',acquisition_stage='contacted' WHERE id=?`, [serialized, lead.id]);
