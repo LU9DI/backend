@@ -693,9 +693,13 @@ async function processLead(db: any, lead: any) {
     const serialized = JSON.stringify(result).slice(0, 5000);
     if (result?.status === 'submitted_unconfirmed') {
       await db.run(`UPDATE leads SET browser_status='contact_attempted',browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=NULL,browser_channel_data=NULL,browser_attempts=browser_attempts+1,browser_next_at=CURRENT_TIMESTAMP + INTERVAL '24 hours',acquisition_stage='contacted' WHERE id=?`, [serialized, lead.id]);
+      await db.run(`INSERT INTO acquisition_events (id,lead_id,event_type,source,occurred_at,metadata_json) VALUES (?,?,?,?,CURRENT_TIMESTAMP,?)`,
+        [crypto.randomUUID(),lead.id,'browser.submitted_unconfirmed','acquisition_browser',JSON.stringify(result).slice(0,20000)]);
       console.log('[acquisition-browser] submitted_unconfirmed', lead.id, result);
     } else {
       await db.run(`UPDATE leads SET browser_status='sent',browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=NULL,browser_channel_data=NULL,browser_attempts=browser_attempts+1,browser_next_at=NULL,acquisition_stage='contacted' WHERE id=?`, [serialized, lead.id]);
+      await db.run(`INSERT INTO acquisition_events (id,lead_id,event_type,source,occurred_at,metadata_json) VALUES (?,?,?,?,CURRENT_TIMESTAMP,?)`,
+        [crypto.randomUUID(),lead.id,'browser.sent','acquisition_browser',JSON.stringify(result).slice(0,20000)]);
       console.log('[acquisition-browser] sent', lead.id, result);
     }
   } catch (e: any) {
