@@ -465,7 +465,8 @@ export async function processAcquisitionEmail(sendId: string) {
     subject: String(send.subject),
     text: String(send.body),
     html: buildMessage(send).html,
-    idempotencyKey: String(send.idempotency_key)
+    idempotencyKey: String(send.idempotency_key),
+    acquisitionContactBasis: String(send.acquisition_contact_basis || '')
   });
   if (!result.ok) {
     await db.run(`UPDATE acquisition_sends SET status='failed',failed_at=CURRENT_TIMESTAMP,last_error=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`,
