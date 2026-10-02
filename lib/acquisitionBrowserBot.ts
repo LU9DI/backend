@@ -355,7 +355,7 @@ async function inspectContactSurface(base: URL) {
         const contactHtml = (await response.text()).slice(0, 200_000);
         const contactHrefs = [...contactHtml.matchAll(/(?:href|data-href)=[\"']([^\"']+)[\"']/gi)].map(m => m[1]);
         const discovered = normalizePublicChannels(contactHrefs.filter(h =>
-          /^(mailto:|tel:)/i.test(h) || /(?:wa\.me|api\.whatsapp\.com|whatsapp\.com\\/send)/i.test(h)
+          /^(mailto:|tel:)/i.test(h) || /(?:wa\.me|api\.whatsapp\.com|whatsapp\.com\/send)/i.test(h)
         ));
         const emails = (contactHtml.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [])
           .filter(x => !/example\.|noreply@|no-reply@/i.test(x))
