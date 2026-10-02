@@ -368,7 +368,7 @@ async function inspectContactSurface(base: URL) {
     }
     const hasContactText = contactPattern.test(html);
     if (safeForm) return { kind: 'form' as const, channels, contactLinks };
-    if (channels.length && !contactLinks.length && !anyForm) return { kind: 'manual_channel' as const, channels, contactLinks };
+    if (channels.length && !anyForm) return { kind: 'manual_channel' as const, channels, contactLinks };
     if (captchaForm) return { kind: 'captcha' as const, channels, contactLinks };
     if (contactLinks.length || hasContactText || anyForm) return { kind: 'contact_page' as const, channels, contactLinks };
     return { kind: 'none' as const, channels, contactLinks };
