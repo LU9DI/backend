@@ -177,6 +177,7 @@ async function ensureSchema(db: any) {
     ['browser_last_result', 'TEXT'],
     ['browser_channel', 'TEXT'],
     ['browser_channel_data', 'TEXT'],
+    ['acquisition_contact_basis', 'TEXT'],
   ];
   for (const [name, type] of columns) {
     try { await db.exec(`ALTER TABLE leads ADD COLUMN ${name} ${type}`); } catch {}
@@ -198,7 +199,7 @@ async function getCandidates(db: any, batchSize = 2) {
   return db.all(`WITH candidates AS (
        SELECT id FROM leads
         WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0
-          AND acquisition_opted_in_at IS NOT NULL
+          AND (acquisition_opted_in_at IS NOT NULL OR acquisition_contact_basis = 'b2b_public_prospect')
           AND browser_status IN ('pending','contact_attempted')
           AND COALESCE(browser_attempts,0) < ?
           AND (browser_next_at IS NULL OR browser_next_at <= CURRENT_TIMESTAMP)
@@ -229,7 +230,7 @@ async function getCandidates(db: any, batchSize = 2) {
         LIMIT ?)
       UPDATE leads l SET browser_status='processing', browser_last_at=CURRENT_TIMESTAMP
         FROM candidates c WHERE l.id=c.id
-      RETURNING l.id,l.nome_empresa,l.email,l.raw_json,l.acquisition_source,l.browser_attempts`, [MAX_ATTEMPTS, batchSize]);
+      RETURNING l.id,l.nome_empresa,l.email,l.raw_json,l.acquisition_source,l.acquisition_contact_basis,l.browser_attempts`, [MAX_ATTEMPTS, batchSize]);
 }
 function classifyChannel(channels: string[], phones: string[]) {
   if (channels.some(h => /(?:wa[.]me|whatsapp)/i.test(h))) return 'public_whatsapp';
@@ -497,6 +498,9 @@ async function runOne(lead: any, signal?: AbortSignal) {
       const pageChannels = normalizePublicChannels(await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
         .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa[.]me|api[.]whatsapp[.]com|whatsapp[.]com\/send)/i.test(h)).slice(0, 10)));
       const pageText = await page.evaluate(() => document.body?.innerText || '');
+      if (/(?:do not contact|do not solicit|no unsolicited|não entre em contato|nao entre em contato|não enviar|nao enviar|sem contato comercial|no commercial solicitation)/i.test(pageText)) {
+        lastError = 'site_no_outreach_notice'; continue;
+      }
       const pagePhones = normalizePublicPhones(pageText.match(/(?:\+\d[\d .()-]{7,}\d|\(\d{2}\)[ .-]?\d{4,5}[ .-]?\d{4}|\b\d{2}[ .-]?\d{4,5}[ .-]?\d{4}\b)/g) || []);
       if (pageChannels.length || pagePhones.length) {
         // Keep looking for a form on this page. A discovered channel is useful,
@@ -708,7 +712,7 @@ async function processLead(db: any, lead: any) {
     try { channelPayloadParsed = JSON.parse(rawError); } catch {}
     const error = clean(channelPayloadParsed ? JSON.stringify(channelPayloadParsed) : rawError, 5000);
     const channelFound = channelPayloadParsed?.reason === 'manual_channel_available';
-    await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=CASE WHEN ? THEN ? ELSE NULL END,browser_channel_data=CASE WHEN ? THEN ? ELSE NULL END,browser_status=CASE WHEN ? THEN 'channel_found' WHEN browser_attempts+1 >= ? THEN 'failed' ELSE 'pending' END,browser_next_at=CASE WHEN ? THEN NULL WHEN ? ILIKE '%site_http_404%' OR ? ILIKE '%site_http_410%' OR ? ILIKE '%ERR_NAME_NOT_RESOLVED%' OR ? ILIKE '%site_private_or_unresolvable_host%' THEN CURRENT_TIMESTAMP + INTERVAL '72 hours' WHEN ? ILIKE '%site_preflight_timeout%' OR ? ILIKE '%site_static_timeout%' OR ? ILIKE '%browser_timeout_20s%' THEN CURRENT_TIMESTAMP + INTERVAL '12 hours' WHEN ? ILIKE '%site_no_contact_surface%' OR ? ILIKE '%site_non_html%' OR ? ILIKE '%captcha_requer_intervencao%' THEN CURRENT_TIMESTAMP + INTERVAL '72 hours' WHEN ? ILIKE '%site_http_5%' THEN CURRENT_TIMESTAMP + INTERVAL '6 hours' ELSE CURRENT_TIMESTAMP + INTERVAL '6 hours' END,acquisition_stage=CASE WHEN ? THEN 'manual_channel' ELSE acquisition_stage END WHERE id=?`, [error, channelFound, channelPayloadParsed?.channel || 'manual', channelFound, JSON.stringify(channelPayloadParsed || {}).slice(0,5000), channelFound, MAX_ATTEMPTS, channelFound, error, error, error, error, error, error, error, error, error, error, error, channelFound, lead.id]);
+    await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=CASE WHEN ? THEN ? ELSE NULL END,browser_channel_data=CASE WHEN ? THEN ? ELSE NULL END,browser_status=CASE WHEN ? THEN 'channel_found' WHEN browser_attempts+1 >= ? THEN 'failed' ELSE 'pending' END,browser_next_at=CASE WHEN ? THEN NULL WHEN ? ILIKE '%site_http_404%' OR ? ILIKE '%site_http_410%' OR ? ILIKE '%ERR_NAME_NOT_RESOLVED%' OR ? ILIKE '%site_private_or_unresolvable_host%' THEN CURRENT_TIMESTAMP + INTERVAL '72 hours' WHEN ? ILIKE '%site_preflight_timeout%' OR ? ILIKE '%site_static_timeout%' OR ? ILIKE '%browser_timeout_20s%' THEN CURRENT_TIMESTAMP + INTERVAL '12 hours' WHEN ? ILIKE '%site_no_contact_surface%' OR ? ILIKE '%site_no_outreach_notice%' OR ? ILIKE '%site_non_html%' OR ? ILIKE '%captcha_requer_intervencao%' THEN CURRENT_TIMESTAMP + INTERVAL '72 hours' WHEN ? ILIKE '%site_http_5%' THEN CURRENT_TIMESTAMP + INTERVAL '6 hours' ELSE CURRENT_TIMESTAMP + INTERVAL '6 hours' END,acquisition_stage=CASE WHEN ? THEN 'manual_channel' ELSE acquisition_stage END WHERE id=?`, [error, channelFound, channelPayloadParsed?.channel || 'manual', channelFound, JSON.stringify(channelPayloadParsed || {}).slice(0,5000), channelFound, MAX_ATTEMPTS, channelFound, error, error, error, error, error, error, error, error, error, error, error, channelFound, lead.id]);
     console.warn('[acquisition-browser]', lead.id, error);
   }
 }
