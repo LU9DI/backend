@@ -361,7 +361,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
   const browser = await puppeteer.launch({
     headless: true,
     executablePath: process.env.CHROMIUM_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-    timeout: 8_000,
+    timeout: 4_000,
     signal,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
   });
@@ -374,12 +374,12 @@ async function runOne(lead: any, signal?: AbortSignal) {
     const initialUrl = staticContactHref || reachableBase.toString();
     console.log('[acquisition-browser] surface', lead.id, surface.kind, staticContactHref || 'homepage');
     try {
-      await page.goto(initialUrl, { waitUntil: 'domcontentloaded', timeout: staticContactHref ? 4_000 : 6_000, signal });
+      await page.goto(initialUrl, { waitUntil: 'domcontentloaded', timeout: staticContactHref ? 3_000 : 4_500, signal });
     } catch (e: any) {
       const message = clean(e?.message || e, 500);
       if (!/Navigation timeout/i.test(message)) throw e;
     }
-    await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 1_500, signal }).catch(() => null);
+    await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 800, signal }).catch(() => null);
     const html = await page.content();
     const lang = detectLanguage(html, new URL(initialUrl));
     const target = message(lang, clean(lead.nome_empresa, 180));
@@ -439,7 +439,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
 
     for (const contact of contactLinks) {
       try {
-        await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 4_000, signal });
+        await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 3_000, signal });
       } catch (e: any) {
         const navMessage = clean(e?.message || e, 500);
         if (!/Navigation timeout/i.test(navMessage)) {
@@ -447,7 +447,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
           continue;
         }
       }
-      await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 1_500, signal }).catch(() => null);
+      await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 800, signal }).catch(() => null);
 
       const pageChannels = normalizePublicChannels(await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
         .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa[.]me|api[.]whatsapp[.]com|whatsapp[.]com\/send)/i.test(h)).slice(0, 10)));
@@ -549,10 +549,10 @@ async function runOne(lead: any, signal?: AbortSignal) {
       if (!submit) { lastError = 'botao_envio_nao_encontrado'; continue; }
 
       await Promise.all([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 5_000, signal }).catch(() => null),
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 3_000, signal }).catch(() => null),
         submit.click(),
       ]);
-      await page.waitForTimeout(1200);
+      await page.waitForTimeout(500);
 
       const finalUrl = await page.url();
       const confirmation = await page.evaluate(() => document.body.innerText.slice(0,5000));
