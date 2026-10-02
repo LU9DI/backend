@@ -331,7 +331,7 @@ async function inspectContactSurface(base: URL) {
     const anyForm = forms.length > 0;
     const captchaForm = anyForm && !safeForm && forms.some(form => captchaPattern.test(form));
     const hrefs = [...html.matchAll(/(?:href|data-href)=["']([^"']+)["']/gi)].map(m => m[1]);
-    let channels = normalizePublicChannels(hrefs.filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\\.me|api\\.whatsapp\\.com|whatsapp\\.com\\/send)/i.test(h)));
+    let channels = normalizePublicChannels(hrefs.filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\.me|api\.whatsapp\.com|whatsapp\.com\\/send)/i.test(h)));
     const contactLinks = hrefs
       .filter(h => contactPattern.test(h))
       .map(h => { try { return new URL(h, base).toString(); } catch { return ''; } })
@@ -355,10 +355,10 @@ async function inspectContactSurface(base: URL) {
         const contactHtml = (await response.text()).slice(0, 200_000);
         const contactHrefs = [...contactHtml.matchAll(/(?:href|data-href)=[\"']([^\"']+)[\"']/gi)].map(m => m[1]);
         const discovered = normalizePublicChannels(contactHrefs.filter(h =>
-          /^(mailto:|tel:)/i.test(h) || /(?:wa\\.me|api\\.whatsapp\\.com|whatsapp\\.com\\/send)/i.test(h)
+          /^(mailto:|tel:)/i.test(h) || /(?:wa\.me|api\.whatsapp\.com|whatsapp\.com\\/send)/i.test(h)
         ));
-        const emails = (contactHtml.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi) || [])
-          .filter(x => !/example\\.|noreply@|no-reply@/i.test(x))
+        const emails = (contactHtml.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [])
+          .filter(x => !/example\.|noreply@|no-reply@/i.test(x))
           .slice(0, 5)
           .map(x => `mailto:${x.toLowerCase()}`);
         channels = normalizePublicChannels([...channels, ...discovered, ...emails]);
