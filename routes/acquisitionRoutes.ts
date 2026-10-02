@@ -157,6 +157,44 @@ export function mountAcquisitionRoutes(app: Express) {
     res.json({success:true,lead_id:leadId,eligible,explicit_consent_recorded:explicitConsent});
   }));
 
+  // Public-channel discoveries are actionable manual prospects. Keep them out of
+  // the browser retry loop and expose a small authenticated queue for sales/n8n.
+  app.get('/api/n8n/acquisition/manual-queue', limiter, asyncHandler(async (req,res) => {
+    if (!auth(req,res)) return;
+    const db=getDb();
+    const limit=Math.min(100, Math.max(1, Number(req.query.limit || 50)));
+    const rows=await db.all(`SELECT id,nome_empresa,email,telefone,whatsapp,fonte,acquisition_source,
+        acquisition_stage,browser_channel,browser_channel_data,browser_last_at,browser_last_result,criado_em
+      FROM leads
+      WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0
+        AND browser_status='channel_found'
+      ORDER BY browser_last_at DESC NULLS LAST, criado_em DESC
+      LIMIT ?`,[limit]);
+    res.json({success:true,count:rows.length,queue:rows});
+  }));
+
+  app.post('/api/n8n/acquisition/manual-queue/action', limiter, asyncHandler(async (req,res) => {
+    if (!auth(req,res)) return;
+    const db=getDb();
+    const leadId=s(req.body?.lead_id,120);
+    const action=s(req.body?.action,80).toLowerCase();
+    const note=s(req.body?.note,2000);
+    if(!leadId) return res.status(400).json({error:'lead_id obrigatório.'});
+    if(!['contacted','dismissed'].includes(action)) return res.status(400).json({error:'action inválida.'});
+    const lead=await db.get('SELECT id,browser_status,acquisition_suppressed FROM leads WHERE id=?',[leadId]);
+    if(!lead) return res.status(404).json({error:'Lead não encontrado.'});
+    if(action==='contacted'){
+      await db.run(`UPDATE leads SET browser_status='contact_attempted',
+        browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_next_at=CURRENT_TIMESTAMP + INTERVAL '30 days',
+        acquisition_stage='contacted' WHERE id=?`,[JSON.stringify({manual:true,note}).slice(0,5000),leadId]);
+    } else {
+      await db.run(`UPDATE leads SET browser_status='failed',
+        browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_next_at=CURRENT_TIMESTAMP + INTERVAL '180 days'
+        WHERE id=?`,[JSON.stringify({manual:true,dismissed:true,note}).slice(0,5000),leadId]);
+    }
+    res.json({success:true,lead_id:leadId,action});
+  }));
+
   app.get('/api/n8n/acquisition/status', limiter, asyncHandler(async (req,res) => {
     if (!auth(req,res)) return; const db=getDb(); await ensureAcquisitionSchema(db);
     const [a,b,c,d]=await Promise.all([
