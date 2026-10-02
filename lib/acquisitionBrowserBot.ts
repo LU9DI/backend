@@ -198,6 +198,7 @@ async function getCandidates(db: any, batchSize = 2) {
   return db.all(`WITH candidates AS (
        SELECT id FROM leads
         WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0
+          AND acquisition_opted_in_at IS NOT NULL
           AND browser_status IN ('pending','contact_attempted')
           AND COALESCE(browser_attempts,0) < ?
           AND (browser_next_at IS NULL OR browser_next_at <= CURRENT_TIMESTAMP)
