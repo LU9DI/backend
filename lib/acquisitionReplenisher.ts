@@ -358,6 +358,19 @@ export async function replenishAcquisitionStock(force = false) {
   try {
     const db = getDb();
     await ensureAcquisitionEngineSchema(db);
+    // Existing acquisition stock predates the browser queue and may have NULL browser_status.
+    // Backfill only eligible public-prospect/opted-in leads that expose a public website.
+    const queuedExisting = await db.run(`UPDATE leads SET browser_status='pending'
+      WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0
+        AND (acquisition_opted_in_at IS NOT NULL OR acquisition_contact_basis='b2b_public_prospect')
+        AND browser_status IS NULL
+        AND (NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'website','')), '') IS NOT NULL
+          OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'websiteUri','')), '') IS NOT NULL
+          OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'website','')), '') IS NOT NULL
+          OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'websiteUri','')), '') IS NOT NULL)`);
+    if (Number(queuedExisting?.changes || 0) > 0) {
+      console.log('[acquisition-replenisher] browser_queue_backfill=' + Number(queuedExisting.changes || 0));
+    }
     const row = await db.get(`SELECT COUNT(*) AS c FROM leads
       WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0
       AND email IS NOT NULL AND TRIM(email)!=''
@@ -376,8 +389,8 @@ export async function replenishAcquisitionStock(force = false) {
       const id = clean(lead?.id, 180) || `provider-${hash(email).slice(0, 32)}`;
       try {
         await db.run(`INSERT INTO leads
-          (id,nome_empresa,email,fonte,raw_json,criado_em,acquisition_eligible,acquisition_suppressed,acquisition_stage,acquisition_next_at,acquisition_source,acquisition_timezone,acquisition_segment,acquisition_contact_basis)
-          VALUES (?,?,?,?,?,CURRENT_TIMESTAMP,1,0,'eligible',CURRENT_TIMESTAMP,?,?,?,'b2b_public_prospect')`,
+          (id,nome_empresa,email,fonte,raw_json,criado_em,acquisition_eligible,acquisition_suppressed,acquisition_stage,acquisition_next_at,acquisition_source,acquisition_timezone,acquisition_segment,acquisition_contact_basis,browser_status)
+          VALUES (?,?,?,?,?,CURRENT_TIMESTAMP,1,0,'eligible',CURRENT_TIMESTAMP,?,?,?,'b2b_public_prospect','pending')`,
           [id, clean(lead?.company || lead?.nome_empresa, 180) || null, email,
            clean(lead?.source, 120) || 'acquisition', JSON.stringify(lead?.profile || lead).slice(0, 20000),
            clean(lead?.source, 120) || 'acquisition', clean(lead?.timezone, 120) || null, acquisitionSegment(lead)]);
