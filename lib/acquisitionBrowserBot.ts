@@ -331,13 +331,39 @@ async function inspectContactSurface(base: URL) {
     const anyForm = forms.length > 0;
     const captchaForm = anyForm && !safeForm && forms.some(form => captchaPattern.test(form));
     const hrefs = [...html.matchAll(/(?:href|data-href)=["']([^"']+)["']/gi)].map(m => m[1]);
-    const channels = normalizePublicChannels(hrefs.filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\.me|api\.whatsapp\.com|whatsapp\.com\/send)/i.test(h)));
+    let channels = normalizePublicChannels(hrefs.filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\\.me|api\\.whatsapp\\.com|whatsapp\\.com\\/send)/i.test(h)));
     const contactLinks = hrefs
       .filter(h => contactPattern.test(h))
       .map(h => { try { return new URL(h, base).toString(); } catch { return ''; } })
       .filter(Boolean)
       .filter(h => { try { return new URL(h).origin === base.origin; } catch { return false; } })
       .slice(0, 2);
+
+    // Discover channels from the contact page with a cheap static fetch before
+    // spending a Chromium cycle.
+    for (const href of contactLinks) {
+      if (channels.length >= 10) break;
+      try {
+        const response = await fetch(href, {
+          method: 'GET',
+          redirect: 'follow',
+          signal: AbortSignal.timeout(2500),
+          headers: { 'user-agent': 'FiltraAI-Acquisition/1.0 (+https://filtraai.com)' },
+        });
+        const type = response.headers.get('content-type') || '';
+        if (!response.ok || !/text\\/html|application\\/xhtml\\+xml/i.test(type)) continue;
+        const contactHtml = (await response.text()).slice(0, 200_000);
+        const contactHrefs = [...contactHtml.matchAll(/(?:href|data-href)=[\"']([^\"']+)[\"']/gi)].map(m => m[1]);
+        const discovered = normalizePublicChannels(contactHrefs.filter(h =>
+          /^(mailto:|tel:)/i.test(h) || /(?:wa\\.me|api\\.whatsapp\\.com|whatsapp\\.com\\/send)/i.test(h)
+        ));
+        const emails = (contactHtml.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi) || [])
+          .filter(x => !/example\\.|noreply@|no-reply@/i.test(x))
+          .slice(0, 5)
+          .map(x => `mailto:${x.toLowerCase()}`);
+        channels = normalizePublicChannels([...channels, ...discovered, ...emails]);
+      } catch {}
+    }
     const hasContactText = contactPattern.test(html);
     if (safeForm) return { kind: 'form' as const, channels, contactLinks };
     if (channels.length && !contactLinks.length && !anyForm) return { kind: 'manual_channel' as const, channels, contactLinks };
