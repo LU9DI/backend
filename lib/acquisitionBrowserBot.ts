@@ -370,15 +370,18 @@ async function runOne(lead: any, signal?: AbortSignal) {
     const page = await browser.newPage();
     await page.setUserAgent('FiltraAI-Acquisition/1.0 (+https://filtraai.com)');
     await page.setViewport({ width: 1365, height: 900 });
+    const staticContactHref = surface.contactLinks[0] || '';
+    const initialUrl = staticContactHref || reachableBase.toString();
+    console.log('[acquisition-browser] surface', lead.id, surface.kind, staticContactHref || 'homepage');
     try {
-      await page.goto(reachableBase.toString(), { waitUntil: 'domcontentloaded', timeout: 6_000, signal });
+      await page.goto(initialUrl, { waitUntil: 'domcontentloaded', timeout: staticContactHref ? 4_000 : 6_000, signal });
     } catch (e: any) {
       const message = clean(e?.message || e, 500);
       if (!/Navigation timeout/i.test(message)) throw e;
     }
     await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 1_500, signal }).catch(() => null);
     const html = await page.content();
-    const lang = detectLanguage(html, base);
+    const lang = detectLanguage(html, new URL(initialUrl));
     const target = message(lang, clean(lead.nome_empresa, 180));
 
     const links = await page.evaluate(() => Array.from(document.querySelectorAll('a')).map(a => ({
@@ -405,10 +408,13 @@ async function runOne(lead: any, signal?: AbortSignal) {
       : null;
 
     const contactPattern = /(contact|contato|contacto|fale|fale-conosco|habla|kontakt|contatti|comercial|sales|business|partnership|support|atendimento|suporte)/i;
-    const contactLinks = links
-      .filter(x => contactPattern.test(`${x.text} ${x.href}`))
-      .filter(x => sameOrigin(x.href) && !/javascript:|#/.test(x.href))
-      .slice(0, 2);
+    const contactLinks = staticContactHref
+      ? [{ text: 'static-contact', href: staticContactHref }]
+      : links
+        .filter(x => contactPattern.test(`${x.text} ${x.href}`))
+        .filter(x => sameOrigin(x.href) && !/javascript:|#/.test(x.href))
+        .slice(0, 2);
+
 
     // If the homepage already exposes a public first-party channel and there is
     // no explicit contact-page link, preserve it immediately. Do not waste the
