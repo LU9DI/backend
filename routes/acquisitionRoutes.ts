@@ -187,12 +187,37 @@ export function mountAcquisitionRoutes(app: Express) {
       await db.run(`UPDATE leads SET browser_status='contact_attempted',
         browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_next_at=CURRENT_TIMESTAMP + INTERVAL '30 days',
         acquisition_stage='contacted' WHERE id=?`,[JSON.stringify({manual:true,note}).slice(0,5000),leadId]);
+      await db.run(`INSERT INTO acquisition_events
+        (id,lead_id,event_type,source,occurred_at,metadata_json)
+        VALUES (?,?,?,?,CURRENT_TIMESTAMP,?)`,
+        [crypto.randomUUID(),leadId,'manual.contact_attempted','manual_queue',JSON.stringify({note}).slice(0,20000)]);
     } else {
       await db.run(`UPDATE leads SET browser_status='failed',
         browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_next_at=CURRENT_TIMESTAMP + INTERVAL '180 days'
         WHERE id=?`,[JSON.stringify({manual:true,dismissed:true,note}).slice(0,5000),leadId]);
+      await db.run(`INSERT INTO acquisition_events
+        (id,lead_id,event_type,source,occurred_at,metadata_json)
+        VALUES (?,?,?,?,CURRENT_TIMESTAMP,?)`,
+        [crypto.randomUUID(),leadId,'manual.dismissed','manual_queue',new Date().toISOString(),JSON.stringify({note}).slice(0,20000)]);
     }
     res.json({success:true,lead_id:leadId,action});
+  }));
+
+  app.get('/api/n8n/acquisition/funnel', limiter, asyncHandler(async (req,res) => {
+    if (!auth(req,res)) return;
+    const db=getDb(); await ensureAcquisitionSchema(db);
+    const rows=await db.all(`SELECT event_type, COUNT(*)::int AS count
+      FROM acquisition_events
+      WHERE event_type IN (
+        'lead.discovered','lead.qualified','email.queued','email.sent','email.delivered',
+        'email.opened','email.clicked','manual.contact_attempted','manual.dismissed',
+        'browser.sent','browser.submitted_unconfirmed','trial.started','customer.created'
+      )
+      GROUP BY event_type ORDER BY event_type`);
+    const browser=await db.all(`SELECT browser_status, COUNT(*)::int AS count
+      FROM leads WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0
+      GROUP BY browser_status ORDER BY browser_status`);
+    res.json({success:true,funnel:Object.fromEntries(rows.map((r:any)=>[r.event_type,Number(r.count||0)])),browser_queue:Object.fromEntries(browser.map((r:any)=>[r.browser_status||'unknown',Number(r.count||0)]))});
   }));
 
   app.get('/api/n8n/acquisition/status', limiter, asyncHandler(async (req,res) => {
