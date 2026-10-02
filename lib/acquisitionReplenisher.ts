@@ -376,8 +376,8 @@ export async function replenishAcquisitionStock(force = false) {
       const id = clean(lead?.id, 180) || `provider-${hash(email).slice(0, 32)}`;
       try {
         await db.run(`INSERT INTO leads
-          (id,nome_empresa,email,fonte,raw_json,criado_em,acquisition_eligible,acquisition_suppressed,acquisition_stage,acquisition_next_at,acquisition_source,acquisition_timezone,acquisition_segment)
-          VALUES (?,?,?,?,?,CURRENT_TIMESTAMP,1,0,'eligible',CURRENT_TIMESTAMP,?,?,?)`,
+          (id,nome_empresa,email,fonte,raw_json,criado_em,acquisition_eligible,acquisition_suppressed,acquisition_stage,acquisition_next_at,acquisition_source,acquisition_timezone,acquisition_segment,acquisition_contact_basis)
+          VALUES (?,?,?,?,?,CURRENT_TIMESTAMP,1,0,'eligible',CURRENT_TIMESTAMP,?,?,?,'b2b_public_prospect')`,
           [id, clean(lead?.company || lead?.nome_empresa, 180) || null, email,
            clean(lead?.source, 120) || 'acquisition', JSON.stringify(lead?.profile || lead).slice(0, 20000),
            clean(lead?.source, 120) || 'acquisition', clean(lead?.timezone, 120) || null, acquisitionSegment(lead)]);
