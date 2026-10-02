@@ -29,12 +29,11 @@ async function syncLead(lead: any) {
   const email = clean(lead.email, 320).toLowerCase();
   if (!emailOk(email)) return { status: 'skipped' };
 
-  // Email is the stable dedupe key; do not overwrite an existing HubSpot contact.
   const search = await hubspot('/crm/v3/objects/contacts/search', {
     method: 'POST',
     body: JSON.stringify({
       filterGroups: [{ filters: [{ propertyName: 'email', operator: 'EQ', value: email }] }],
-      properties: ['email', 'firstname', 'lastname', 'company'],
+      properties: ['email', 'firstname', 'lastname', 'company', 'segmento_filtra', 'hs_analytics_source', 'hs_latest_source', 'hs_object_source_label'],
       limit: 1,
     }),
   });
@@ -42,11 +41,17 @@ async function syncLead(lead: any) {
   let contactId = search?.results?.[0]?.id;
   if (!contactId) {
     const company = clean(lead.nome_empresa, 180);
+    const segment = clean(lead.acquisition_segment, 80);
     const properties: Record<string, string> = {
       email,
       company,
       lifecyclestage: 'lead',
     };
+
+    // Preserve acquisition context without fabricating HubSpot traffic attribution.
+    // hs_* source fields remain HubSpot-owned; outbound/public-prospect acquisition is not web traffic.
+    if (segment) properties.segmento_filtra = segment;
+
     contactId = (await hubspot('/crm/v3/objects/contacts', {
       method: 'POST',
       body: JSON.stringify({ properties }),
@@ -68,7 +73,7 @@ export async function runHubSpotAcquisitionSyncOnce() {
   try {
     const db = getDb();
     const leads = await db.all<any>(
-      `SELECT id,nome_empresa,email,qualification,crm_id
+      `SELECT id,nome_empresa,email,qualification,crm_id,acquisition_source,acquisition_segment
        FROM leads
        WHERE COALESCE(acquisition_suppressed,0)=0
          AND COALESCE(crm_id,'')=''
