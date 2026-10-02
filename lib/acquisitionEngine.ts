@@ -77,7 +77,8 @@ export async function ensureAcquisitionEngineSchema(db = getDb()) {
     ['acquisition_last_sent_at', 'TIMESTAMPTZ'],
     ['acquisition_source', 'TEXT'],
     ['acquisition_timezone', 'TEXT'],
-    ['acquisition_segment', `TEXT NOT NULL DEFAULT 'business'`]
+    ['acquisition_segment', `TEXT NOT NULL DEFAULT 'business'`],
+    ['acquisition_contact_basis', `TEXT`]
   ];
   for (const [name, type] of leadColumns) {
     try { await db.exec(`ALTER TABLE leads ADD COLUMN ${name} ${type}`); } catch {}
@@ -328,7 +329,7 @@ export async function queueEligibleAcquisition(limit = 25) {
        WHERE acquisition_eligible=1
          AND COALESCE(acquisition_suppressed,0)=0
          AND email IS NOT NULL AND TRIM(email)!=''
-         AND acquisition_opted_in_at IS NOT NULL
+         AND (acquisition_opted_in_at IS NOT NULL OR acquisition_contact_basis = 'b2b_public_prospect')
          AND (acquisition_next_at IS NULL OR acquisition_next_at <= ?)
          AND acquisition_stage IN ('eligible','ready','followup')
        ORDER BY COALESCE(acquisition_next_at, criado_em) ASC
