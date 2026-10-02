@@ -362,6 +362,8 @@ async function inspectContactSurface(base: URL) {
           .slice(0, 5)
           .map(x => `mailto:${x.toLowerCase()}`);
         channels = normalizePublicChannels([...channels, ...discovered, ...emails]);
+        const contactPhones = normalizePublicPhones(contactHtml.match(/(?:\+\d[\d .()-]{7,}\d|\(\d{2}\)[ .-]?\d{4,5}[ .-]?\d{4}|\b\d{2}[ .-]?\d{4,5}[ .-]?\d{4}\b)/g) || []);
+        channels = normalizePublicChannels([...channels, ...contactPhones]);
       } catch {}
     }
     const hasContactText = contactPattern.test(html);
