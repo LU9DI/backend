@@ -154,8 +154,10 @@ export async function enviarEmail(opts: {
   html?: string;
   idempotencyKey?: string;
   purpose?: MailPurpose;
+  acquisitionContactBasis?: string;
 }): Promise<SendEmailResult> {
   const purpose = opts.purpose || 'transactional';
+  const b2bPublicProspect = purpose === 'acquisition' && opts.acquisitionContactBasis === 'b2b_public_prospect';
   if (purpose === 'acquisition' && cleanEnv(process.env.ACQUISITION_ENGINE) !== '1') {
     const error = 'acquisition_email bloqueado: ACQUISITION_ENGINE não está habilitado';
     console.warn(`[mail] ${error}`);
@@ -170,7 +172,7 @@ export async function enviarEmail(opts: {
   }
 
   // 1) Resend primeiro (mais confiável em cloud)
-  if (resendConfigured()) {
+  if (resendConfigured() && !b2bPublicProspect) {
     try {
       return await sendViaResend({ ...opts, to, from, idempotencyKey: opts.idempotencyKey });
     } catch (e: any) {
@@ -239,8 +241,9 @@ export async function enviarEmailAquisicao(opts: {
   text: string;
   html?: string;
   idempotencyKey?: string;
+  acquisitionContactBasis?: string;
 }): Promise<SendEmailResult> {
-  return enviarEmail({ ...opts, purpose: 'acquisition' });
+  return enviarEmail({ ...opts, purpose: 'acquisition', acquisitionContactBasis: opts.acquisitionContactBasis });
 }
 
 /** Diagnóstico seguro (sem senha). */

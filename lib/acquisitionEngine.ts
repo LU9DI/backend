@@ -441,7 +441,7 @@ export async function processAcquisitionEmail(sendId: string) {
   const db = getDb();
   await ensureAcquisitionEngineSchema(db);
   const send = await db.get(
-    `SELECT s.*,l.email,l.nome_empresa,l.acquisition_eligible,l.acquisition_opted_in_at,l.acquisition_suppressed,l.acquisition_stage
+    `SELECT s.*,l.email,l.nome_empresa,l.acquisition_eligible,l.acquisition_opted_in_at,l.acquisition_contact_basis,l.acquisition_suppressed,l.acquisition_stage
      FROM acquisition_sends s JOIN leads l ON l.id=s.lead_id WHERE s.id=?`,
     [sendId]
   );
@@ -453,8 +453,10 @@ export async function processAcquisitionEmail(sendId: string) {
       [`reputation_pause:${reputation.reason}`, sendId]);
     throw new Error(`Envio pausado por reputação: ${reputation.reason}`);
   }
-  if (Number(send.acquisition_eligible) !== 1 || Number(send.acquisition_suppressed || 0) === 1 || !send.acquisition_opted_in_at) {
-    await db.run(`UPDATE acquisition_sends SET status='failed',failed_at=CURRENT_TIMESTAMP,last_error='lead não elegível/suprimido',updated_at=CURRENT_TIMESTAMP WHERE id=?`, [sendId]);
+  const b2bPublicProspect = String(send.acquisition_contact_basis || '') === 'b2b_public_prospect';
+  const hasMarketingOptIn = Boolean(send.acquisition_opted_in_at);
+  if (Number(send.acquisition_eligible) !== 1 || Number(send.acquisition_suppressed || 0) === 1 || (!hasMarketingOptIn && !b2bPublicProspect)) {
+    await db.run(`UPDATE acquisition_sends SET status='failed',failed_at=CURRENT_TIMESTAMP,last_error='lead não elegível/suprimido/sem base de contato',updated_at=CURRENT_TIMESTAMP WHERE id=?`, [sendId]);
     return;
   }
 
@@ -463,7 +465,8 @@ export async function processAcquisitionEmail(sendId: string) {
     subject: String(send.subject),
     text: String(send.body),
     html: buildMessage(send).html,
-    idempotencyKey: String(send.idempotency_key)
+    idempotencyKey: String(send.idempotency_key),
+    acquisitionContactBasis: String(send.acquisition_contact_basis || '')
   });
   if (!result.ok) {
     await db.run(`UPDATE acquisition_sends SET status='failed',failed_at=CURRENT_TIMESTAMP,last_error=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`,
