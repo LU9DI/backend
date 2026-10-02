@@ -351,7 +351,7 @@ async function inspectContactSurface(base: URL) {
           headers: { 'user-agent': 'FiltraAI-Acquisition/1.0 (+https://filtraai.com)' },
         });
         const type = response.headers.get('content-type') || '';
-        if (!response.ok || !/text\\/html|application\\/xhtml\\+xml/i.test(type)) continue;
+        if (!response.ok || !/text\/html|application\/xhtml\+xml/i.test(type)) continue;
         const contactHtml = (await response.text()).slice(0, 200_000);
         const contactHrefs = [...contactHtml.matchAll(/(?:href|data-href)=[\"']([^\"']+)[\"']/gi)].map(m => m[1]);
         const discovered = normalizePublicChannels(contactHrefs.filter(h =>
