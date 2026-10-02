@@ -187,6 +187,8 @@ async function fullEnrichProvider() {
 
 
 const OSM_URL = clean(process.env.ACQUISITION_OSM_OVERPASS_URL, 2000) || 'https://overpass-api.de/api/interpreter';
+const OSM_TARGET_TYPES = /(hotel|hostel|guest_house|restaurant|cafe|bar|clinic|doctors|dentist|pharmacy|beauty|hairdresser|car_dealer|car_repair|retail|shop|supermarket|school|college|university|tourism|association|trade_union|chamber|non_profit|office)/i;
+
 const OSM_CITIES = [
   ['São Paulo', -23.82, -46.82, -23.35, -46.35],
   ['Rio de Janeiro', -23.05, -43.80, -22.70, -43.05],
@@ -250,7 +252,9 @@ async function openStreetMapProvider(limit: number) {
       const data: any = await response.json();
       for (const element of Array.isArray(data?.elements) ? data.elements : []) {
         const tags = element?.tags || {};
-        if (tags?.name || osmWebsite(tags) || osmEmail(tags)) elements.push({ element, city });
+        const category = [tags.office, tags.amenity, tags.tourism, tags.shop, tags.healthcare, tags.craft, tags.leisure].filter(Boolean).join(' ');
+        const relevant = OSM_TARGET_TYPES.test(category);
+        if (tags?.name && relevant && (osmWebsite(tags) || osmEmail(tags))) elements.push({ element, city });
       }
       console.log(`[acquisition-osm] city=${city[0]} elements=${data?.elements?.length || 0}`);
       if (elements.length >= target * 3) break;
