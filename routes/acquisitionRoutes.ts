@@ -389,7 +389,7 @@ export function mountAcquisitionRoutes(app: Express) {
   app.get('/api/n8n/acquisition/report', limiter, asyncHandler(async(req,res)=>{
     if(!auth(req,res)) return; const db=getDb(); await ensureAcquisitionSchema(db);
     const from=s(req.query.from,80), to=s(req.query.to,80);
-    const [content,opportunities,events,leads]=await Promise.all([
+    const [content,opportunities,events,leads,browserQueue]=await Promise.all([
       db.all(`SELECT id,campaign_id,platform,title,status,scheduled_at,published_at,external_post_id,utm_content,created_at
         FROM acquisition_content WHERE (?='' OR created_at>=?) AND (?='' OR created_at<=?) ORDER BY created_at DESC LIMIT 1000`,[from,from,to,to]),
       db.all(`SELECT id,platform,title,url,relevance_score,status,approval_required,created_at,published_at
@@ -398,7 +398,10 @@ export function mountAcquisitionRoutes(app: Express) {
         FROM acquisition_events WHERE (?='' OR occurred_at>=?) AND (?='' OR occurred_at<=?) ORDER BY occurred_at DESC LIMIT 5000`,[from,from,to,to]),
       db.all(`SELECT id,nome_empresa,email,fonte,score,qualification,criado_em FROM leads
         WHERE (?='' OR criado_em>=?) AND (?='' OR criado_em<=?) ORDER BY criado_em DESC LIMIT 5000`,[from,from,to,to])
-    ]);
+,
+      db.all(`SELECT browser_status,COUNT(*)::int AS count FROM leads
+        WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0
+        GROUP BY browser_status ORDER BY browser_status`)    ]);
     const bySource:any={};
     for(const e of events||[]){const k=s(e?.source,120)||'unknown';bySource[k]??={source:k,events:0,leads:0,qualified_leads:0,conversions:0};bySource[k].events++;if(e.event_type==='lead')bySource[k].leads++;if(e.event_type==='qualified')bySource[k].qualified_leads++;if(e.event_type==='conversion')bySource[k].conversions++;}
     res.json({success:true,period:{from:from||null,to:to||null},summary:{
@@ -406,6 +409,7 @@ export function mountAcquisitionRoutes(app: Express) {
       content:(content||[]).length,published:(content||[]).filter((x:any)=>x.status==='published').length,
       opportunities:(opportunities||[]).length,events:(events||[]).length,leads:(leads||[]).length,
       qualified_leads:(leads||[]).filter((x:any)=>Number(x.score||0)>=40).length},
+      browser_queue:Object.fromEntries((browserQueue||[]).map((x:any)=>[x.browser_status,Number(x.count||0)])),
       by_source:Object.values(bySource),content,opportunities,recent_events:events,recent_leads:leads});
   }));
 }
