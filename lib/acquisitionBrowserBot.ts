@@ -331,7 +331,7 @@ async function inspectContactSurface(base: URL) {
     const anyForm = forms.length > 0;
     const captchaForm = anyForm && !safeForm && forms.some(form => captchaPattern.test(form));
     const hrefs = [...html.matchAll(/(?:href|data-href)=["']([^"']+)["']/gi)].map(m => m[1]);
-    let channels = normalizePublicChannels(hrefs.filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\.me|api\.whatsapp\.com|whatsapp\.com\\/send)/i.test(h)));
+    let channels = normalizePublicChannels(hrefs.filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\\.me|api\\.whatsapp\\.com|whatsapp\\.com\\/send)/i.test(h)));
     const contactLinks = hrefs
       .filter(h => contactPattern.test(h))
       .map(h => { try { return new URL(h, base).toString(); } catch { return ''; } })
