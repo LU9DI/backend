@@ -896,6 +896,10 @@ export async function startAcquisitionBrowserBot() {
   started = true;
   const db = getDb();
   await ensureSchema(db);
-  console.log(`[acquisition-browser] ON cap=${DAILY_CAP} interval=${INTERVAL_MS}ms scheduler=external-trigger`);
+  console.log(`[acquisition-browser] ON cap=${DAILY_CAP} interval=${INTERVAL_MS}ms scheduler=internal-isolated-worker`);
   void runAcquisitionBrowserBotTick(true);
+  const timer = setInterval(() => {
+    void runAcquisitionBrowserBotTick(true);
+  }, INTERVAL_MS);
+  timer.unref();
 }
