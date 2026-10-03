@@ -1,6 +1,9 @@
 name: Filtra acquisition browser
 
 on:
+  push:
+    branches:
+      - master
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
