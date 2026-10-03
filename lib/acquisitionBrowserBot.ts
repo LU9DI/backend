@@ -11,6 +11,7 @@ const CONCURRENCY = Math.max(1, Math.min(2, Number(process.env.ACQUISITION_BROWS
 const MAX_ATTEMPTS = 2;
 let started = false;
 let running = false;
+let scheduleTimer: NodeJS.Timeout | null = null;
 
 const clean = (v: unknown, n = 5000) => String(v ?? '').trim().slice(0, n);
 const validUrl = (v: unknown) => {
@@ -832,6 +833,20 @@ async function processLead(db: any, lead: any) {
   }
 }
 
+async function scheduledTick() {
+  try {
+    await Promise.race([
+      tick(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('tick_timeout_90s')), 90_000)),
+    ]);
+  } catch (e: any) {
+    running = false;
+    console.error('[acquisition-browser] tick failed:', e?.message || e);
+  } finally {
+    scheduleTimer = setTimeout(() => void scheduledTick(), INTERVAL_MS);
+  }
+}
+
 export async function startAcquisitionBrowserBot() {
   if (started) return;
   if (!ENABLED) {
@@ -841,7 +856,7 @@ export async function startAcquisitionBrowserBot() {
   started = true;
   const db = getDb();
   await ensureSchema(db);
-  setInterval(() => void tick().catch((e) => console.error('[acquisition-browser] tick failed:', e?.message || e)), INTERVAL_MS);
-  console.log(`[acquisition-browser] ON cap=${DAILY_CAP} interval=${INTERVAL_MS}ms`);
-  void tick().catch((e) => console.error('[acquisition-browser] initial tick failed:', e?.message || e));
+  if (scheduleTimer) clearTimeout(scheduleTimer);
+  console.log(`[acquisition-browser] ON cap=${DAILY_CAP} interval=${INTERVAL_MS}ms scheduler=recursive`);
+  void scheduledTick();
 }
