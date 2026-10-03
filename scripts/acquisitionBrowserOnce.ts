@@ -1,12 +1,15 @@
 import 'dotenv/config';
-import { runAcquisitionBrowserBotTick } from '../lib/acquisitionBrowserBot.js';
+
+console.log('[acquisition-browser] isolated entry pid=' + process.pid + ' child=' + String(process.env.ACQUISITION_BROWSER_CHILD || ''));
 
 async function main() {
+  const { runAcquisitionBrowserBotTick } = await import('../lib/acquisitionBrowserBot.js');
   await runAcquisitionBrowserBotTick(true);
 }
 
 main()
   .then(() => {
+    console.log('[acquisition-browser] isolated entry complete pid=' + process.pid);
     setTimeout(() => process.exit(0), 50);
   })
   .catch((error) => {
