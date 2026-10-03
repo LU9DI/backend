@@ -183,6 +183,18 @@ async function ensureSchema(db: any) {
     try { await db.exec(`ALTER TABLE leads ADD COLUMN ${name} ${type}`); } catch {}
   }
   await db.exec('CREATE INDEX IF NOT EXISTS idx_browser_acq ON leads(browser_status,browser_next_at)');
+  // Legacy repair: only restore provenance that is explicit in the stored source.
+  // OpenStreetMap + official website is a public-prospect discovery source; do not
+  // infer this basis for generic prospecting providers. Existing Resend-originated
+  // rows are explicitly suppressed because Resend is not a cold-prospect source.
+  await db.run(`UPDATE leads SET acquisition_contact_basis='b2b_public_prospect'
+    WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0
+      AND acquisition_opted_in_at IS NULL AND acquisition_contact_basis IS NULL
+      AND BTRIM(COALESCE(acquisition_source, fonte, ''))='OpenStreetMap + official website'`);
+  await db.run(`UPDATE leads SET acquisition_suppressed=1, acquisition_stage='suppressed', acquisition_next_at=NULL
+    WHERE COALESCE(acquisition_suppressed,0)=0
+      AND BTRIM(COALESCE(acquisition_source, fonte, ''))='resend_existing'
+      AND acquisition_opted_in_at IS NULL`);
 }
 
 async function sentToday(db: any) {
