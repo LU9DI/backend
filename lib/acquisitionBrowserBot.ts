@@ -11,7 +11,7 @@ const CONCURRENCY = Math.max(1, Math.min(2, Number(process.env.ACQUISITION_BROWS
 const MAX_ATTEMPTS = 2;
 let started = false;
 let running = false;
-let scheduleTimer: NodeJS.Timeout | null = null;
+let lastTriggeredAt = 0;
 
 const clean = (v: unknown, n = 5000) => String(v ?? '').trim().slice(0, n);
 const validUrl = (v: unknown) => {
@@ -833,11 +833,12 @@ async function processLead(db: any, lead: any) {
   }
 }
 
-async function scheduledTick() {
-  // Schedule the next wake-up independently of the current browser cycle.
-  // This guarantees a new attempt even if one cycle gets stuck in I/O.
-  scheduleTimer = setTimeout(() => void scheduledTick(), INTERVAL_MS);
-  console.log('[acquisition-browser] scheduler wake', new Date().toISOString());
+export async function runAcquisitionBrowserBotTick(force = false) {
+  if (!ENABLED) return;
+  const now = Date.now();
+  if (!force && now - lastTriggeredAt < INTERVAL_MS) return;
+  lastTriggeredAt = now;
+  console.log('[acquisition-browser] scheduler heartbeat', new Date(now).toISOString());
   try {
     await Promise.race([
       tick(),
@@ -859,7 +860,6 @@ export async function startAcquisitionBrowserBot() {
   started = true;
   const db = getDb();
   await ensureSchema(db);
-  if (scheduleTimer) clearTimeout(scheduleTimer);
-  console.log(`[acquisition-browser] ON cap=${DAILY_CAP} interval=${INTERVAL_MS}ms scheduler=recursive`);
-  void scheduledTick();
+  console.log(`[acquisition-browser] ON cap=${DAILY_CAP} interval=${INTERVAL_MS}ms scheduler=engine-heartbeat`);
+  void runAcquisitionBrowserBotTick(true);
 }
