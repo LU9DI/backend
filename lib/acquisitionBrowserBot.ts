@@ -353,10 +353,12 @@ async function inspectContactSurface(base: URL) {
     const hrefs = [...html.matchAll(/(?:href|data-href)=["']([^"']+)["']/gi)].map(m => m[1]);
     let channels = normalizePublicChannels(hrefs.filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\.me|api\.whatsapp\.com|whatsapp\.com\/send)/i.test(h)));
     const contactLinks = hrefs
-      .filter(h => contactPattern.test(h))
-      .map(h => { try { return new URL(h, base).toString(); } catch { return ''; } })
-      .filter(Boolean)
-      .filter(h => { try { return new URL(h).origin === base.origin; } catch { return false; } })
+      .map(h => { try { return new URL(h, base); } catch { return null; } })
+      .filter((u): u is URL => !!u)
+      .filter(u => u.origin === base.origin)
+      .filter(u => !/[.](?:css|js|map|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|eot)(?:$|[?#])/i.test(u.pathname))
+      .filter(u => contactPattern.test(u.pathname) || contactPattern.test(u.search))
+      .map(u => u.toString())
       .slice(0, 2);
 
     // Discover channels from the contact page with a cheap static fetch before
@@ -797,7 +799,6 @@ async function processLead(db: any, lead: any) {
   console.log('[acquisition-browser] start', lead.id, lead.nome_empresa || '');
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20_000);
     let result: any;
     try {
       result = await Promise.race([
@@ -807,13 +808,8 @@ async function processLead(db: any, lead: any) {
           reject(new Error('browser_timeout_25s'));
         }, 25_000)),
       ]);
-    } catch (e: any) {
-      if (controller.signal.aborted && !String(e?.message || e || '').includes('browser_timeout_20s')) {
-        throw new Error('browser_timeout_20s');
-      }
-      throw e;
     } finally {
-      clearTimeout(timeout);
+      controller.abort();
     }
     const serialized = JSON.stringify(result).slice(0, 5000);
     if (result?.status === 'submitted_unconfirmed') {
