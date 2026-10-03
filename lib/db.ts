@@ -28,6 +28,22 @@ export function dbEngine(): 'sqlite' | 'postgres' {
   return _engine;
 }
 
+export async function withDbTransaction<T>(fn: (tx: Database) => Promise<T>): Promise<T> {
+  const db: any = getDb();
+  if (typeof db.transaction === 'function') {
+    return db.transaction(async (tx: any) => fn(tx as Database));
+  }
+  await db.exec('BEGIN');
+  try {
+    const result = await fn(db as Database);
+    await db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    try { await db.exec('ROLLBACK'); } catch {}
+    throw error;
+  }
+}
+
 export async function closeDB(): Promise<void> {
   const db = _db as any;
   _db = null;
