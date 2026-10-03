@@ -74,6 +74,7 @@ export async function runDueDotMonitors() {
     );
     let processed = 0;
     let skipped = 0;
+    let due = 0;
     let companyErrors = 0;
     let eventsCreated = 0;
     let decisionsCreated = 0;
@@ -93,6 +94,7 @@ export async function runDueDotMonitors() {
       const last = company.dot_monitor_last_at ? new Date(company.dot_monitor_last_at).getTime() : 0;
       const due = !last || Date.now() - last >= p.checkIntervalMinutes * 60_000;
       if (!due) { skipped++; continue; }
+      due++;
       try {
         const result = await runDotMonitor(company.id);
         await db.run('UPDATE empresas SET dot_monitor_last_at = ? WHERE id = ?', [new Date().toISOString(), company.id]);
@@ -120,6 +122,8 @@ export async function runDueDotMonitors() {
     schedulerStatus.actions_prepared = actionsPrepared;
 
     console.log('[dot-scheduler] rodada concluída', {
+      eligible_companies: companies?.length || 0,
+      due,
       processed,
       skipped,
       errors: companyErrors,
