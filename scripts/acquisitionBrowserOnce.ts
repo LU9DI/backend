@@ -2,21 +2,27 @@ import 'dotenv/config';
 
 console.log('[acquisition-browser] isolated entry pid=' + process.pid + ' child=' + String(process.env.ACQUISITION_BROWSER_CHILD || ''));
 
-async function main() {
-  console.log('[acquisition-browser] isolated importing browser module');
-  const mod = await Promise.race([
-    import('../lib/acquisitionBrowserBot.ts'),
+async function timedImport(label: string, loader: () => Promise<any>) {
+  console.log('[acquisition-browser] import start ' + label);
+  const result = await Promise.race([
+    loader(),
     new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('isolated_worker_import_timeout_15s')), 15_000)
+      setTimeout(() => reject(new Error('isolated_import_timeout_' + label)), 10_000)
     ),
   ]);
-  console.log('[acquisition-browser] isolated browser module imported');
-  await mod.runAcquisitionBrowserBotTick(true);
+  console.log('[acquisition-browser] import done ' + label);
+  return result;
+}
+
+async function main() {
+  await timedImport('puppeteer', () => import('puppeteer-core'));
+  await timedImport('db', () => import('../lib/db.ts'));
+  await timedImport('browser', () => import('../lib/acquisitionBrowserBot.ts'));
 }
 
 main()
   .then(() => {
-    console.log('[acquisition-browser] isolated entry complete pid=' + process.pid);
+    console.log('[acquisition-browser] isolated imports complete pid=' + process.pid);
     setTimeout(() => process.exit(0), 50);
   })
   .catch((error) => {
