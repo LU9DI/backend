@@ -48,6 +48,8 @@ import { mountAdminPasswordResetRoutes } from './adminPasswordReset.js';
 import { mountMfaRoutes } from './mfa.js';
 import { mountStripeRoutes } from './stripeRoutes.js';
 import { mountFiscalRoutes } from './routes/fiscalRoutes.js';
+import { mountDotRoutes } from './routes/dotRoutes.js';
+import { startDotMonitorScheduler } from './services/dotScheduler.js';
 import { mcpApp } from './filtraMcp.js';
 import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
 import { paypalConfigured } from './lib/paypal.js';
@@ -261,6 +263,7 @@ async function main() {
     await runMigration();
   }
   await initDB();
+  startDotMonitorScheduler();
   try {
     await ensureUnidadesSchema(getDb());
   } catch (e) {
@@ -378,6 +381,7 @@ async function main() {
   mountAcquisitionRoutes(app);
   mountTelegramRoutes(app);
   mountFiscalRoutes(app);
+  mountDotRoutes(app);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
