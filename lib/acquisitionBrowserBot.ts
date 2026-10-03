@@ -205,6 +205,14 @@ async function ensureSchema(db: any) {
     WHERE COALESCE(acquisition_suppressed,0)=0
       AND BTRIM(COALESCE(acquisition_source, fonte, ''))='resend_existing'
       AND acquisition_opted_in_at IS NULL`);
+  await db.run(`UPDATE leads SET acquisition_suppressed=1, acquisition_stage='suppressed', acquisition_next_at=NULL, browser_status='failed', browser_last_result='excluded_public_service'
+    WHERE COALESCE(acquisition_suppressed,0)=0
+      AND acquisition_opted_in_at IS NULL
+      AND acquisition_contact_basis='b2b_public_prospect'
+      AND (
+        COALESCE(nome_empresa,'') ~* '(prefeitura|consulado|embaixada|cart[oó]rio|hospital militar)'
+        OR COALESCE(raw_json::jsonb->'profile'->>'category','') ~* 'government|governmental|embassy|consulate|city_hall|courthouse|police|fire_station|military|public_service|administrative'
+      )`);
 }
 
 async function sentToday(db: any) {
