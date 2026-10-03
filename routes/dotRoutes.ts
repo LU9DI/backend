@@ -186,6 +186,22 @@ export function mountDotRoutes(app: Express) {
     });
   });
 
+  // Gate operacional global: fora do localhost demo, nenhuma rota DOT além do status
+  // fica utilizável quando o recurso não está explicitamente habilitado em produção.
+  app.use('/api/dot', (req: Request, res: Response, next) => {
+    if (req.path === '/status') return next();
+    const featureEnabled =
+      process.env.NODE_ENV !== 'production' || process.env.FILTRA_DOT_ENABLED === '1';
+    if (!featureEnabled) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Filtra Dot ainda não está habilitado.',
+        code: 'DOT_FEATURE_DISABLED',
+      });
+    }
+    return next();
+  });
+
   app.get('/api/dot/preferences', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
     if (!access.allowed || !access.empresaId) return deny(res, access);
