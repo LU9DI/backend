@@ -264,7 +264,6 @@ async function main() {
     await runMigration();
   }
   await initDB();
-  startDotMonitorScheduler();
   try {
     await ensureUnidadesSchema(getDb());
   } catch (e) {
@@ -396,6 +395,7 @@ async function main() {
 
   server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 API Filtra.IA em http://0.0.0.0:${PORT}`);
+    startDotMonitorScheduler();
   });
   server.keepAliveTimeout = 65_000;
   server.headersTimeout = 66_000;
