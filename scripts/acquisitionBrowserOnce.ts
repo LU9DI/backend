@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import crypto from 'node:crypto';
 
 console.log('[acquisition-browser] isolated entry pid=' + process.pid + ' child=' + String(process.env.ACQUISITION_BROWSER_CHILD || ''));
 
@@ -26,7 +27,7 @@ async function main() {
     failed INTEGER NOT NULL DEFAULT 0,
     pending INTEGER NOT NULL DEFAULT 0,
     error TEXT
-  )`);
+  `);
 
   const lock = await db.run(`INSERT INTO acquisition_browser_worker_lock (id, locked_at)
     VALUES (1, CURRENT_TIMESTAMP)
