@@ -329,7 +329,7 @@ export async function queueEligibleAcquisition(limit = 25) {
        WHERE acquisition_eligible=1
          AND COALESCE(acquisition_suppressed,0)=0
          AND email IS NOT NULL AND TRIM(email)!=''
-         AND (acquisition_opted_in_at IS NOT NULL OR acquisition_contact_basis = 'b2b_public_prospect')
+         AND acquisition_opted_in_at IS NOT NULL
          AND (acquisition_next_at IS NULL OR acquisition_next_at <= ?)
          AND acquisition_stage IN ('eligible','ready','followup')
        ORDER BY COALESCE(acquisition_next_at, criado_em) ASC
@@ -339,10 +339,9 @@ export async function queueEligibleAcquisition(limit = 25) {
     const institutional = (candidates || []).filter((lead: any) => isInstitutionalLead(lead));
     const general = (candidates || []).filter((lead: any) => !isInstitutionalLead(lead));
     const institutionalTake = Math.min(take, institutionalRemaining);
-    // acquisition_eligible identifies a prospecting candidate.
-    // Resend marketing sends require explicit opt-in, so the email queue
-    // must also require acquisition_opted_in_at. Prospect discovery can
-    // continue independently through non-email channels.
+    // Email acquisition is permission-based. Public prospect discovery is
+    // handled independently by the browser/manual-channel path and is never
+    // promoted into the email queue without explicit marketing opt-in.
     const leads = [
       ...institutional.slice(0, institutionalTake),
       ...general.slice(0, take - institutionalTake)
@@ -453,9 +452,8 @@ export async function processAcquisitionEmail(sendId: string) {
       [`reputation_pause:${reputation.reason}`, sendId]);
     throw new Error(`Envio pausado por reputação: ${reputation.reason}`);
   }
-  const b2bPublicProspect = String(send.acquisition_contact_basis || '') === 'b2b_public_prospect';
   const hasMarketingOptIn = Boolean(send.acquisition_opted_in_at);
-  if (Number(send.acquisition_eligible) !== 1 || Number(send.acquisition_suppressed || 0) === 1 || (!hasMarketingOptIn && !b2bPublicProspect)) {
+  if (Number(send.acquisition_eligible) !== 1 || Number(send.acquisition_suppressed || 0) === 1 || !hasMarketingOptIn) {
     await db.run(`UPDATE acquisition_sends SET status='failed',failed_at=CURRENT_TIMESTAMP,last_error='lead não elegível/suprimido/sem base de contato',updated_at=CURRENT_TIMESTAMP WHERE id=?`, [sendId]);
     return;
   }
