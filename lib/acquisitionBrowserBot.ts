@@ -863,9 +863,9 @@ export async function runAcquisitionBrowserBotTick(force = false) {
       stdio: 'inherit',
     });
     const watchdog = setTimeout(() => {
-      console.error('[acquisition-browser] worker timeout; killing child', { pid: child.pid, timeout_ms: 110000 });
+      console.error('[acquisition-browser] worker timeout; killing child', { pid: child.pid, timeout_ms: 180000 });
       try { child.kill('SIGKILL'); } catch {}
-    }, 110000);
+    }, 180000);
     console.log('[acquisition-browser] spawned isolated worker pid=' + String(child.pid || 'unknown'));
     child.on('error', (e) => {
       clearTimeout(watchdog);
@@ -882,7 +882,7 @@ export async function runAcquisitionBrowserBotTick(force = false) {
   try {
     await Promise.race([
       tick(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('tick_timeout_90s')), 90_000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('tick_timeout_180s')), 180_000)),
     ]);
     console.log('[acquisition-browser] worker cycle complete');
   } catch (e: any) {
