@@ -271,10 +271,14 @@ export function mountDotRoutes(app: Express) {
     res.json({ ok: true, decisions });
   });
 
-  app.post('/api/dot/decisions/:id/:action', async (req: Request, res: Response) => {
+  app.post('/api/dot/decisions/:id/:action', async (req: Request, res: Response, next) => {
+    // "prepare-action" possui uma rota específica logo abaixo. Não deixe
+    // esta rota genérica capturá-la antes do handler correto.
+    const action = String(req.params.action);
+    if (action === 'prepare-action') return next();
+
     const access = await resolveDotAccess(req);
     if (!access.allowed || !access.empresaId) return deny(res, access);
-    const action = String(req.params.action);
     // Aprovação de uma ação só pode ocorrer pela fila de ações, que exige
     // uma ação preparada e aplica a transação atômica decisão + ação.
     if (!['prepare', 'reject'].includes(action)) {
