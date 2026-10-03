@@ -11,7 +11,8 @@ const require = createRequire(import.meta.url);
 const ENABLED = process.env.ACQUISITION_BROWSER_BOT === '1';
 const CHILD_MODE = process.env.ACQUISITION_BROWSER_CHILD === '1';
 const INTERVAL_MS = Math.max(60_000, Number(process.env.ACQUISITION_BROWSER_INTERVAL_MS || 300_000));
-const DAILY_CAP = Math.max(1, Math.min(30, Number(process.env.ACQUISITION_BROWSER_DAILY_CAP || 10)));
+const DAILY_CAP = Math.max(1, Math.min(80, Number(process.env.ACQUISITION_BROWSER_DAILY_CAP || 80)));
+const CYCLE_CAP = Math.max(1, Math.min(10, Number(process.env.ACQUISITION_BROWSER_CYCLE_CAP || 10)));
 const CONCURRENCY = Math.max(1, Math.min(2, Number(process.env.ACQUISITION_BROWSER_CONCURRENCY || 1)));
 const MAX_ATTEMPTS = 2;
 let started = false;
@@ -34,8 +35,9 @@ function normalizePublicPhones(values: string[]) {
     if (/\b(?:cep|zip|postal|c[oó]digo|code|id|cnpj|cpf)\b/i.test(value)) continue;
     const national = digits.length === 11 && /^[1-9][1-9][6-9]\d{8}$/.test(digits);
     const landline = digits.length === 10 && /^[1-9][1-9][2-5]\d{7}$/.test(digits);
-    const international = digits.length >= 12 && digits.length <= 15 && /^(?:55|1|2|3|4|5|6|7|8|9)/.test(digits);
-    if (!national && !landline && !international) continue;
+    const brazilMobile = digits.length === 13 && digits.startsWith('55') && /^55[1-9][1-9][6-9]\d{8}$/.test(digits);
+    const brazilLandline = digits.length === 12 && digits.startsWith('55') && /^55[1-9][1-9][2-5]\d{7}$/.test(digits);
+    if (!national && !landline && !brazilMobile && !brazilLandline) continue;
     const key = digits.replace(/^00/, '+');
     if (seen.has(key)) continue;
     seen.add(key);
@@ -57,11 +59,17 @@ function normalizePublicChannels(values: string[]) {
       if (/^(?:wa\.me|api\.whatsapp\.com|web\.whatsapp\.com)$/i.test(u.hostname)) {
         const phone = u.searchParams.get('phone') || u.pathname.replace(/^\/+/, '');
         const digits = phone.replace(/\D/g, '');
-        if (digits.length < 10 || digits.length > 15) continue;
+        const brazil = (digits.length === 10 || digits.length === 11) ||
+          (digits.length === 12 && /^55[1-9][1-9][2-5]\d{7}$/.test(digits)) ||
+          (digits.length === 13 && /^55[1-9][1-9][6-9]\d{8}$/.test(digits));
+        if (!brazil) continue;
         key = 'whatsapp:' + digits;
       } else if (/^tel:/i.test(value)) {
         const digits = value.replace(/\D/g, '');
-        if (digits.length < 8 || digits.length > 15) continue;
+        const brazil = (digits.length === 10 || digits.length === 11) ||
+          (digits.length === 12 && /^55[1-9][1-9][2-5]\d{7}$/.test(digits)) ||
+          (digits.length === 13 && /^55[1-9][1-9][6-9]\d{8}$/.test(digits));
+        if (!brazil) continue;
         key = 'tel:' + digits;
       } else if (/^mailto:/i.test(value)) {
         key = 'mailto:' + value.slice(7).split('?')[0].trim().toLowerCase();
@@ -435,9 +443,9 @@ async function runOne(lead: any, signal?: AbortSignal) {
   // Probe the rendered source cheaply before spending a Chromium cycle. This
   // never submits a form; it only identifies whether a contact surface exists.
   const surface = await inspectContactSurface(reachableBase);
-  if (surface.kind === 'manual_channel' && surface.channels.length) {
-    throw new Error(JSON.stringify(channelPayload(surface.channels, [])));
-  }
+  // Public channels are discovery evidence, not the end of acquisition.
+  // Continue into the browser contact flow so a first-party form can be used
+  // when the homepage exposes only a phone/WhatsApp/email link.
   if (surface.kind === 'none') throw new Error('site_no_contact_surface');
   if (surface.kind === 'captcha') throw new Error('captcha_requer_intervencao');
 
@@ -510,10 +518,8 @@ async function runOne(lead: any, signal?: AbortSignal) {
     // no explicit contact-page link, preserve it immediately. Do not waste the
     // browser budget guessing URLs such as /contact on sites that do not expose
     // them. The channel is an actionable contact path for manual follow-up.
-    if (!contactLinks.length && homepageChannelPayload) {
-      throw new Error(JSON.stringify(homepageChannelPayload));
-    }
-
+    // Do not stop at a discovered public channel. Try the site's own contact
+    // paths first; only fall back to manual_channel when no safe form exists.
     const guessedPaths = lang === 'pt' ? ['/contato','/fale-conosco'] : lang === 'es' ? ['/contacto','/contact'] : lang === 'fr' ? ['/contact','/contacts'] : ['/contact','/contact-us'];
     for (const path of guessedPaths) {
       try {
@@ -793,10 +799,10 @@ async function tick() {
       return;
     }
     const selection = await selectionDiagnostics(db);
-    const batchSize = Math.max(1, Math.min(DAILY_CAP - used, Math.max(CONCURRENCY * 5, 5)));
+    const batchSize = Math.max(1, Math.min(DAILY_CAP - used, CYCLE_CAP));
     const candidates = await getCandidates(db, batchSize);
     const queue = candidates.slice(0, DAILY_CAP - used);
-    console.log('[acquisition-browser] tick', JSON.stringify({ used, selection, candidates: candidates.length, selected: queue.length, cap: DAILY_CAP, concurrency: CONCURRENCY, reason: queue.length ? 'processing' : 'no_candidates', metrics: await queueMetrics(db) }));
+    console.log('[acquisition-browser] tick', JSON.stringify({ used, selection, candidates: candidates.length, selected: queue.length, daily_cap: DAILY_CAP, cycle_cap: CYCLE_CAP, concurrency: CONCURRENCY, reason: queue.length ? 'processing' : 'no_candidates', metrics: await queueMetrics(db) }));
     for (let i = 0; i < queue.length; i += CONCURRENCY) {
       await Promise.all(queue.slice(i, i + CONCURRENCY).map((lead) => processLead(db, lead)));
     }
