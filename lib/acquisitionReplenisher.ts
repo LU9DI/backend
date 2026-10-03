@@ -305,17 +305,24 @@ function providerOrder() {
     .split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
 }
 
-async function providerRequest() {
+async function providerRequest(db: any) {
   const errors: string[] = [];
   for (const provider of providerOrder()) {
     try {
       if (provider === 'osm') {
         const result = await openStreetMapProvider(BATCH_SIZE);
-        if (result.leads.length) {
-          console.log('[acquisition-replenisher] provider=osm leads=' + result.leads.length);
-          return result;
+        const fresh: any[] = [];
+        for (const lead of result.leads) {
+          const email = clean(lead?.email, 320).toLowerCase();
+          if (!validEmail(email)) continue;
+          const exists = await db.get('SELECT id FROM leads WHERE LOWER(email)=? LIMIT 1', [email]);
+          if (!exists) fresh.push(lead);
         }
-        errors.push('osm: sem emails encontrados');
+        if (fresh.length) {
+          console.log('[acquisition-replenisher] provider=osm fresh=' + fresh.length + ' returned=' + result.leads.length);
+          return { leads: fresh };
+        }
+        errors.push('osm: somente leads já existentes');
       } else if (provider === 'google_places') {
         const result = await googlePlacesLeads(BATCH_SIZE);
         if (result.leads.length) {
@@ -382,7 +389,7 @@ export async function replenishAcquisitionStock(force = false) {
     const stock = Number(row?.c || 0);
     if (!force && stock >= MIN_STOCK) return { imported: 0, skipped: 0, reason: 'stock_ok', stock, min_stock: MIN_STOCK };
 
-    const result = await providerRequest();
+    const result = await providerRequest(db);
     let imported = 0, skipped = 0;
     for (const lead of result.leads) {
       const email = clean(lead?.email, 320).toLowerCase();
