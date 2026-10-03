@@ -848,7 +848,7 @@ async function processLead(db: any, lead: any) {
     const error = clean(channelPayloadParsed ? JSON.stringify(channelPayloadParsed) : rawError, 5000);
     const channelFound = channelPayloadParsed?.reason === 'manual_channel_available';
     const retryHours = /site_http_404|site_http_410|ERR_NAME_NOT_RESOLVED|site_private_or_unresolvable_host|site_no_contact_surface|site_no_outreach_notice|site_non_html|captcha_requer_intervencao/i.test(error) ? 72
-      : /site_preflight_timeout|site_static_timeout|browser_timeout_20s/i.test(error) ? 12
+      : /site_preflight_timeout|site_static_timeout|browser_timeout_20s|browser_timeout_25s/i.test(error) ? 12
       : 6;
     const nextStatus = channelFound ? 'channel_found' : (Number(lead.browser_attempts || 0) + 1 >= MAX_ATTEMPTS ? 'failed' : 'pending');
     await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=?,browser_channel_data=?,browser_status=?,browser_next_at=CASE WHEN ? THEN NULL ELSE CURRENT_TIMESTAMP + INTERVAL '${retryHours} hours' END,acquisition_stage=CASE WHEN ? THEN 'manual_channel' ELSE acquisition_stage END WHERE id=?`,
