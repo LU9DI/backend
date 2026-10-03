@@ -615,7 +615,7 @@ export function mountDotRoutes(app: Express) {
     } catch (error: any) {
       console.error('[Filtra Dot]', error?.message || error);
       return res.status(503).json({
-        error: 'O Filtra Dot está sem um provedor de IA disponível no localhost.',
+        error: 'O Filtra Dot está temporariamente indisponível. Nenhum provedor de IA respondeu.',
         detail: process.env.NODE_ENV === 'production' ? undefined : String(error?.message || error),
       });
     }
