@@ -389,6 +389,7 @@ async function main() {
   mountTelegramRoutes(app);
   mountFiscalRoutes(app);
   mountDotRoutes(app);
+  console.log('🤖 Filtra Dot routes montadas');
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
