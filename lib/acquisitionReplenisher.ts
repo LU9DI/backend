@@ -11,6 +11,7 @@ const FULLENRICH_BASE = 'https://app.fullenrich.com/api/v2';
 let running = false;
 let started = false;
 let fullEnrichCooldownUntil = 0;
+let googlePlacesCooldownUntil = 0;
 
 const clean = (v: unknown, n = 5000) => String(v ?? '').trim().slice(0, n);
 const validEmail = (v: unknown) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean(v, 320));
@@ -235,8 +236,8 @@ async function osmWebsiteEmails(url: string) {
     return [...found].slice(0, 5);
   } catch { return []; }
 }
-async function openStreetMapProvider(limit: number) {
-  const target = Math.min(200, Math.max(1, limit));
+async function openStreetMapProvider(limit: number, existingEmails = new Set<string>()) {
+  const target = Math.min(100, Math.max(1, limit));
   const elements: any[] = [];
   for (const city of OSM_CITIES) {
     try {
@@ -260,7 +261,7 @@ async function openStreetMapProvider(limit: number) {
         if (tags?.name && relevant && !excludedOffice && (osmWebsite(tags) || osmEmail(tags))) elements.push({ element, city });
       }
       console.log(`[acquisition-osm] city=${city[0]} elements=${data?.elements?.length || 0}`);
-      if (elements.length >= target * 3) break;
+      if (elements.length >= target * 8) break;
     } catch (error: any) {
       console.warn(`[acquisition-osm] city=${city[0]} failed:`, error?.message || error);
     }
@@ -273,20 +274,20 @@ async function openStreetMapProvider(limit: number) {
         +(osmWebsite(t)?3:0)+(osmEmail(t)?10:0);
     };
     return score(b)-score(a);
-  }).slice(0,target*2);
+  }).slice(0,target*4);
   const leads:any[]=[]; const seen=new Set<string>();
-  const direct = ranked.filter(({element}: any) => Boolean(osmEmail(element?.tags || {}))).slice(0, target);
-  const website = ranked.filter(({element}: any) => !osmEmail(element?.tags || {}) && Boolean(osmWebsite(element?.tags || {}))).slice(0, 24);
+  const direct = ranked.filter(({element}: any) => { const email=osmEmail(element?.tags || {}); return Boolean(email) && !existingEmails.has(email); }).slice(0, target);
+  const website = ranked.filter(({element}: any) => !osmEmail(element?.tags || {}) && Boolean(osmWebsite(element?.tags || {}))).slice(0, 48);
   const candidates = [...direct, ...website];
   for(let i=0;i<candidates.length && leads.length<target;i+=8){
     const results=await Promise.all(candidates.slice(i,i+8).map(async ({element,city})=>{
       const t=element?.tags||{}; let emails:string[]=[];
-      const direct=osmEmail(t); if(direct) emails=[direct];
-      else if(osmWebsite(t)) emails=await osmWebsiteEmails(osmWebsite(t));
+      const direct=osmEmail(t); if(direct && !existingEmails.has(direct)) emails=[direct];
+      else if(!direct && osmWebsite(t)) emails=await osmWebsiteEmails(osmWebsite(t));
       return {element,city,emails};
     }));
     for(const {element,city,emails} of results) for(const email of emails){
-      if(seen.has(email)) continue; seen.add(email);
+      if(seen.has(email) || existingEmails.has(email)) continue; seen.add(email);
       const t=element?.tags||{}, website=osmWebsite(t);
       leads.push({
         id:`osm-${crypto.createHash('sha256').update(email).digest('hex').slice(0,32)}`,
@@ -313,21 +314,42 @@ async function providerRequest(db: any) {
   for (const provider of providerOrder()) {
     try {
       if (provider === 'osm') {
-        const result = await openStreetMapProvider(BATCH_SIZE);
+        const existingRows = await db.all("SELECT LOWER(email) AS email FROM leads WHERE email IS NOT NULL AND TRIM(email)!=''");
+        const existingEmails = new Set<string>((Array.isArray(existingRows) ? existingRows : []).map((row: any) => clean(row?.email, 320).toLowerCase()).filter(validEmail));
+        const result = await openStreetMapProvider(Math.min(BATCH_SIZE, 100), existingEmails);
         const fresh: any[] = [];
         for (const lead of result.leads) {
           const email = clean(lead?.email, 320).toLowerCase();
-          if (!validEmail(email)) continue;
-          const exists = await db.get('SELECT id FROM leads WHERE LOWER(email)=? LIMIT 1', [email]);
-          if (!exists) fresh.push(lead);
+          if (!validEmail(email) || existingEmails.has(email)) continue;
+          fresh.push(lead);
         }
         if (fresh.length) {
           console.log('[acquisition-replenisher] provider=osm fresh=' + fresh.length + ' returned=' + result.leads.length);
           return { leads: fresh };
         }
-        errors.push('osm: somente leads já existentes');
+        errors.push('osm: nenhum lead novo encontrado');
       } else if (provider === 'google_places') {
-        const result = await googlePlacesLeads(BATCH_SIZE);
+        if (Date.now() < googlePlacesCooldownUntil) {
+          errors.push('google_places: cooldown por quota');
+          continue;
+        }
+        try {
+          const result = await googlePlacesLeads(BATCH_SIZE);
+          if (result.leads.length) {
+            console.log('[acquisition-replenisher] provider=google_places leads=' + result.leads.length);
+            return result;
+          }
+          errors.push('google_places: sem emails encontrados');
+        } catch (error: any) {
+          const message = clean(error?.message || error, 500);
+          if (/HTTP 429|quota|rate limit|RESOURCE_EXHAUSTED/i.test(message)) {
+            googlePlacesCooldownUntil = Date.now() + 6 * 60 * 60 * 1000;
+            console.warn('[acquisition-replenisher] provider=google_places quota atingida; cooldown de 6h');
+          } else {
+            console.warn('[acquisition-replenisher] provider=google_places falhou:', message);
+          }
+          errors.push('google_places: ' + message);
+        }
         if (result.leads.length) {
           console.log('[acquisition-replenisher] provider=google_places leads=' + result.leads.length);
           return result;
