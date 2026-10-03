@@ -164,11 +164,12 @@ function deny(res: Response, access: DotAccess) {
 export function mountDotRoutes(app: Express) {
   app.get('/api/dot/status', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
+    const featureEnabled =
+      process.env.NODE_ENV !== 'production' || process.env.FILTRA_DOT_ENABLED === '1';
     res.json({
       ok: true,
-      enabled:
-        access.allowed &&
-        (process.env.NODE_ENV !== 'production' || process.env.FILTRA_DOT_ENABLED === '1'),
+      feature_enabled: featureEnabled,
+      enabled: access.allowed && featureEnabled,
       access: access.allowed,
       demo: access.demo,
       plan: access.plan || 'rei',
