@@ -427,9 +427,15 @@ async function runOne(lead: any, signal?: AbortSignal) {
   browser = await puppeteer.launch({
     headless: true,
     executablePath: process.env.CHROMIUM_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-    timeout: 4_000,
+    timeout: 12_000,
     signal,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--font-render-hinting=none',
+    ],
   });
 
   try {
