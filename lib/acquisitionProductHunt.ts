@@ -151,8 +151,8 @@ async function upsertPost(post: ProductHuntPost): Promise<boolean> {
       nome_empresa, email, telefone, score, qualification, ai_reason,
       fonte, maps_url, raw_json, criado_em, crm_status,
       acquisition_eligible, acquisition_suppressed, acquisition_stage,
-      acquisition_source, acquisition_segment
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 'pending', 1, 0, 'eligible', ?, ?)`,
+      acquisition_source, acquisition_segment, acquisition_contact_basis
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 'pending', 1, 0, 'eligible', ?, ?, 'b2b_public_prospect')`,
     [
       company,
       websiteInfo.emails[0] || null,
