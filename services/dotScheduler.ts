@@ -81,7 +81,7 @@ export async function runDueDotMonitors() {
     const results = [];
 
     const followUpResults = await monitorDueDotFollowUps();
-    let followupsProcessed = followUpResults.length;
+    const followupsProcessed = followUpResults.length;
     for (const followup of followUpResults) {
       eventsCreated += followup?.reassessment?.event_id ? 1 : 0;
       decisionsCreated += Array.isArray(followup?.decisions) ? followup.decisions.length : 0;
@@ -119,11 +119,26 @@ export async function runDueDotMonitors() {
     schedulerStatus.decisions_created = decisionsCreated;
     schedulerStatus.actions_prepared = actionsPrepared;
 
+    console.log('[dot-scheduler] rodada concluída', {
+      processed,
+      skipped,
+      errors: companyErrors,
+      followups: followupsProcessed,
+      events: eventsCreated,
+      decisions: decisionsCreated,
+      actions_prepared: actionsPrepared,
+      duration_ms: schedulerStatus.duration_ms,
+    });
+
     return { ok: true, processed, skipped, results, followups: followUpResults };
   } catch (error: any) {
     schedulerStatus.last_error_at = new Date().toISOString();
     schedulerStatus.last_error = String(error?.message || error).slice(0, 500);
     schedulerStatus.duration_ms = Date.now() - startedMs;
+    console.warn('[dot-scheduler] rodada falhou', {
+      error: schedulerStatus.last_error,
+      duration_ms: schedulerStatus.duration_ms,
+    });
     throw error;
   } finally {
     schedulerStatus.running = false;
