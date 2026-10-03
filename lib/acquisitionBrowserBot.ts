@@ -834,16 +834,19 @@ async function processLead(db: any, lead: any) {
 }
 
 async function scheduledTick() {
+  // Schedule the next wake-up independently of the current browser cycle.
+  // This guarantees a new attempt even if one cycle gets stuck in I/O.
+  scheduleTimer = setTimeout(() => void scheduledTick(), INTERVAL_MS);
+  console.log('[acquisition-browser] scheduler wake', new Date().toISOString());
   try {
     await Promise.race([
       tick(),
       new Promise((_, reject) => setTimeout(() => reject(new Error('tick_timeout_90s')), 90_000)),
     ]);
+    console.log('[acquisition-browser] scheduler cycle complete');
   } catch (e: any) {
     running = false;
     console.error('[acquisition-browser] tick failed:', e?.message || e);
-  } finally {
-    scheduleTimer = setTimeout(() => void scheduledTick(), INTERVAL_MS);
   }
 }
 
