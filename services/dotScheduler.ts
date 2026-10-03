@@ -100,8 +100,9 @@ export async function runDueDotMonitors() {
     for (const company of companies || []) {
       const p = await getDotPreferences(company.id);
       const last = company.dot_monitor_last_at ? new Date(company.dot_monitor_last_at).getTime() : 0;
-      const due = !last || Date.now() - last >= p.checkIntervalMinutes * 60_000;
-      if (!due) { skipped++; continue; }
+      const intervalMs = p.checkIntervalMinutes * 60_000;
+      const isDue = !last || Date.now() - last >= intervalMs;
+      if (!isDue) { skipped++; continue; }
       due++;
       try {
         const result = await runDotMonitor(company.id);
