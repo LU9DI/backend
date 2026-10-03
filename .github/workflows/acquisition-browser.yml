@@ -2,7 +2,7 @@ name: Filtra acquisition browser
 
 on:
   schedule:
-    - cron: "2,17,32,47 * * * *"
+    - cron: "3,18,33,48 * * * *"
   workflow_dispatch:
 
 jobs:
