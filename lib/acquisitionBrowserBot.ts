@@ -29,9 +29,13 @@ function normalizePublicPhones(values: string[]) {
   for (const raw of values) {
     const value = clean(raw, 160).replace(/\s+/g, ' ').trim();
     const digits = value.replace(/\D/g, '');
-    if (digits.length < 8 || digits.length > 15) continue;
+    if (digits.length < 10 || digits.length > 15) continue;
     if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)) continue;
     if (/\b(?:cep|zip|postal|c[oó]digo|code|id|cnpj|cpf)\b/i.test(value)) continue;
+    const national = digits.length === 11 && /^[1-9][1-9][6-9]\d{8}$/.test(digits);
+    const landline = digits.length === 10 && /^[1-9][1-9][2-5]\d{7}$/.test(digits);
+    const international = digits.length >= 12 && digits.length <= 15 && /^(?:55|1|2|3|4|5|6|7|8|9)/.test(digits);
+    if (!national && !landline && !international) continue;
     const key = digits.replace(/^00/, '+');
     if (seen.has(key)) continue;
     seen.add(key);
