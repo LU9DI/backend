@@ -1,10 +1,13 @@
 import crypto from 'crypto';
+import { spawn } from 'node:child_process';
+import path from 'node:path';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import puppeteer from 'puppeteer-core';
 import { getDb } from './db.js';
 
 const ENABLED = process.env.ACQUISITION_BROWSER_BOT === '1';
+const CHILD_MODE = process.env.ACQUISITION_BROWSER_CHILD === '1';
 const INTERVAL_MS = Math.max(60_000, Number(process.env.ACQUISITION_BROWSER_INTERVAL_MS || 300_000));
 const DAILY_CAP = Math.max(1, Math.min(30, Number(process.env.ACQUISITION_BROWSER_DAILY_CAP || 10)));
 const CONCURRENCY = Math.max(1, Math.min(2, Number(process.env.ACQUISITION_BROWSER_CONCURRENCY || 1)));
@@ -838,16 +841,30 @@ export async function runAcquisitionBrowserBotTick(force = false) {
   const now = Date.now();
   if (!force && now - lastTriggeredAt < INTERVAL_MS) return;
   lastTriggeredAt = now;
-  console.log('[acquisition-browser] scheduler heartbeat', new Date(now).toISOString());
+
+  if (!CHILD_MODE) {
+    const script = path.join(process.cwd(), 'scripts', 'acquisitionBrowserOnce.ts');
+    const tsx = path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    const child = spawn(process.execPath, [tsx, script], {
+      env: { ...process.env, ACQUISITION_BROWSER_BOT: '1', ACQUISITION_BROWSER_CHILD: '1' },
+      stdio: 'inherit',
+    });
+    console.log('[acquisition-browser] spawned isolated worker pid=' + String(child.pid || 'unknown'));
+    child.on('error', (e) => console.error('[acquisition-browser] worker spawn failed:', e?.message || e));
+    child.on('exit', (code, signal) => console.log('[acquisition-browser] worker exit', { code, signal }));
+    return;
+  }
+
+  console.log('[acquisition-browser] worker heartbeat', new Date(now).toISOString());
   try {
     await Promise.race([
       tick(),
       new Promise((_, reject) => setTimeout(() => reject(new Error('tick_timeout_90s')), 90_000)),
     ]);
-    console.log('[acquisition-browser] scheduler cycle complete');
+    console.log('[acquisition-browser] worker cycle complete');
   } catch (e: any) {
     running = false;
-    console.error('[acquisition-browser] tick failed:', e?.message || e);
+    console.error('[acquisition-browser] worker tick failed:', e?.message || e);
   }
 }
 
