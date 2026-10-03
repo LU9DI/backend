@@ -220,14 +220,16 @@ export function mountDotRoutes(app: Express) {
       plan: access.plan || null,
       plan_label: access.planLabel || null,
       priority_access: ['rei', 'corporativo'],
-      scheduler: getDotSchedulerStatus(),
-      capabilities: [
-        'analisar_reputacao',
-        'detectar_padroes',
-        'explicar_tendencias',
-        'preparar_acoes',
-        'memoria_de_conversa',
-      ],
+      scheduler: access.allowed ? getDotSchedulerStatus() : null,
+      capabilities: access.allowed
+        ? [
+            'analisar_reputacao',
+            'detectar_padroes',
+            'explicar_tendencias',
+            'preparar_acoes',
+            'memoria_de_conversa',
+          ]
+        : [],
     });
   });
 
