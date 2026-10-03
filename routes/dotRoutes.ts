@@ -172,8 +172,8 @@ export function mountDotRoutes(app: Express) {
       enabled: access.allowed && featureEnabled,
       access: access.allowed,
       demo: access.demo,
-      plan: access.plan || 'rei',
-      plan_label: access.planLabel || 'Rei',
+      plan: access.plan || null,
+      plan_label: access.planLabel || null,
       priority_access: ['rei', 'corporativo'],
       scheduler: getDotSchedulerStatus(),
       capabilities: [
@@ -580,8 +580,8 @@ export function mountDotRoutes(app: Express) {
         latency_ms: result.latency_ms,
         tokens_used: result.tokens,
         demo: access.demo,
-        plan: access.plan || 'rei',
-        plan_label: access.planLabel || 'Rei',
+        plan: access.plan || null,
+        plan_label: access.planLabel || null,
         session_id: requestedSessionId,
         memory_turns: Math.floor(history.length / 2),
       });
