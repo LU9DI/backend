@@ -896,18 +896,6 @@ export async function startAcquisitionBrowserBot() {
   started = true;
   const db = getDb();
   await ensureSchema(db);
-  console.log(`[acquisition-browser] ON cap=${DAILY_CAP} interval=${INTERVAL_MS}ms scheduler=parent-lightweight`);
-  const scheduleNext = () => {
-    setTimeout(async () => {
-      try {
-        await runAcquisitionBrowserBotTick();
-      } catch (e: any) {
-        console.error('[acquisition-browser] scheduled trigger failed:', e?.message || e);
-      } finally {
-        scheduleNext();
-      }
-    }, INTERVAL_MS);
-  };
-  scheduleNext();
+  console.log(`[acquisition-browser] ON cap=${DAILY_CAP} interval=${INTERVAL_MS}ms scheduler=external-trigger`);
   void runAcquisitionBrowserBotTick(true);
 }
