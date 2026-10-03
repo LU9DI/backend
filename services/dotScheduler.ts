@@ -133,6 +133,10 @@ export async function runDueDotMonitors() {
 
 export function startDotMonitorScheduler() {
   if (timer) return;
+  if (process.env.NODE_ENV === 'production' && process.env.FILTRA_DOT_ENABLED !== '1') {
+    console.log('🤖 Filtra Dot monitor desativado — defina FILTRA_DOT_ENABLED=1 para ativar em produção.');
+    return;
+  }
   const interval = Math.max(60_000, Number(process.env.FILTRA_DOT_MONITOR_TICK_MS || 300_000));
   void runDueDotMonitors().catch((error) => console.warn('Dot scheduler startup:', error?.message || error));
   timer = setInterval(() => {
