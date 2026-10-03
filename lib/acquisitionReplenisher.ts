@@ -187,7 +187,7 @@ async function fullEnrichProvider() {
 }
 
 
-const OSM_URL = clean(process.env.ACQUISITION_OSM_OVERPASS_URL, 2000) || 'https://overpass-api.de/api/interpreter';
+const OSM_URLS = [clean(process.env.ACQUISITION_OSM_OVERPASS_URL, 2000), 'https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter'].filter((value, index, all) => Boolean(value) && all.indexOf(value) === index);
 const OSM_TARGET_TYPES = /(hotel|hostel|guest_house|restaurant|cafe|bar|clinic|doctors|dentist|pharmacy|beauty|hairdresser|car_dealer|car_repair|retail|shop|supermarket|school|college|university|tourism|association|trade_union|chamber|non_profit|office)/i;
 const OSM_EXCLUDED_OFFICES = /^(government|governmental|embassy|consulate|city_hall|courthouse|police|fire_station|military|public_service|administrative)$/i;
 
@@ -241,17 +241,25 @@ async function openStreetMapProvider(limit: number, existingEmails = new Set<str
   const elements: any[] = [];
   for (const city of OSM_CITIES) {
     try {
-      const response = await fetch(OSM_URL, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/x-www-form-urlencoded',
-          'user-agent': 'FiltraAI-Acquisition/1.0 (+https://filtraai.com)',
-        },
-        body: 'data=' + encodeURIComponent(osmQuery(city)),
-        signal: AbortSignal.timeout(75000),
-      });
-      if (!response.ok) throw new Error(`Overpass HTTP ${response.status}`);
-      const data: any = await response.json();
+      let data: any = null;
+      let lastError: unknown = null;
+      for (const endpoint of OSM_URLS) {
+        try {
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+            body: 'data=' + encodeURIComponent(osmQuery(city)),
+            signal: AbortSignal.timeout(75000),
+          });
+          if (!response.ok) throw new Error(`Overpass HTTP ${response.status}`);
+          data = await response.json();
+          break;
+        } catch (error) {
+          lastError = error;
+          console.warn(`[acquisition-osm] city=${city} endpoint=${endpoint} failed:`, error instanceof Error ? error.message : String(error));
+        }
+      }
+      if (!data) throw lastError || new Error('Overpass indisponível');
       for (const element of Array.isArray(data?.elements) ? data.elements : []) {
         const tags = element?.tags || {};
         const category = [tags.office, tags.amenity, tags.tourism, tags.shop, tags.healthcare, tags.craft, tags.leisure].filter(Boolean).join(' ');
