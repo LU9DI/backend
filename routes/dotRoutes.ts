@@ -101,13 +101,18 @@ function buildConversation(context: string, history: ChatItem[], message: string
 }
 
 async function resolveDotAccess(req: Request): Promise<DotAccess> {
+  // No ambiente local, o protótipo demo deve funcionar de forma determinística
+  // em loopback, mesmo que o cliente tenha um cookie/token residual.
+  const isLocalDemo =
+    process.env.NODE_ENV !== 'production' &&
+    (req.hostname === '127.0.0.1' || req.hostname === 'localhost');
+  if (isLocalDemo) {
+    return { allowed: true, demo: true, plan: 'rei', planLabel: 'Rei' };
+  }
+
   const token = extrairToken(req);
 
-  // Localhost continua permitindo o protótipo demonstrativo sem login.
   if (!token) {
-    if (process.env.NODE_ENV !== 'production') {
-      return { allowed: true, demo: true, plan: 'rei', planLabel: 'Rei' };
-    }
     return { allowed: false, demo: false, reason: 'Autenticação necessária.' };
   }
 
