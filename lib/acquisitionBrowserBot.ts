@@ -736,7 +736,7 @@ async function queueMetrics(db: any) {
   const failures = await db.all(`SELECT
       CASE
         WHEN browser_last_result ILIKE '%site_private_or_unresolvable_host%' OR browser_last_result ILIKE '%site_preflight_unreachable%' THEN 'unreachable'
-        WHEN browser_last_result ILIKE '%site_preflight_timeout%' OR browser_last_result ILIKE '%site_static_timeout%' OR browser_last_result ILIKE '%browser_timeout_20s%' THEN 'timeout'
+        WHEN browser_last_result ILIKE '%site_preflight_timeout%' OR browser_last_result ILIKE '%site_static_timeout%' OR browser_last_result ILIKE '%browser_timeout_20s%' OR browser_last_result ILIKE '%browser_timeout_25s%' OR browser_last_result ILIKE '%browser_timeout_45s%' THEN 'timeout'
         WHEN browser_last_result ILIKE '%site_http_404%' OR browser_last_result ILIKE '%site_http_410%' THEN 'http_404_410'
         WHEN browser_last_result ILIKE '%site_http_5%' THEN 'http_5xx'
         WHEN browser_last_result ILIKE '%captcha_requer_intervencao%' THEN 'captcha_or_protection'
@@ -853,7 +853,7 @@ async function processLead(db: any, lead: any) {
         new Promise((_, reject) => setTimeout(() => {
           controller.abort();
           reject(new Error('browser_timeout_45s'));
-        }, 25_000)),
+        }, 45_000)),
       ]);
     } finally {
       controller.abort();
@@ -880,8 +880,13 @@ async function processLead(db: any, lead: any) {
       : /site_preflight_timeout|site_static_timeout|browser_timeout_20s|browser_timeout_25s|browser_timeout_45s/i.test(error) ? 12
       : 6;
     const nextStatus = channelFound ? 'channel_found' : (Number(lead.browser_attempts || 0) + 1 >= MAX_ATTEMPTS ? 'failed' : 'pending');
-    await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=?,browser_channel_data=?,browser_status=?,browser_next_at=CASE WHEN ? THEN NULL ELSE CURRENT_TIMESTAMP + INTERVAL '${retryHours} hours' END,acquisition_stage=CASE WHEN ? THEN 'manual_channel' ELSE acquisition_stage END WHERE id=?`,
-      [error, channelFound ? (channelPayloadParsed?.channel || 'manual') : null, channelFound ? JSON.stringify(channelPayloadParsed || {}).slice(0,5000) : null, nextStatus, channelFound, channelFound, lead.id]);
+    if (channelFound) {
+      await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=?,browser_channel_data=?,browser_status='channel_found',browser_next_at=NULL,acquisition_stage='manual_channel' WHERE id=?`,
+        [error, channelPayloadParsed?.channel || 'manual', JSON.stringify(channelPayloadParsed || {}).slice(0,5000), lead.id]);
+    } else {
+      await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=NULL,browser_channel_data=NULL,browser_status=?,browser_next_at=CURRENT_TIMESTAMP + INTERVAL '${retryHours} hours' WHERE id=?`,
+        [error, nextStatus, lead.id]);
+    }
     console.warn('[acquisition-browser]', lead.id, error);
   } finally {
     console.log('[acquisition-browser] done', lead.id, lead.nome_empresa || '');
