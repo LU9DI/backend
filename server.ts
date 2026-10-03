@@ -107,9 +107,16 @@ app.use((req, res, next) => {
 app.use('/api/n8n/acquisition/email-events', express.raw({ type: 'application/json', limit: '100kb' }));
 app.use(cors(buildCorsOptions()));
 
-// MCP must be mounted before the HTTP listener starts so a newly started
-// Render instance can answer /mcp immediately, without waiting for DB/schema boot.
-app.use(mcpApp);
+// Keep MCP host-header validation scoped to the MCP endpoint.
+// createMcpExpressApp validates the Host header for every request that
+// reaches the sub-app. Mounting it globally would reject ordinary API
+// requests such as /api/dot/status when the local Host is 127.0.0.1.
+app.use((req, res, next) => {
+  if (req.path === '/mcp' || req.path.startsWith('/mcp/')) {
+    return mcpApp(req, res, next);
+  }
+  return next();
+});
 
 app.get('/api/live', (_req, res) => {
   res.status(200).json({ ok: true, live: true, build: BUILD, time: new Date().toISOString() });
