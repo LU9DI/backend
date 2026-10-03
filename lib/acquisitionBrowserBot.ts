@@ -467,17 +467,22 @@ async function runOne(lead: any, signal?: AbortSignal) {
   if (!base) throw new Error('site_oficial_ausente');
 
   // Cheap DNS/HTTP reachability check before launching Chromium.
+  console.log('[acquisition-browser] stage', lead.id, 'preflight_start');
   const reachableBase = await preflightWebsite(base);
+  console.log('[acquisition-browser] stage', lead.id, 'preflight_done', reachableBase.toString());
 
   // Probe the rendered source cheaply before spending a Chromium cycle. This
   // never submits a form; it only identifies whether a contact surface exists.
+  console.log('[acquisition-browser] stage', lead.id, 'surface_start');
   const surface = await inspectContactSurface(reachableBase);
+  console.log('[acquisition-browser] stage', lead.id, 'surface_done', surface.kind);
   // Public channels are discovery evidence, not the end of acquisition.
   // Continue into the browser contact flow so a first-party form can be used
   // when the homepage exposes only a phone/WhatsApp/email link.
   if (surface.kind === 'none') throw new Error('site_no_contact_surface');
   if (surface.kind === 'captcha') throw new Error('captcha_requer_intervencao');
 
+  console.log('[acquisition-browser] stage', lead.id, 'browser_launch_start');
   const puppeteer = require('puppeteer-core');
   browser = await puppeteer.launch({
     headless: true,
@@ -493,6 +498,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
     ],
   });
 
+  console.log('[acquisition-browser] stage', lead.id, 'browser_launch_done');
   try {
     const page = await browser.newPage();
     await page.setUserAgent('FiltraAI-Acquisition/1.0 (+https://filtraai.com)');
@@ -552,12 +558,17 @@ async function runOne(lead: any, signal?: AbortSignal) {
     // them. The channel is an actionable contact path for manual follow-up.
     // Do not stop at a discovered public channel. Try the site's own contact
     // paths first; only fall back to manual_channel when no safe form exists.
-    const guessedPaths = lang === 'pt' ? ['/contato','/fale-conosco'] : lang === 'es' ? ['/contacto','/contact'] : lang === 'fr' ? ['/contact','/contacts'] : ['/contact','/contact-us'];
-    for (const path of guessedPaths) {
-      try {
-        const href = new URL(path, base).toString();
-        if (!contactLinks.some(x => x.href === href)) contactLinks.push({ text: path, href });
-      } catch {}
+    // Guessed paths are a last resort only. If the static probe already found
+    // a first-party contact page or homepage form, do not spend the browser
+    // budget on speculative routes before attempting that real surface.
+    if (!contactLinks.length) {
+      const guessedPaths = lang === 'pt' ? ['/contato','/fale-conosco'] : lang === 'es' ? ['/contacto','/contact'] : lang === 'fr' ? ['/contact','/contacts'] : ['/contact','/contact-us'];
+      for (const path of guessedPaths) {
+        try {
+          const href = new URL(path, base).toString();
+          if (!contactLinks.some(x => x.href === href)) contactLinks.push({ text: path, href });
+        } catch {}
+      }
     }
 
     if (!contactLinks.length) {
