@@ -17,6 +17,7 @@ const MAX_ATTEMPTS = 2;
 let started = false;
 let running = false;
 let lastTriggeredAt = 0;
+let isolatedSchedulerStarted = false;
 
 const clean = (v: unknown, n = 5000) => String(v ?? '').trim().slice(0, n);
 const validUrl = (v: unknown) => {
@@ -852,6 +853,7 @@ export async function runAcquisitionBrowserBotTick(force = false) {
   lastTriggeredAt = now;
 
   if (!CHILD_MODE) {
+    if (isolatedSchedulerStarted) return;
     const script = path.join(process.cwd(), 'scripts', 'acquisitionBrowserOnce.ts');
     const tsx = path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
     const child = spawn(process.execPath, [tsx, script], {
@@ -886,6 +888,21 @@ export async function startAcquisitionBrowserBot() {
   started = true;
   const db = getDb();
   await ensureSchema(db);
-  console.log(`[acquisition-browser] ON cap=${DAILY_CAP} interval=${INTERVAL_MS}ms scheduler=engine-heartbeat`);
-  void runAcquisitionBrowserBotTick(true);
+  console.log(`[acquisition-browser] ON cap=${DAILY_CAP} interval=${INTERVAL_MS}ms scheduler=isolated-process`);
+  const scheduler = path.join(process.cwd(), 'scripts', 'acquisitionBrowserScheduler.ts');
+  const tsx = path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  const child = spawn(process.execPath, [tsx, scheduler], {
+    env: { ...process.env, ACQUISITION_BROWSER_BOT: '1', ACQUISITION_BROWSER_SCHEDULER_CHILD: '1' },
+    stdio: 'inherit',
+  });
+  isolatedSchedulerStarted = true;
+  console.log('[acquisition-browser] spawned isolated scheduler pid=' + String(child.pid || 'unknown'));
+  child.on('error', (e) => {
+    isolatedSchedulerStarted = false;
+    console.error('[acquisition-browser] scheduler spawn failed:', e?.message || e);
+  });
+  child.on('exit', (code, signal) => {
+    isolatedSchedulerStarted = false;
+    console.log('[acquisition-browser] scheduler exit', { code, signal });
+  });
 }
