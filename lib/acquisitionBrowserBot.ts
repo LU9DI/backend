@@ -247,9 +247,9 @@ async function getCandidates(db: any, batchSize = 2) {
             OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'websiteUri','')), '') IS NOT NULL)
         ORDER BY
           CASE browser_status
-            WHEN 'channel_found' THEN 0
-            WHEN 'pending' THEN 1
-            WHEN 'contact_attempted' THEN 2
+            WHEN 'pending' THEN 0
+            WHEN 'contact_attempted' THEN 1
+            WHEN 'channel_found' THEN 2
             ELSE 3
           END,
           CASE
@@ -506,12 +506,14 @@ async function runOne(lead: any, signal?: AbortSignal) {
       : null;
 
     const contactPattern = /(contact|contato|contacto|fale|fale-conosco|habla|kontakt|contatti|comercial|sales|business|partnership|support|atendimento|suporte)/i;
-    const contactLinks = staticContactHref
-      ? [{ text: 'static-contact', href: staticContactHref }]
-      : links
-        .filter(x => contactPattern.test(`${x.text} ${x.href}`))
-        .filter(x => sameOrigin(x.href) && !/javascript:|#/.test(x.href))
-        .slice(0, 2);
+    const contactLinks = surface.kind === 'form' && !staticContactHref
+      ? [{ text: 'homepage-form', href: reachableBase.toString() }]
+      : staticContactHref
+        ? [{ text: 'static-contact', href: staticContactHref }]
+        : links
+          .filter(x => contactPattern.test(`${x.text} ${x.href}`))
+          .filter(x => sameOrigin(x.href) && !/javascript:|#/.test(x.href))
+          .slice(0, 2);
 
 
     // If the homepage already exposes a public first-party channel and there is
@@ -812,12 +814,6 @@ async function tick() {
 }
 
 async function processLead(db: any, lead: any) {
-  // channel_found is a manual/public contact queue, not a browser-processing state.
-  // Do not rerun Chromium against a lead whose actionable public channel was already discovered.
-  if (lead.browser_status === 'channel_found') {
-    console.log('[acquisition-browser] channel_found queued for manual follow-up', lead.id, lead.nome_empresa || '');
-    return;
-  }
   console.log('[acquisition-browser] start', lead.id, lead.nome_empresa || '');
   try {
     const controller = new AbortController();
