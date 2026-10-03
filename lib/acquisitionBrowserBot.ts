@@ -245,6 +245,35 @@ async function getCandidates(db: any, batchSize = 2) {
             OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'websiteUri','')), '') IS NOT NULL
             OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'website','')), '') IS NOT NULL
             OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'websiteUri','')), '') IS NOT NULL)
+          AND COALESCE(nome_empresa,'') !~* '(prefeitura|governo|secretaria|tribunal|minist[eé]rio p[uú]blico|pol[ií]cia|bombeiros|for[cç]as armadas|c[aâ]mara municipal|assembleia legislativa|escola estadual|escola municipal|universidade federal|instituto federal)'
+          AND COALESCE(
+            raw_json::jsonb->>'website',
+            raw_json::jsonb->>'websiteUri',
+            raw_json::jsonb->'profile'->>'website',
+            raw_json::jsonb->'profile'->>'websiteUri',
+            ''
+          ) !~* '(^|\\.)gov\\.br([/:?#]|$)'
+          AND NOT EXISTS (
+            SELECT 1 FROM leads dup
+            WHERE dup.id <> leads.id
+              AND dup.criado_em < leads.criado_em
+              AND LOWER(REGEXP_REPLACE(COALESCE(dup.nome_empresa,''), '[^a-z0-9]+', '', 'gi')) =
+                  LOWER(REGEXP_REPLACE(COALESCE(leads.nome_empresa,''), '[^a-z0-9]+', '', 'gi'))
+              AND LOWER(REGEXP_REPLACE(COALESCE(
+                dup.raw_json::jsonb->>'website',
+                dup.raw_json::jsonb->>'websiteUri',
+                dup.raw_json::jsonb->'profile'->>'website',
+                dup.raw_json::jsonb->'profile'->>'websiteUri',
+                ''
+              ), '^https?://(www\\.)?', '')) =
+                  LOWER(REGEXP_REPLACE(COALESCE(
+                    leads.raw_json::jsonb->>'website',
+                    leads.raw_json::jsonb->>'websiteUri',
+                    leads.raw_json::jsonb->'profile'->>'website',
+                    leads.raw_json::jsonb->'profile'->>'websiteUri',
+                    ''
+                  ), '^https?://(www\\.)?', ''))
+          )
         ORDER BY
           CASE browser_status
             WHEN 'pending' THEN 0
@@ -823,7 +852,7 @@ async function processLead(db: any, lead: any) {
         runOne(lead, controller.signal),
         new Promise((_, reject) => setTimeout(() => {
           controller.abort();
-          reject(new Error('browser_timeout_25s'));
+          reject(new Error('browser_timeout_45s'));
         }, 25_000)),
       ]);
     } finally {
@@ -848,7 +877,7 @@ async function processLead(db: any, lead: any) {
     const error = clean(channelPayloadParsed ? JSON.stringify(channelPayloadParsed) : rawError, 5000);
     const channelFound = channelPayloadParsed?.reason === 'manual_channel_available';
     const retryHours = /site_http_404|site_http_410|ERR_NAME_NOT_RESOLVED|site_private_or_unresolvable_host|site_no_contact_surface|site_no_outreach_notice|site_non_html|captcha_requer_intervencao/i.test(error) ? 72
-      : /site_preflight_timeout|site_static_timeout|browser_timeout_20s|browser_timeout_25s/i.test(error) ? 12
+      : /site_preflight_timeout|site_static_timeout|browser_timeout_20s|browser_timeout_25s|browser_timeout_45s/i.test(error) ? 12
       : 6;
     const nextStatus = channelFound ? 'channel_found' : (Number(lead.browser_attempts || 0) + 1 >= MAX_ATTEMPTS ? 'failed' : 'pending');
     await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=?,browser_channel_data=?,browser_status=?,browser_next_at=CASE WHEN ? THEN NULL ELSE CURRENT_TIMESTAMP + INTERVAL '${retryHours} hours' END,acquisition_stage=CASE WHEN ? THEN 'manual_channel' ELSE acquisition_stage END WHERE id=?`,
@@ -873,9 +902,9 @@ export async function runAcquisitionBrowserBotTick(force = false) {
       stdio: 'inherit',
     });
     const watchdog = setTimeout(() => {
-      console.error('[acquisition-browser] worker timeout; killing child', { pid: child.pid, timeout_ms: 180000 });
+      console.error('[acquisition-browser] worker timeout; killing child', { pid: child.pid, timeout_ms: 300000 });
       try { child.kill('SIGKILL'); } catch {}
-    }, 180000);
+    }, 300000);
     console.log('[acquisition-browser] spawned isolated worker pid=' + String(child.pid || 'unknown'));
     child.on('error', (e) => {
       clearTimeout(watchdog);
@@ -892,7 +921,7 @@ export async function runAcquisitionBrowserBotTick(force = false) {
   try {
     await Promise.race([
       tick(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('tick_timeout_180s')), 180_000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('tick_timeout_300s')), 300_000)),
     ]);
     console.log('[acquisition-browser] worker cycle complete');
   } catch (e: any) {
