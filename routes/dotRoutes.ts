@@ -223,8 +223,8 @@ export function mountDotRoutes(app: Express) {
         ],
         decisions: [
           {
-            id: null,
-            eventId: null,
+            id: 1,
+            eventId: 1,
             type: 'monitoramento',
             priority: 'alta',
             severity: 'warning',
