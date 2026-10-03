@@ -616,6 +616,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
         }));
       });
 
+      console.log('[acquisition-browser] stage', lead.id, 'forms_detected', formInfo.length);
       if (!formInfo.length) {
         const text = await page.evaluate(() => (document.body?.innerText || '').slice(0,12000));
         const emails = Array.from(new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+[.][A-Z]{2,}/gi) || [])
@@ -646,6 +647,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
           return false;
         }
       });
+      console.log('[acquisition-browser] stage', lead.id, 'usable_forms', usableForms.length);
       if (!usableForms.length) { lastError = 'captcha_requer_intervencao'; continue; }
 
       const form = usableForms.find((f: any) => f.fields.some((x:any)=>/textarea/i.test(x.tag)))
@@ -663,7 +665,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
         const editable = await page.$('[contenteditable="true"]');
         if (editable) msg = { id: '', name: '', placeholder: '', aria: '', contenteditable: 'true' };
       }
-      if (!msg) { lastError = 'campo_mensagem_nao_encontrado'; continue; }
+      if (!msg) { console.log('[acquisition-browser] stage', lead.id, 'message_field_missing'); lastError = 'campo_mensagem_nao_encontrado'; continue; }
 
       const fill = async (field: any, value: string) => {
         if (!field || !value) return;
