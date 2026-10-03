@@ -385,7 +385,14 @@ export async function replenishAcquisitionStock(force = false) {
       WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0
       AND email IS NOT NULL AND TRIM(email)!=''
       AND acquisition_stage IN ('eligible','ready','followup')
-      AND (acquisition_next_at IS NULL OR acquisition_next_at<=CURRENT_TIMESTAMP)`);
+      AND (acquisition_next_at IS NULL OR acquisition_next_at<=CURRENT_TIMESTAMP)
+      AND (browser_status IS NULL OR browser_status='pending')
+      AND (
+        NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'website','')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'websiteUri','')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'website','')), '') IS NOT NULL
+        OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'websiteUri','')), '') IS NOT NULL
+      )`);
     const stock = Number(row?.c || 0);
     if (!force && stock >= MIN_STOCK) return { imported: 0, skipped: 0, reason: 'stock_ok', stock, min_stock: MIN_STOCK };
 
