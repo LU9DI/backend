@@ -181,7 +181,9 @@ export async function googlePlacesLeads(limit: number) {
         }
         return pages;
       } catch (error: any) {
-        console.warn('[acquisition-google-places] query=' + query + ' failed:', error?.message || error);
+        const message = String(error?.message || error);
+        console.warn('[acquisition-google-places] query=' + query + ' failed:', message);
+        if (/HTTP 429|quota|rate limit|RESOURCE_EXHAUSTED/i.test(message)) throw error;
         return [];
       }
     }));
