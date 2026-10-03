@@ -97,6 +97,15 @@ export type PgDatabase = {
 };
 
 export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
+  const connectionTimeoutMs = Math.max(
+    3000,
+    Number(process.env.PG_CONNECT_TIMEOUT_MS || 10_000),
+  );
+  const maxConnectAttempts = Math.max(
+    1,
+    Number(process.env.PG_CONNECT_ATTEMPTS || 3),
+  );
+
   pool = new Pool({
     connectionString: databaseUrl,
     ssl:
@@ -106,13 +115,38 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
           ? false
           : { rejectUnauthorized: false },
     max: Number(process.env.PG_POOL_MAX || 10),
+    connectionTimeoutMillis: connectionTimeoutMs,
+    idleTimeoutMillis: Math.max(10_000, Number(process.env.PG_IDLE_TIMEOUT_MS || 30_000)),
+    keepAlive: true,
   });
 
-  const client = await pool.connect();
-  try {
-    await client.query('SELECT 1');
-  } finally {
-    client.release();
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= maxConnectAttempts; attempt += 1) {
+    try {
+      const client = await pool.connect();
+      try {
+        await client.query('SELECT 1');
+      } finally {
+        client.release();
+      }
+      lastError = null;
+      break;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `🐘 Postgres conexão tentativa ${attempt}/${maxConnectAttempts} falhou:`,
+        String((error as any)?.message || error),
+      );
+      if (attempt < maxConnectAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(5000, attempt * 1500)));
+      }
+    }
+  }
+
+  if (lastError) {
+    await pool.end().catch(() => undefined);
+    pool = null;
+    throw lastError;
   }
 
   const db: PgDatabase = {
