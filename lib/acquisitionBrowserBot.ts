@@ -299,7 +299,11 @@ async function assertPublicHost(url: URL) {
 
 async function preflightWebsite(base: URL): Promise<URL> {
   let current = new URL(base.toString());
-  for (let hop = 0; hop < 3; hop += 1) {
+  const seen = new Set<string>();
+  for (let hop = 0; hop < 5; hop += 1) {
+    const key = current.toString();
+    if (seen.has(key)) throw new Error('site_redirect_loop');
+    seen.add(key);
     await assertPublicHost(current);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2_500);
@@ -331,7 +335,7 @@ async function preflightWebsite(base: URL): Promise<URL> {
       clearTimeout(timer);
     }
   }
-  throw new Error('site_redirect_limit');
+  throw new Error('site_redirect_limit_5hops');
 }
 
 async function inspectContactSurface(base: URL) {
