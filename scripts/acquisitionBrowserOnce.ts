@@ -17,7 +17,7 @@ async function main() {
     VALUES (1, CURRENT_TIMESTAMP)
     ON CONFLICT (id) DO UPDATE
       SET locked_at = CURRENT_TIMESTAMP
-      WHERE acquisition_browser_worker_lock.locked_at < CURRENT_TIMESTAMP - INTERVAL '2 minutes'`);
+      WHERE acquisition_browser_worker_lock.locked_at < CURRENT_TIMESTAMP - INTERVAL '5 minutes'`);
   if (!Number(lock?.changes || 0)) {
     console.log('[acquisition-browser] isolated worker skipped: another cycle is active');
     return;
