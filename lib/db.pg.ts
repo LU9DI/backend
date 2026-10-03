@@ -93,6 +93,7 @@ export type PgDatabase = {
   get: <T = any>(sql: string, params?: any[]) => Promise<T | undefined>;
   all: <T = any>(sql: string, params?: any[]) => Promise<T[]>;
   close: () => Promise<void>;
+  transaction: <T>(fn: (tx: PgDatabase) => Promise<T>) => Promise<T>;
 };
 
 export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
@@ -147,7 +148,8 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
         if (/^PRAGMA/i.test(sql.trim())) return { changes: 0 };
         const q = convertPlaceholders(adaptSql(sql));
         const r = await c.query(q, params);
-        return { changes: r.rowCount || 0, lastID: undefined };
+        const returnedId = (r.rows?.[0] && (r.rows[0].id ?? r.rows[0].ID)) as number | undefined;
+        return { changes: r.rowCount || 0, lastID: returnedId };
       } finally {
         c.release();
       }
@@ -185,6 +187,51 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
     async close() {
       await pool?.end();
       pool = null;
+    },
+
+    async transaction<T>(fn: (tx: PgDatabase) => Promise<T>) {
+      const c = await pool!.connect();
+      const tx: PgDatabase = {
+        async exec(sql: string) {
+          const adapted = adaptSql(sql);
+          for (const st of adapted.split(';').map((x) => x.trim()).filter(Boolean)) {
+            if (/^PRAGMA/i.test(st)) continue;
+            await c.query(st);
+          }
+        },
+        async run(sql: string, params: any[] = []) {
+          if (/^PRAGMA/i.test(sql.trim())) return { changes: 0 };
+          const q = convertPlaceholders(adaptSql(sql));
+          const r = await c.query(q, params);
+          const returnedId = (r.rows?.[0] && (r.rows[0].id ?? r.rows[0].ID)) as number | undefined;
+          return { changes: r.rowCount || 0, lastID: returnedId };
+        },
+        async get<T2 = any>(sql: string, params: any[] = []) {
+          if (/PRAGMA\\s+table_info/i.test(sql)) return (await handlePragma(c, sql))[0] as T2;
+          const r = await c.query(convertPlaceholders(adaptSql(sql)), params);
+          return r.rows[0] as T2 | undefined;
+        },
+        async all<T2 = any>(sql: string, params: any[] = []) {
+          if (/PRAGMA\\s+table_info/i.test(sql)) return (await handlePragma(c, sql)) as T2[];
+          const r = await c.query(convertPlaceholders(adaptSql(sql)), params);
+          return r.rows as T2[];
+        },
+        async close() { /* transaction client owns its connection */ },
+        async transaction<T2>(nested: (tx: PgDatabase) => Promise<T2>) {
+          return nested(tx);
+        },
+      };
+      try {
+        await c.query('BEGIN');
+        const result = await fn(tx);
+        await c.query('COMMIT');
+        return result;
+      } catch (error) {
+        try { await c.query('ROLLBACK'); } catch {}
+        throw error;
+      } finally {
+        c.release();
+      }
     },
   };
 
