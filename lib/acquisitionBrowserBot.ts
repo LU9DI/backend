@@ -646,7 +646,29 @@ async function runOne(lead: any, signal?: AbortSignal) {
 }
 
 async function queueMetrics(db: any) {
-  return db.all(`SELECT browser_status, COUNT(*)::int AS count FROM leads WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0 GROUP BY browser_status ORDER BY browser_status`);
+  const status = await db.all(`SELECT browser_status, COUNT(*)::int AS count FROM leads WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0 GROUP BY browser_status ORDER BY browser_status`);
+  const failures = await db.all(`SELECT
+      CASE
+        WHEN browser_last_result ILIKE '%site_private_or_unresolvable_host%' OR browser_last_result ILIKE '%site_preflight_unreachable%' THEN 'unreachable'
+        WHEN browser_last_result ILIKE '%site_preflight_timeout%' OR browser_last_result ILIKE '%site_static_timeout%' OR browser_last_result ILIKE '%browser_timeout_20s%' THEN 'timeout'
+        WHEN browser_last_result ILIKE '%site_http_404%' OR browser_last_result ILIKE '%site_http_410%' THEN 'http_404_410'
+        WHEN browser_last_result ILIKE '%site_http_5%' THEN 'http_5xx'
+        WHEN browser_last_result ILIKE '%captcha_requer_intervencao%' THEN 'captcha_or_protection'
+        WHEN browser_last_result ILIKE '%site_no_outreach_notice%' THEN 'no_outreach_notice'
+        WHEN browser_last_result ILIKE '%site_no_contact_surface%' OR browser_last_result ILIKE '%formulario_contato_nao_encontrado%' OR browser_last_result ILIKE '%nenhum_formulario%' THEN 'no_contact_surface'
+        WHEN browser_last_result ILIKE '%manual_channel_available%' THEN 'manual_channel'
+        WHEN browser_last_result ILIKE '%site_non_html%' THEN 'non_html'
+        WHEN browser_last_result ILIKE '%site_oficial_ausente%' THEN 'missing_website'
+        WHEN browser_last_result IS NULL OR BTRIM(browser_last_result) = '' THEN 'unknown'
+        ELSE 'other'
+      END AS reason,
+      COUNT(*)::int AS count
+    FROM leads
+    WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0
+      AND browser_status='failed'
+    GROUP BY 1
+    ORDER BY count DESC`);
+  return { status, failures };
 }
 
 async function tick() {
