@@ -204,12 +204,6 @@ let shuttingDown = false;
 
 
 
-server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 API Filtra.IA em http://0.0.0.0:${PORT}`);
-});
-server.keepAliveTimeout = 65_000;
-server.headersTimeout = 66_000;
-
 async function runSentimentBackfillOnBoot() {
   if (process.env.BACKFILL_SENTIMENT !== '1') return;
   try {
@@ -399,6 +393,12 @@ async function main() {
 
   app.use(notFoundHandler);
   app.use(errorHandler);
+
+  server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 API Filtra.IA em http://0.0.0.0:${PORT}`);
+  });
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
 
   console.log(`📦 build ${BUILD.version} marker=${BUILD.marker}`);
   console.log(
