@@ -271,38 +271,7 @@ export function mountDotRoutes(app: Express) {
     res.json({ ok: true, decisions });
   });
 
-  app.post('/api/dot/decisions/:id/:action', async (req: Request, res: Response, next) => {
-    // "prepare-action" possui uma rota específica logo abaixo. Não deixe
-    // esta rota genérica capturá-la antes do handler correto.
-    const action = String(req.params.action);
-    if (action === 'prepare-action') return next();
-
-    const access = await resolveDotAccess(req);
-    if (!access.allowed || !access.empresaId) return deny(res, access);
-    // Aprovação de uma ação só pode ocorrer pela fila de ações, que exige
-    // uma ação preparada e aplica a transação atômica decisão + ação.
-    if (!['prepare', 'reject'].includes(action)) {
-      return res.status(409).json({
-        error: 'Aprovação deve ocorrer pela fila de ações.',
-        code: 'DOT_APPROVAL_REQUIRES_ACTION',
-      });
-    }
-    const status = action === 'prepare' ? 'prepared' : 'rejected';
-    const result = await updateDotDecision(access.empresaId, Number(req.params.id), status as any);
-    if (!result) return res.status(404).json({ error: 'Decisão não encontrada.' });
-    res.json({ ok: true, decision: result, executed: false });
-  });
-
-  app.get('/api/dot/actions', async (req: Request, res: Response) => {
-    const access = await resolveDotAccess(req);
-    if (!access.allowed) return deny(res, access);
-    if (access.demo) {
-      return res.json({ ok: true, demo: true, actions: Array.from(demoActions.values()) });
-    }
-    if (!access.empresaId) return deny(res, access);
-    res.json({ ok: true, actions: await listDotActions(access.empresaId) });
-  });
-
+  // Rota específica vem antes da rota genérica para evitar colisão com :action.
   app.post('/api/dot/decisions/:id/prepare-action', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
     if (!access.allowed) return deny(res, access);
@@ -328,6 +297,34 @@ export function mountDotRoutes(app: Express) {
     const action = await prepareDotActionFromDecision(access.empresaId, Number(req.params.id), optionId);
     if (!action) return res.status(404).json({ error: 'Decisão ou opção não encontrada.' });
     res.json({ ok: true, action, executed: false });
+  });
+
+  app.post('/api/dot/decisions/:id/:action', async (req: Request, res: Response) => {
+    const access = await resolveDotAccess(req);
+    if (!access.allowed || !access.empresaId) return deny(res, access);
+    const action = String(req.params.action);
+    // Aprovação de uma ação só pode ocorrer pela fila de ações, que exige
+    // uma ação preparada e aplica a transação atômica decisão + ação.
+    if (!['prepare', 'reject'].includes(action)) {
+      return res.status(409).json({
+        error: 'Aprovação deve ocorrer pela fila de ações.',
+        code: 'DOT_APPROVAL_REQUIRES_ACTION',
+      });
+    }
+    const status = action === 'prepare' ? 'prepared' : 'rejected';
+    const result = await updateDotDecision(access.empresaId, Number(req.params.id), status as any);
+    if (!result) return res.status(404).json({ error: 'Decisão não encontrada.' });
+    res.json({ ok: true, decision: result, executed: false });
+  });
+
+  app.get('/api/dot/actions', async (req: Request, res: Response) => {
+    const access = await resolveDotAccess(req);
+    if (!access.allowed) return deny(res, access);
+    if (access.demo) {
+      return res.json({ ok: true, demo: true, actions: Array.from(demoActions.values()) });
+    }
+    if (!access.empresaId) return deny(res, access);
+    res.json({ ok: true, actions: await listDotActions(access.empresaId) });
   });
 
   app.post('/api/dot/actions/:id/approve', async (req: Request, res: Response) => {
