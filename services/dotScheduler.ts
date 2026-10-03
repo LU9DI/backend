@@ -72,6 +72,14 @@ export async function runDueDotMonitors() {
        WHERE status IN ('ativo', 'trial')
          AND LOWER(IFNULL(plan, '')) IN ('rei', 'corporativo', 'corp')`
     );
+    const schedulerCandidates = await db.all(
+      `SELECT status, LOWER(IFNULL(plan, '')) AS plan, COUNT(*) AS total
+       FROM empresas
+       WHERE status IN ('ativo', 'trial')
+       GROUP BY status, LOWER(IFNULL(plan, ''))
+       ORDER BY status, plan`
+    );
+    console.log('[dot-scheduler] candidatos observados', schedulerCandidates);
     let processed = 0;
     let skipped = 0;
     let due = 0;
