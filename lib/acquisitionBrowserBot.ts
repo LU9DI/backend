@@ -3,8 +3,10 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import dns from 'node:dns/promises';
 import net from 'node:net';
-import puppeteer from 'puppeteer-core';
+import { createRequire } from 'node:module';
 import { getDb } from './db.js';
+
+const require = createRequire(import.meta.url);
 
 const ENABLED = process.env.ACQUISITION_BROWSER_BOT === '1';
 const CHILD_MODE = process.env.ACQUISITION_BROWSER_CHILD === '1';
@@ -421,6 +423,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
   if (surface.kind === 'none') throw new Error('site_no_contact_surface');
   if (surface.kind === 'captcha') throw new Error('captcha_requer_intervencao');
 
+  const puppeteer = require('puppeteer-core');
   browser = await puppeteer.launch({
     headless: true,
     executablePath: process.env.CHROMIUM_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
