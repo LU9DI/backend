@@ -510,6 +510,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
     const html = await page.content();
     const lang = detectLanguage(html, new URL(initialUrl));
     const target = message(lang, clean(lead.nome_empresa, 180));
+    console.log('[acquisition-browser] stage', lead.id, 'page_loaded');
 
     const links = await page.evaluate(() => Array.from(document.querySelectorAll('a')).map(a => ({
       text: (a.textContent || '').trim(),
@@ -588,6 +589,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
         // but a safe first-party form is the actionable automated contact path.
       }
 
+      console.log('[acquisition-browser] stage', lead.id, 'contact_page_ready', contact.href);
       const formInfo: any = await page.evaluate(() => {
         const forms = Array.from(document.querySelectorAll('form'));
         return forms.map((form: any) => ({
@@ -670,6 +672,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
       await fill(company, 'Filtra.AI');
       await fill(subject, target.subject);
       await fill(msg, target.body);
+      console.log('[acquisition-browser] stage', lead.id, 'form_filled');
 
       const requiredCheckboxes = await page.$eval('input[type="checkbox"][required]', els => els.length);
       if (requiredCheckboxes > 0) { lastError = 'checkbox_obrigatorio_requer_intervencao'; continue; }
@@ -678,6 +681,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
       const submit = await page.$(`${formSelector} button[type="submit"],${formSelector} input[type="submit"],${formSelector} button`);
       if (!submit) { lastError = 'botao_envio_nao_encontrado'; continue; }
 
+      console.log('[acquisition-browser] stage', lead.id, 'submitting');
       await Promise.all([
         page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 3_000, signal }).catch(() => null),
         submit.click(),
@@ -686,6 +690,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
 
       const finalUrl = await page.url();
       const confirmation = await page.evaluate(() => document.body.innerText.slice(0,5000));
+      console.log('[acquisition-browser] stage', lead.id, 'submit_returned', finalUrl);
       const looksSuccessful = /(thank you|thanks|obrigad|gracias|merci|danke|grazie|sent successfully|mensagem enviada|enviado com sucesso|message sent)/i.test(confirmation);
       if (looksSuccessful) {
         return {
