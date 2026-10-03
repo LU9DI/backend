@@ -417,7 +417,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
   if (surface.kind === 'none') throw new Error('site_no_contact_surface');
   if (surface.kind === 'captcha') throw new Error('captcha_requer_intervencao');
 
-  const browser = await puppeteer.launch({
+  browser = await puppeteer.launch({
     headless: true,
     executablePath: process.env.CHROMIUM_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
     timeout: 4_000,
