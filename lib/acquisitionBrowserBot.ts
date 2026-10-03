@@ -400,6 +400,7 @@ async function inspectContactSurface(base: URL) {
 
 async function runOne(lead: any, signal?: AbortSignal) {
   const db = getDb();
+  let browser: any = null;
   const website = extractWebsite(lead.raw_json);
   const base = validUrl(website);
   if (!base) throw new Error('site_oficial_ausente');
@@ -653,7 +654,12 @@ async function runOne(lead: any, signal?: AbortSignal) {
     }
     throw new Error(lastError);
   } finally {
-    await browser.close();
+    if (browser) {
+      await Promise.race([
+        browser.close().catch(() => undefined),
+        new Promise<void>(resolve => setTimeout(resolve, 1_500)),
+      ]);
+    }
   }
 }
 
@@ -781,7 +787,13 @@ async function processLead(db: any, lead: any) {
     const timeout = setTimeout(() => controller.abort(), 20_000);
     let result: any;
     try {
-      result = await runOne(lead, controller.signal);
+      result = await Promise.race([
+        runOne(lead, controller.signal),
+        new Promise((_, reject) => setTimeout(() => {
+          controller.abort();
+          reject(new Error('browser_timeout_25s'));
+        }, 25_000)),
+      ]);
     } catch (e: any) {
       if (controller.signal.aborted && !String(e?.message || e || '').includes('browser_timeout_20s')) {
         throw new Error('browser_timeout_20s');
@@ -815,6 +827,8 @@ async function processLead(db: any, lead: any) {
     await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=?,browser_channel_data=?,browser_status=?,browser_next_at=CASE WHEN ? THEN NULL ELSE CURRENT_TIMESTAMP + INTERVAL '${retryHours} hours' END,acquisition_stage=CASE WHEN ? THEN 'manual_channel' ELSE acquisition_stage END WHERE id=?`,
       [error, channelFound ? (channelPayloadParsed?.channel || 'manual') : null, channelFound ? JSON.stringify(channelPayloadParsed || {}).slice(0,5000) : null, nextStatus, channelFound, channelFound, lead.id]);
     console.warn('[acquisition-browser]', lead.id, error);
+  } finally {
+    console.log('[acquisition-browser] done', lead.id, lead.nome_empresa || '');
   }
 }
 
