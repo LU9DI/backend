@@ -59,6 +59,18 @@ type DotAccess = {
 const sessions = new Map<string, ChatItem[]>();
 const MAX_HISTORY = 12;
 
+// Estado efêmero do protótipo local. Nunca é usado para empresas autenticadas
+// e não representa dados persistidos de clientes.
+const demoActions = new Map<number, {
+  id: number;
+  decisionId: number;
+  optionId: string;
+  action: string;
+  status: 'prepared' | 'approved' | 'executed';
+  demo: true;
+}>();
+let nextDemoActionId = 1;
+
 function cleanMessage(value: unknown): string {
   return String(value ?? '').trim().slice(0, 4000);
 }
@@ -274,15 +286,36 @@ export function mountDotRoutes(app: Express) {
 
   app.get('/api/dot/actions', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
-    if (!access.allowed || !access.empresaId) return deny(res, access);
+    if (!access.allowed) return deny(res, access);
+    if (access.demo) {
+      return res.json({ ok: true, demo: true, actions: Array.from(demoActions.values()) });
+    }
+    if (!access.empresaId) return deny(res, access);
     res.json({ ok: true, actions: await listDotActions(access.empresaId) });
   });
 
   app.post('/api/dot/decisions/:id/prepare-action', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
-    if (!access.allowed || !access.empresaId) return deny(res, access);
+    if (!access.allowed) return deny(res, access);
     const optionId = String(req.body?.optionId || '');
     if (!['opcao_1', 'opcao_2'].includes(optionId)) return res.status(400).json({ error: 'Opção inválida.' });
+    if (access.demo) {
+      const decisionId = Number(req.params.id);
+      if (decisionId !== 1) return res.status(404).json({ error: 'Decisão demo não encontrada.' });
+      const existing = Array.from(demoActions.values()).find((item) => item.decisionId === decisionId);
+      if (existing) return res.json({ ok: true, demo: true, action: existing, executed: false });
+      const action = {
+        id: nextDemoActionId++,
+        decisionId,
+        optionId,
+        action: optionId === 'opcao_1' ? 'corrigir_e_acompanhar' : 'escalar_responsavel',
+        status: 'prepared' as const,
+        demo: true as const,
+      };
+      demoActions.set(action.id, action);
+      return res.json({ ok: true, demo: true, action, executed: false });
+    }
+    if (!access.empresaId) return deny(res, access);
     const action = await prepareDotActionFromDecision(access.empresaId, Number(req.params.id), optionId);
     if (!action) return res.status(404).json({ error: 'Decisão ou opção não encontrada.' });
     res.json({ ok: true, action, executed: false });
@@ -290,7 +323,15 @@ export function mountDotRoutes(app: Express) {
 
   app.post('/api/dot/actions/:id/approve', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
-    if (!access.allowed || !access.empresaId) return deny(res, access);
+    if (!access.allowed) return deny(res, access);
+    if (access.demo) {
+      const id = Number(req.params.id);
+      const action = demoActions.get(id);
+      if (!action || action.status !== 'prepared') return res.status(409).json({ error: 'Ação demo não encontrada ou já processada.' });
+      action.status = 'approved';
+      return res.json({ ok: true, demo: true, action });
+    }
+    if (!access.empresaId) return deny(res, access);
     const action = await approveDotAction(access.empresaId, Number(req.params.id));
     if (!action) return res.status(409).json({ error: 'Ação não encontrada ou já processada.' });
     res.json({ ok: true, action });
@@ -298,7 +339,15 @@ export function mountDotRoutes(app: Express) {
 
   app.post('/api/dot/actions/:id/run', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
-    if (!access.allowed || !access.empresaId) return deny(res, access);
+    if (!access.allowed) return deny(res, access);
+    if (access.demo) {
+      const id = Number(req.params.id);
+      const action = demoActions.get(id);
+      if (!action || action.status !== 'approved') return res.status(409).json({ ok: false, error: 'Ação demo precisa estar aprovada antes da execução.' });
+      action.status = 'executed';
+      return res.json({ ok: true, demo: true, action, external_side_effect: false });
+    }
+    if (!access.empresaId) return deny(res, access);
     const result = await executeDotAction(access.empresaId, Number(req.params.id));
     if (!result.ok) return res.status(409).json(result);
     res.json({ ok: true, action: result, external_side_effect: false });
