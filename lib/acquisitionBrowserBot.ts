@@ -239,7 +239,7 @@ async function getCandidates(db: any, batchSize = 2) {
         WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0
           AND (acquisition_opted_in_at IS NOT NULL OR acquisition_contact_basis = 'b2b_public_prospect')
           AND browser_status IN ('pending','contact_attempted','channel_found')
-          AND COALESCE(browser_attempts,0) < ?
+          AND COALESCE(browser_attempts,0) < ${MAX_ATTEMPTS}
           AND (browser_next_at IS NULL OR browser_next_at <= CURRENT_TIMESTAMP)
           AND (NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'website','')), '') IS NOT NULL
             OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'websiteUri','')), '') IS NOT NULL
@@ -294,10 +294,10 @@ async function getCandidates(db: any, batchSize = 2) {
           END,
           CASE WHEN browser_attempts = 0 THEN 0 ELSE 1 END,
           criado_em ASC
-        LIMIT ?)
+        LIMIT ${Math.max(1, Math.min(CYCLE_CAP, Math.floor(Number(batchSize) || 1)) )})
       UPDATE leads l SET browser_status='processing', browser_last_at=CURRENT_TIMESTAMP
         FROM candidates c WHERE l.id=c.id
-      RETURNING l.id,l.nome_empresa,l.email,l.raw_json,l.acquisition_source,l.acquisition_contact_basis,l.browser_attempts`, [MAX_ATTEMPTS, batchSize]);
+      RETURNING l.id,l.nome_empresa,l.email,l.raw_json,l.acquisition_source,l.acquisition_contact_basis,l.browser_attempts`);
 }
 function classifyChannel(channels: string[], phones: string[]) {
   if (channels.some(h => /(?:wa[.]me|whatsapp)/i.test(h))) return 'public_whatsapp';
