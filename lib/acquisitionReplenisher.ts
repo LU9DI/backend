@@ -214,13 +214,13 @@ function osmQuery(city: typeof OSM_CITIES[number]) {
 async function osmWebsiteEmails(url: string) {
   try {
     const base = new URL(url);
-    const paths = ['', '/contato', '/contact', '/fale-conosco', '/faleconosco', '/sobre', '/about'];
+    const paths = ['', '/contato', '/contact'];
     const found = new Set<string>();
     for (const path of paths) {
       const response = await fetch(new URL(path || '/', base), {
         headers: { 'user-agent': 'FiltraAI-Acquisition/1.0 (+https://filtraai.com)' },
         redirect: 'follow',
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(5000),
       });
       if (!response.ok || !(response.headers.get('content-type') || '').includes('text/html')) continue;
       const html = (await response.text()).slice(0, 400000)
@@ -273,10 +273,13 @@ async function openStreetMapProvider(limit: number) {
         +(osmWebsite(t)?3:0)+(osmEmail(t)?10:0);
     };
     return score(b)-score(a);
-  }).slice(0,target*3);
+  }).slice(0,target*2);
   const leads:any[]=[]; const seen=new Set<string>();
-  for(let i=0;i<ranked.length && leads.length<target;i+=8){
-    const results=await Promise.all(ranked.slice(i,i+8).map(async ({element,city})=>{
+  const direct = ranked.filter(({element}: any) => Boolean(osmEmail(element?.tags || {}))).slice(0, target);
+  const website = ranked.filter(({element}: any) => !osmEmail(element?.tags || {}) && Boolean(osmWebsite(element?.tags || {}))).slice(0, 24);
+  const candidates = [...direct, ...website];
+  for(let i=0;i<candidates.length && leads.length<target;i+=8){
+    const results=await Promise.all(candidates.slice(i,i+8).map(async ({element,city})=>{
       const t=element?.tags||{}; let emails:string[]=[];
       const direct=osmEmail(t); if(direct) emails=[direct];
       else if(osmWebsite(t)) emails=await osmWebsiteEmails(osmWebsite(t));
