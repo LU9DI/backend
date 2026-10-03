@@ -720,6 +720,7 @@ async function selectionDiagnostics(db: any) {
       )::int AS website_ok
     FROM leads
   `);
+  const missingBasisBySource = await db.all(`SELECT COALESCE(NULLIF(BTRIM(acquisition_source),''), NULLIF(BTRIM(fonte),''), 'unknown') AS source, COUNT(*)::int AS count FROM leads WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0 AND acquisition_opted_in_at IS NULL AND acquisition_contact_basis IS NULL GROUP BY 1 ORDER BY count DESC LIMIT 10`);
   return {
     eligible: Number(row?.eligible || 0),
     contact_basis: Number(row?.contact_basis || 0),
@@ -727,6 +728,7 @@ async function selectionDiagnostics(db: any) {
     attempts_ok: Number(row?.attempts_ok || 0),
     retry_ok: Number(row?.retry_ok || 0),
     website_ok: Number(row?.website_ok || 0),
+    missing_basis_by_source: missingBasisBySource,
   };
 }
 
