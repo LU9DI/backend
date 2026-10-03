@@ -671,6 +671,65 @@ async function queueMetrics(db: any) {
   return { status, failures };
 }
 
+async function selectionDiagnostics(db: any) {
+  const row = await db.get(`
+    SELECT
+      COUNT(*) FILTER (
+        WHERE acquisition_eligible=1
+          AND COALESCE(acquisition_suppressed,0)=0
+      )::int AS eligible,
+      COUNT(*) FILTER (
+        WHERE acquisition_eligible=1
+          AND COALESCE(acquisition_suppressed,0)=0
+          AND (acquisition_opted_in_at IS NOT NULL OR acquisition_contact_basis = 'b2b_public_prospect')
+      )::int AS contact_basis,
+      COUNT(*) FILTER (
+        WHERE acquisition_eligible=1
+          AND COALESCE(acquisition_suppressed,0)=0
+          AND (acquisition_opted_in_at IS NOT NULL OR acquisition_contact_basis = 'b2b_public_prospect')
+          AND browser_status IN ('pending','contact_attempted','channel_found')
+      )::int AS status_ok,
+      COUNT(*) FILTER (
+        WHERE acquisition_eligible=1
+          AND COALESCE(acquisition_suppressed,0)=0
+          AND (acquisition_opted_in_at IS NOT NULL OR acquisition_contact_basis = 'b2b_public_prospect')
+          AND browser_status IN ('pending','contact_attempted','channel_found')
+          AND COALESCE(browser_attempts,0) < ${MAX_ATTEMPTS}
+      )::int AS attempts_ok,
+      COUNT(*) FILTER (
+        WHERE acquisition_eligible=1
+          AND COALESCE(acquisition_suppressed,0)=0
+          AND (acquisition_opted_in_at IS NOT NULL OR acquisition_contact_basis = 'b2b_public_prospect')
+          AND browser_status IN ('pending','contact_attempted','channel_found')
+          AND COALESCE(browser_attempts,0) < ${MAX_ATTEMPTS}
+          AND (browser_next_at IS NULL OR browser_next_at <= CURRENT_TIMESTAMP)
+      )::int AS retry_ok,
+      COUNT(*) FILTER (
+        WHERE acquisition_eligible=1
+          AND COALESCE(acquisition_suppressed,0)=0
+          AND (acquisition_opted_in_at IS NOT NULL OR acquisition_contact_basis = 'b2b_public_prospect')
+          AND browser_status IN ('pending','contact_attempted','channel_found')
+          AND COALESCE(browser_attempts,0) < ${MAX_ATTEMPTS}
+          AND (browser_next_at IS NULL OR browser_next_at <= CURRENT_TIMESTAMP)
+          AND (
+            NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'website','')), '') IS NOT NULL
+            OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'websiteUri','')), '') IS NOT NULL
+            OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'website','')), '') IS NOT NULL
+            OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'websiteUri','')), '') IS NOT NULL
+          )
+      )::int AS website_ok
+    FROM leads
+  `);
+  return {
+    eligible: Number(row?.eligible || 0),
+    contact_basis: Number(row?.contact_basis || 0),
+    status_ok: Number(row?.status_ok || 0),
+    attempts_ok: Number(row?.attempts_ok || 0),
+    retry_ok: Number(row?.retry_ok || 0),
+    website_ok: Number(row?.website_ok || 0),
+  };
+}
+
 async function tick() {
   if (!ENABLED || running) return;
   running = true;
@@ -682,10 +741,11 @@ async function tick() {
       console.log('[acquisition-browser] tick', { used, candidates: 0, cap: DAILY_CAP, concurrency: CONCURRENCY, reason: 'daily_cap', metrics: await queueMetrics(db) });
       return;
     }
+    const selection = await selectionDiagnostics(db);
     const batchSize = Math.max(1, Math.min(CONCURRENCY * 2, 3));
     const candidates = await getCandidates(db, batchSize);
     const queue = candidates.slice(0, DAILY_CAP - used);
-    console.log('[acquisition-browser] tick', { used, candidates: candidates.length, selected: queue.length, cap: DAILY_CAP, concurrency: CONCURRENCY, reason: queue.length ? 'processing' : 'no_candidates', metrics: await queueMetrics(db) });
+    console.log('[acquisition-browser] tick', { used, selection, candidates: candidates.length, selected: queue.length, cap: DAILY_CAP, concurrency: CONCURRENCY, reason: queue.length ? 'processing' : 'no_candidates', metrics: await queueMetrics(db) });
     for (let i = 0; i < queue.length; i += CONCURRENCY) {
       await Promise.all(queue.slice(i, i + CONCURRENCY).map((lead) => processLead(db, lead)));
     }
