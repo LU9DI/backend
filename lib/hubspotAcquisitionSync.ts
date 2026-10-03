@@ -10,10 +10,11 @@ let running = false;
 
 const clean = (v: unknown, n = 5000) => String(v ?? '').trim().slice(0, n);
 const emailOk = (v: unknown) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean(v, 320));
+const HUBSPOT_SEGMENTS = new Set(['clinica', 'restaurante', 'varejo', 'rede', 'servicos', 'outro']);
 
 async function hubspot(path: string, init: RequestInit = {}) {
   const token = TOKEN();
-  if (!token) throw new Error('HUBSPOT_PRIVATE_APP_TOKEN ausente');
+  if (!token) throw new Error('HUBSPOT_ACCESS_TOKEN ausente');
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${token}`);
   headers.set('Content-Type', 'application/json');
@@ -41,16 +42,16 @@ async function syncLead(lead: any) {
   let contactId = search?.results?.[0]?.id;
   if (!contactId) {
     const company = clean(lead.nome_empresa, 180);
-    const segment = clean(lead.acquisition_segment, 80);
+    const segment = clean(lead.acquisition_segment, 80).toLowerCase();
     const properties: Record<string, string> = {
       email,
       company,
       lifecyclestage: 'lead',
     };
 
-    // Preserve acquisition context without fabricating HubSpot traffic attribution.
-    // hs_* source fields remain HubSpot-owned; outbound/public-prospect acquisition is not web traffic.
-    if (segment) properties.segmento_filtra = segment;
+    // Only send values accepted by the HubSpot segmento_filtra enumeration.
+    // Unknown acquisition segments are left unset rather than inventing a classification.
+    if (HUBSPOT_SEGMENTS.has(segment)) properties.segmento_filtra = segment;
 
     contactId = (await hubspot('/crm/v3/objects/contacts', {
       method: 'POST',
