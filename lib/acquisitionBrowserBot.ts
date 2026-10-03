@@ -218,8 +218,8 @@ async function ensureSchema(db: any) {
       AND acquisition_opted_in_at IS NULL
       AND acquisition_contact_basis='b2b_public_prospect'
       AND (
-        COALESCE(nome_empresa,'') ~* '(prefeitura|consulado|embaixada|cart[oó]rio|hospital militar)'
-        OR COALESCE(raw_json::jsonb->'profile'->>'category','') ~* 'government|governmental|embassy|consulate|city_hall|courthouse|police|fire_station|military|public_service|administrative'
+        COALESCE(nome_empresa,'') ~* '(prefeitura|consulado|embaixada|cart[oó]rio|hospital militar|etec|escola estadual|escola municipal|universidade federal|instituto federal|faculdade estadual)'
+        OR COALESCE(raw_json::jsonb->'profile'->>'category','') ~* 'government|governmental|embassy|consulate|city_hall|courthouse|police|fire_station|military|public_service|administrative|public_school|state_school|federal_university'
       )`);
 }
 
@@ -245,7 +245,7 @@ async function getCandidates(db: any, batchSize = 2) {
             OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->>'websiteUri','')), '') IS NOT NULL
             OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'website','')), '') IS NOT NULL
             OR NULLIF(BTRIM(COALESCE(raw_json::jsonb->'profile'->>'websiteUri','')), '') IS NOT NULL)
-          AND COALESCE(nome_empresa,'') !~* '(prefeitura|governo|secretaria|tribunal|minist[eé]rio p[uú]blico|pol[ií]cia|bombeiros|for[cç]as armadas|c[aâ]mara municipal|assembleia legislativa|escola estadual|escola municipal|universidade federal|instituto federal)'
+          AND COALESCE(nome_empresa,'') !~* '(prefeitura|governo|secretaria|tribunal|minist[eé]rio p[uú]blico|pol[ií]cia|bombeiros|for[cç]as armadas|c[aâ]mara municipal|assembleia legislativa|escola estadual|escola municipal|universidade federal|instituto federal|etec|faculdade estadual)'
           AND COALESCE(
             raw_json::jsonb->>'website',
             raw_json::jsonb->>'websiteUri',
@@ -253,6 +253,13 @@ async function getCandidates(db: any, batchSize = 2) {
             raw_json::jsonb->'profile'->>'websiteUri',
             ''
           ) !~* '(^|\\.)gov\\.br([/:?#]|$)'
+          AND COALESCE(
+            raw_json::jsonb->>'website',
+            raw_json::jsonb->>'websiteUri',
+            raw_json::jsonb->'profile'->>'website',
+            raw_json::jsonb->'profile'->>'websiteUri',
+            ''
+          ) !~* '(^|\\.)cps\\.sp\\.gov\\.br([/:?#]|$)'
           AND NOT EXISTS (
             SELECT 1 FROM leads dup
             WHERE dup.id <> leads.id
@@ -648,7 +655,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
         }
       });
       console.log('[acquisition-browser] stage', lead.id, 'usable_forms', usableForms.length);
-      if (!usableForms.length) { lastError = 'captcha_requer_intervencao'; continue; }
+      if (!usableForms.length) { lastError = 'formulario_externo_ou_protegido'; continue; }
 
       const form = usableForms.find((f: any) => f.fields.some((x:any)=>/textarea/i.test(x.tag)))
         || usableForms.find((f: any) => f.fields.some((x:any)=>/message|mensagem|mensaje|nachricht|comments?|inquiry|enquiry/i.test([x.name,x.id,x.placeholder,x.aria].join(' '))))
