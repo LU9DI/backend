@@ -188,6 +188,7 @@ async function fullEnrichProvider() {
 
 const OSM_URL = clean(process.env.ACQUISITION_OSM_OVERPASS_URL, 2000) || 'https://overpass-api.de/api/interpreter';
 const OSM_TARGET_TYPES = /(hotel|hostel|guest_house|restaurant|cafe|bar|clinic|doctors|dentist|pharmacy|beauty|hairdresser|car_dealer|car_repair|retail|shop|supermarket|school|college|university|tourism|association|trade_union|chamber|non_profit|office)/i;
+const OSM_EXCLUDED_OFFICES = /^(government|governmental|embassy|consulate|city_hall|courthouse|police|fire_station|military|public_service|administrative)$/i;
 
 const OSM_CITIES = [
   ['São Paulo', -23.82, -46.82, -23.35, -46.35],
@@ -254,7 +255,9 @@ async function openStreetMapProvider(limit: number) {
         const tags = element?.tags || {};
         const category = [tags.office, tags.amenity, tags.tourism, tags.shop, tags.healthcare, tags.craft, tags.leisure].filter(Boolean).join(' ');
         const relevant = OSM_TARGET_TYPES.test(category);
-        if (tags?.name && relevant && (osmWebsite(tags) || osmEmail(tags))) elements.push({ element, city });
+        const office = clean(tags?.office, 120);
+        const excludedOffice = OSM_EXCLUDED_OFFICES.test(office);
+        if (tags?.name && relevant && !excludedOffice && (osmWebsite(tags) || osmEmail(tags))) elements.push({ element, city });
       }
       console.log(`[acquisition-osm] city=${city[0]} elements=${data?.elements?.length || 0}`);
       if (elements.length >= target * 3) break;
