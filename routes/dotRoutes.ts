@@ -184,9 +184,67 @@ export function mountDotRoutes(app: Express) {
 
   app.post('/api/dot/monitor/run', dotLimiter, async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
-    if (!access.allowed || !access.empresaId) return deny(res, access);
+    if (!access.allowed) return deny(res, access);
+
+    // O modo demo local não possui empresa autenticada. Não bloqueie o teste
+    // funcional do endpoint por exigir empresaId; devolva uma simulação explícita
+    // e não persista eventos/decisões como se fossem dados reais.
+    if (access.demo) {
+      const result = {
+        ok: true,
+        skipped: false,
+        demo: true,
+        average: 4.8,
+        events: [
+          {
+            id: null,
+            type: 'recurring_theme',
+            severity: 'warning',
+            title: 'Tema recorrente detectado',
+            details: 'No cenário demonstrativo, o tema "tempo de espera" aparece de forma recorrente e merece investigação.',
+          },
+        ],
+        decisions: [
+          {
+            id: null,
+            eventId: null,
+            type: 'monitoramento',
+            priority: 'alta',
+            severity: 'warning',
+            reason: 'O tema recorrente deve ser acompanhado antes de qualquer ação externa.',
+            evidence: ['Cenário demonstrativo do Filtra Dot'],
+            recommendation: 'Investigar a causa e acompanhar a evolução.',
+            options: [
+              {
+                id: 'opcao_1',
+                title: 'Acompanhar e corrigir',
+                description: 'Atuar sobre a causa identificada e acompanhar o resultado.',
+                action: 'corrigir_e_acompanhar',
+                risk: 'medio',
+              },
+              {
+                id: 'opcao_2',
+                title: 'Escalar para responsável',
+                description: 'Encaminhar com contexto e evidências para validação.',
+                action: 'escalar_responsavel',
+                risk: 'baixo',
+              },
+            ],
+            requiresApproval: true,
+            status: 'pending',
+          },
+        ],
+        prepared_actions: [],
+        policy: {
+          prepareAction: true,
+          requiresApproval: true,
+        },
+      };
+      return res.json({ ok: true, demo: true, result });
+    }
+
     const result = await runDotMonitor(access.empresaId);
-    res.json({ ok: true, demo: access.demo, result });
+    res.json({ ok: true, demo: false, result });
   });
 
   app.get('/api/dot/decisions', async (req: Request, res: Response) => {
