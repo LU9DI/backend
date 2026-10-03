@@ -775,7 +775,7 @@ async function tick() {
       return;
     }
     const selection = await selectionDiagnostics(db);
-    const batchSize = Math.max(1, Math.min(CONCURRENCY * 2, 3));
+    const batchSize = Math.max(1, Math.min(DAILY_CAP - used, Math.max(CONCURRENCY * 5, 5)));
     const candidates = await getCandidates(db, batchSize);
     const queue = candidates.slice(0, DAILY_CAP - used);
     console.log('[acquisition-browser] tick', JSON.stringify({ used, selection, candidates: candidates.length, selected: queue.length, cap: DAILY_CAP, concurrency: CONCURRENCY, reason: queue.length ? 'processing' : 'no_candidates', metrics: await queueMetrics(db) }));
