@@ -618,7 +618,8 @@ async function runOne(lead: any, signal?: AbortSignal) {
       console.log('[acquisition-browser] stage', lead.id, 'contact_page_ready', contact.href);
       const formInfo: any = await page.evaluate(() => {
         const forms = Array.from(document.querySelectorAll('form'));
-        return forms.map((form: any) => ({
+        return forms.map((form: any, formIndex: number) => ({
+          formIndex,
           action: form.action || location.href,
           method: (form.method || 'post').toLowerCase(),
           fields: Array.from(form.querySelectorAll('input,textarea,select')).map((el: any) => ({
@@ -670,6 +671,8 @@ async function runOne(lead: any, signal?: AbortSignal) {
         || usableForms[0];
 
       const fields = form.fields;
+      const formElements = await page.$('form');
+      const formElement = formElements[Number(form.formIndex)] || null;
       const pick = (rx: RegExp) => fields.find((f:any) => rx.test([f.name,f.id,f.placeholder,f.aria].join(' ')));
       const name = pick(/(^|\b)(name|nome|nombre|nom|full.?name|contact.?name)(\b|$)/i);
       const email = pick(/email|e-mail|correo|courriel/i);
@@ -691,13 +694,15 @@ async function runOne(lead: any, signal?: AbortSignal) {
       if (!msg) { console.log('[acquisition-browser] stage', lead.id, 'message_field_missing'); lastError = 'campo_mensagem_nao_encontrado'; continue; }
 
       const fill = async (field: any, value: string) => {
-        if (!field || !value) return;
-        const escapeAttr = (value: string) => value.replace(/\\\\/g, '\\\\\\').replace(/"/g, '\\\\"');
+        if (!field || !value || !formElement) return;
+        const escapeAttr = (value: string) => value.replace(/\\/g, '\\\\').replace(/"/g, '\\\"');
         const selector = field.contenteditable === 'true' ? '[contenteditable="true"]'
           : field.id ? `[id="${escapeAttr(field.id)}"]`
-          : field.name ? `[name="${escapeAttr(field.name)}"]` : '';
+          : field.name ? `[name="${escapeAttr(field.name)}"]`
+          : field.placeholder ? `[placeholder="${escapeAttr(field.placeholder)}"]`
+          : field.aria ? `[aria-label="${escapeAttr(field.aria)}"]` : '';
         if (!selector) return;
-        const el = await page.$(selector); if (!el) return;
+        const el = await formElement.$(selector); if (!el) return;
         await el.click({ clickCount: 3 });
         await page.keyboard.press('Backspace');
         await page.keyboard.type(value);
@@ -713,8 +718,9 @@ async function runOne(lead: any, signal?: AbortSignal) {
       const requiredCheckboxes = await page.$eval('input[type="checkbox"][required]', els => els.length);
       if (requiredCheckboxes > 0) { lastError = 'checkbox_obrigatorio_requer_intervencao'; continue; }
 
-      const formSelector = form.fields.some((f:any) => /textarea/i.test(f.tag)) ? 'form:has(textarea)' : 'form';
-      const submit = await page.$(`${formSelector} button[type="submit"],${formSelector} input[type="submit"],${formSelector} button`);
+      const submit = formElement
+        ? await formElement.$('button[type="submit"],input[type="submit"],button')
+        : null;
       if (!submit) { lastError = 'botao_envio_nao_encontrado'; continue; }
 
       console.log('[acquisition-browser] stage', lead.id, 'submitting');
