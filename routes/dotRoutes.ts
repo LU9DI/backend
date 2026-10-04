@@ -671,8 +671,8 @@ export function mountDotRoutes(app: Express) {
         { empresaId: access.empresaId || null, tipo: 'filtra_dot_chat' }
       );
 
-      history.push({ role: 'user', text: message, at: Date.now() });
-      history.push({ role: 'dot', text: result.text, at: Date.now() });
+      history.push({ role: 'user', text: redactSensitive(message), at: Date.now() });
+      history.push({ role: 'dot', text: redactSensitive(result.text), at: Date.now() });
       while (history.length > MAX_HISTORY) history.shift();
 
       return res.json({
