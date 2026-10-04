@@ -858,6 +858,45 @@ async function selectionDiagnostics(db: any) {
       )::int AS website_ok
     FROM leads
   `);
+  const finalFilterDiagnostics = await db.all(`
+    WITH base AS (
+      SELECT l.*,
+        COALESCE(raw_json::jsonb->>'website',raw_json::jsonb->>'websiteUri',raw_json::jsonb->'profile'->>'website',raw_json::jsonb->'profile'->>'websiteUri','') AS website
+      FROM leads l
+      WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0
+        AND (acquisition_opted_in_at IS NOT NULL OR acquisition_contact_basis='b2b_public_prospect')
+        AND browser_status IN ('pending','contact_attempted','channel_found')
+        AND COALESCE(browser_attempts,0) < ${MAX_ATTEMPTS}
+        AND (browser_next_at IS NULL OR browser_next_at <= CURRENT_TIMESTAMP)
+    ), staged AS (
+      SELECT *,
+        CASE WHEN NULLIF(BTRIM(website),'') IS NOT NULL THEN 1 ELSE 0 END AS has_website,
+        CASE WHEN COALESCE(nome_empresa,'') ~* '(prefeitura|governo|secretaria|tribunal|minist[eé]rio p[uú]blico|pol[ií]cia|bombeiros|for[cç]as armadas|c[aâ]mara municipal|assembleia legislativa|escola estadual|escola municipal|universidade federal|instituto federal|etec|faculdade estadual)' THEN 1 ELSE 0 END AS public_name,
+        CASE WHEN website ~* '(^|\\.)gov\\.br([/:?#]|$)' OR website ~* '(^|\\.)cps\\.sp\\.gov\\.br([/:?#]|$)' THEN 1 ELSE 0 END AS public_domain
+      FROM base
+    ), duped AS (
+      SELECT s.*,
+        EXISTS (
+          SELECT 1 FROM leads dup
+          WHERE dup.id <> s.id AND dup.criado_em < s.criado_em
+            AND LOWER(REGEXP_REPLACE(COALESCE(dup.nome_empresa,''),'[^a-z0-9]+','','gi')) =
+                LOWER(REGEXP_REPLACE(COALESCE(s.nome_empresa,''),'[^a-z0-9]+','','gi'))
+            AND LOWER(REGEXP_REPLACE(COALESCE(dup.raw_json::jsonb->>'website',dup.raw_json::jsonb->>'websiteUri',dup.raw_json::jsonb->'profile'->>'website',dup.raw_json::jsonb->'profile'->>'websiteUri',''),'^https?://(www\\.)?','')) =
+                LOWER(REGEXP_REPLACE(s.website,'^https?://(www\\.)?',''))
+        ) AS duplicate
+      FROM staged s
+    )
+    SELECT
+      COUNT(*)::int AS retry_pool,
+      COUNT(*) FILTER (WHERE has_website=1)::int AS website_pass,
+      COUNT(*) FILTER (WHERE has_website=1 AND public_name=0)::int AS public_name_pass,
+      COUNT(*) FILTER (WHERE has_website=1 AND public_name=0 AND public_domain=0)::int AS public_domain_pass,
+      COUNT(*) FILTER (WHERE has_website=1 AND public_name=0 AND public_domain=0 AND duplicate=FALSE)::int AS duplicate_pass,
+      COUNT(*) FILTER (WHERE has_website=1 AND public_name=1)::int AS rejected_public_name,
+      COUNT(*) FILTER (WHERE has_website=1 AND public_name=0 AND public_domain=1)::int AS rejected_public_domain,
+      COUNT(*) FILTER (WHERE has_website=1 AND public_name=0 AND public_domain=0 AND duplicate=TRUE)::int AS rejected_duplicate
+    FROM duped
+  `);
   const missingBasisBySource = await db.all(`SELECT COALESCE(NULLIF(BTRIM(acquisition_source),''), NULLIF(BTRIM(fonte),''), 'unknown') AS source, COUNT(*)::int AS count FROM leads WHERE acquisition_eligible=1 AND COALESCE(acquisition_suppressed,0)=0 AND acquisition_opted_in_at IS NULL AND acquisition_contact_basis IS NULL GROUP BY 1 ORDER BY count DESC LIMIT 10`);
   return {
     eligible: Number(row?.eligible || 0),
@@ -866,6 +905,7 @@ async function selectionDiagnostics(db: any) {
     attempts_ok: Number(row?.attempts_ok || 0),
     retry_ok: Number(row?.retry_ok || 0),
     website_ok: Number(row?.website_ok || 0),
+    final_filter_diagnostics: finalFilterDiagnostics,
     missing_basis_by_source: missingBasisBySource,
   };
 }
