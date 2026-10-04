@@ -626,9 +626,26 @@ async function runOne(lead: any, signal?: AbortSignal) {
           continue;
         }
       }
-      const pageChannels = normalizePublicChannels(await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
-        .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa[.]me|api[.]whatsapp[.]com|whatsapp[.]com\/send)/i.test(h)).slice(0, 10)));
-      const pageText = await page.evaluate(() => document.body?.innerText || '');
+      await page.waitForTimeout(350).catch(() => null);
+      let pageChannels: string[] = [];
+      let pageText = '';
+      try {
+        pageChannels = normalizePublicChannels(await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
+          .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa[.]me|api[.]whatsapp[.]com|whatsapp[.]com\/send)/i.test(h)).slice(0, 10)));
+        pageText = await page.evaluate(() => document.body?.innerText || '');
+      } catch (e: any) {
+        lastError = clean(e?.message || e, 500);
+        console.log('[acquisition-browser] stage', lead.id, 'page_read_retry', lastError);
+        await page.waitForTimeout(700).catch(() => null);
+        try {
+          pageChannels = normalizePublicChannels(await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
+            .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa[.]me|api[.]whatsapp[.]com|whatsapp[.]com\/send)/i.test(h)).slice(0, 10)));
+          pageText = await page.evaluate(() => document.body?.innerText || '');
+        } catch (retryError: any) {
+          lastError = clean(retryError?.message || retryError, 500);
+          continue;
+        }
+      }
       if (/(?:do not contact|do not solicit|no unsolicited|não entre em contato|nao entre em contato|não enviar|nao enviar|sem contato comercial|no commercial solicitation)/i.test(pageText)) {
         lastError = 'site_no_outreach_notice'; continue;
       }
@@ -639,17 +656,40 @@ async function runOne(lead: any, signal?: AbortSignal) {
       }
 
       console.log('[acquisition-browser] stage', lead.id, 'contact_page_ready', contact.href);
-      const formInfo: any = await page.$$eval('form', (forms: any[]) => forms.slice(0, 20).map((form: any, formIndex: number) => ({
-        formIndex,
-        action: form.action || location.href,
-        method: (form.method || 'post').toLowerCase(),
-        fields: Array.from(form.querySelectorAll('input,textarea,select,[contenteditable="true"]')).slice(0, 80).map((el: any) => ({
-          tag: el.tagName.toLowerCase(), type: el.type || '', name: el.name || '', id: el.id || '',
-          placeholder: el.placeholder || '', aria: el.getAttribute('aria-label') || '', required: !!el.required,
-          maxlength: el.getAttribute('maxlength') || '', minlength: el.getAttribute('minlength') || '',
-          contenteditable: el.getAttribute('contenteditable') || ''
-        }))
-      })));
+      let formInfo: any = [];
+      try {
+        formInfo = await page.$eval('form', (forms: any[]) => forms.slice(0, 20).map((form: any, formIndex: number) => ({
+          formIndex,
+          action: form.action || location.href,
+          method: (form.method || 'post').toLowerCase(),
+          fields: Array.from(form.querySelectorAll('input,textarea,select,[contenteditable="true"]')).slice(0, 80).map((el: any) => ({
+            tag: el.tagName.toLowerCase(), type: el.type || '', name: el.name || '', id: el.id || '',
+            placeholder: el.placeholder || '', aria: el.getAttribute('aria-label') || '', required: !!el.required,
+            maxlength: el.getAttribute('maxlength') || '', minlength: el.getAttribute('minlength') || '',
+            contenteditable: el.getAttribute('contenteditable') || ''
+          }))
+        })));
+      } catch (e: any) {
+        lastError = clean(e?.message || e, 500);
+        console.log('[acquisition-browser] stage', lead.id, 'form_scan_retry', lastError);
+        await page.waitForTimeout(700).catch(() => null);
+        try {
+          formInfo = await page.$eval('form', (forms: any[]) => forms.slice(0, 20).map((form: any, formIndex: number) => ({
+            formIndex,
+            action: form.action || location.href,
+            method: (form.method || 'post').toLowerCase(),
+            fields: Array.from(form.querySelectorAll('input,textarea,select,[contenteditable="true"]')).slice(0, 80).map((el: any) => ({
+              tag: el.tagName.toLowerCase(), type: el.type || '', name: el.name || '', id: el.id || '',
+              placeholder: el.placeholder || '', aria: el.getAttribute('aria-label') || '', required: !!el.required,
+              maxlength: el.getAttribute('maxlength') || '', minlength: el.getAttribute('minlength') || '',
+              contenteditable: el.getAttribute('contenteditable') || ''
+            }))
+          })));
+        } catch (retryError: any) {
+          lastError = clean(retryError?.message || retryError, 500);
+          continue;
+        }
+      }));
 
       console.log('[acquisition-browser] stage', lead.id, 'forms_detected', formInfo.length);
       console.log('[acquisition-browser] stage', lead.id, 'form_fields', JSON.stringify(formInfo.map((f:any) => ({ index:f.formIndex, action:f.action, fields:f.fields.map((x:any) => ({ tag:x.tag, type:x.type, name:x.name, id:x.id, placeholder:x.placeholder, aria:x.aria, required:x.required, maxlength:x.maxlength })) })) ).slice(0,12000));
