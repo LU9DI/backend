@@ -285,10 +285,19 @@ async function getCandidates(db: any, batchSize = 2) {
                   ), '^https?://(www\\.)?', ''))
           )
         ORDER BY
+          -- Prioriza sinais baratos de que o site possui uma superfície de contato.
+          -- O sinal é heurístico: a confirmação continua sendo feita pelo navegador.
           CASE
-            WHEN COALESCE(raw_json::jsonb->'profile'->>'category','') ~* 'hotel|motel|restaurant|bar|clinic|medical|dentist|retail|shop|store|agency|association|union|chamber|nonprofit|tourism' THEN 0
-            WHEN COALESCE(raw_json::jsonb->'profile'->>'category','') ~* 'school|college|university|education|training|senai|senac|sesi' THEN 2
-            ELSE 1
+            WHEN COALESCE(raw_json::jsonb::text,'') ~* '(contact|contato|fale conosco|fale-conosco|atendimento|ouvidoria|formul[aá]rio)' THEN 0
+            WHEN COALESCE(raw_json::jsonb->'profile'->>'category','') ~* 'hotel|motel|restaurant|bar|clinic|medical|dentist|retail|shop|store|agency|association|union|chamber|nonprofit|tourism' THEN 1
+            WHEN COALESCE(raw_json::jsonb->'profile'->>'category','') ~* 'school|college|university|education|training|senai|senac|sesi' THEN 3
+            ELSE 2
+          END,
+          -- Evita gastar navegador em sites conhecidos por expor apenas uma página
+          -- pública simples; eles continuam elegíveis e podem ser processados depois.
+          CASE
+            WHEN COALESCE(raw_json::jsonb::text,'') ~* '(blogspot\\.com|blogger\\.com)' THEN 2
+            ELSE 0
           END,
           CASE browser_status
             WHEN 'pending' THEN 0
