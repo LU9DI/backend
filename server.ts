@@ -331,7 +331,9 @@ async function main() {
   try {
     await ensureAcquisitionEngineSchema(getDb());
     startAcquisitionWorker();
-    startAcquisitionReplenisher();
+    // Browser capture is the revenue-critical path. Do not let lead discovery
+    // providers consume startup/CPU/network budget before existing prospects
+    // have a chance to be contacted. Replenishment starts after the browser bot.
     try {
       console.log('[acquisition-browser] bootstrap start');
       await startAcquisitionBrowserBot();
@@ -339,6 +341,13 @@ async function main() {
     } catch (e: any) {
       console.error('[acquisition-browser] bootstrap failed:', e?.message || e);
     }
+    setTimeout(() => {
+      try {
+        startAcquisitionReplenisher();
+      } catch (e: any) {
+        console.warn('[acquisition-replenisher] delayed bootstrap failed:', e?.message || e);
+      }
+    }, 60_000);
     await startProductHuntAcquisition();
     await startHubSpotAcquisitionSync();
   } catch (e) {
