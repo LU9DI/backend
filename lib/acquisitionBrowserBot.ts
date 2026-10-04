@@ -282,6 +282,11 @@ async function getCandidates(db: any, batchSize = 2) {
                   ), '^https?://(www\\.)?', ''))
           )
         ORDER BY
+          CASE
+            WHEN COALESCE(raw_json::jsonb->'profile'->>'category','') ~* 'hotel|motel|restaurant|bar|clinic|medical|dentist|retail|shop|store|agency|association|union|chamber|nonprofit|tourism' THEN 0
+            WHEN COALESCE(raw_json::jsonb->'profile'->>'category','') ~* 'school|college|university|education|training|senai|senac|sesi' THEN 2
+            ELSE 1
+          END,
           CASE browser_status
             WHEN 'pending' THEN 0
             WHEN 'contact_attempted' THEN 1
@@ -477,6 +482,9 @@ async function runOne(lead: any, signal?: AbortSignal) {
   console.log('[acquisition-browser] stage', lead.id, 'preflight_start');
   const reachableBase = await preflightWebsite(base);
   console.log('[acquisition-browser] stage', lead.id, 'preflight_done', reachableBase.toString());
+  if (/(^|\.)facebook\.com$|(^|\.)instagram\.com$|(^|\.)linkedin\.com$|(^|\.)tiktok\.com$|(^|\.)youtube\.com$/i.test(reachableBase.hostname)) {
+    throw new Error('site_external_social_redirect');
+  }
 
   // Probe the rendered source cheaply before spending a Chromium cycle. This
   // never submits a form; it only identifies whether a contact surface exists.
