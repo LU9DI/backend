@@ -266,6 +266,9 @@ async function getCandidates(db: any, batchSize = 2) {
               AND dup.criado_em < leads.criado_em
               AND LOWER(REGEXP_REPLACE(COALESCE(dup.nome_empresa,''), '[^a-z0-9]+', '', 'gi')) =
                   LOWER(REGEXP_REPLACE(COALESCE(leads.nome_empresa,''), '[^a-z0-9]+', '', 'gi'))
+              AND dup.browser_status IN ('pending','processing','contact_attempted','channel_found','sent')
+              AND NULLIF(BTRIM(COALESCE(dup.raw_json::jsonb->>'website',dup.raw_json::jsonb->>'websiteUri',dup.raw_json::jsonb->'profile'->>'website',dup.raw_json::jsonb->'profile'->>'websiteUri','')), '') IS NOT NULL
+              AND NULLIF(BTRIM(COALESCE(leads.raw_json::jsonb->>'website',leads.raw_json::jsonb->>'websiteUri',leads.raw_json::jsonb->'profile'->>'website',leads.raw_json::jsonb->'profile'->>'websiteUri','')), '') IS NOT NULL
               AND LOWER(REGEXP_REPLACE(COALESCE(
                 dup.raw_json::jsonb->>'website',
                 dup.raw_json::jsonb->>'websiteUri',
