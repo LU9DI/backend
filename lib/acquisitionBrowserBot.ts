@@ -709,7 +709,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
           lastError = clean(retryError?.message || retryError, 500);
           continue;
         }
-      }));
+      }
 
       console.log('[acquisition-browser] stage', lead.id, 'forms_detected', formInfo.length);
       console.log('[acquisition-browser] stage', lead.id, 'form_fields', JSON.stringify(formInfo.map((f:any) => ({ index:f.formIndex, action:f.action, fields:f.fields.map((x:any) => ({ tag:x.tag, type:x.type, name:x.name, id:x.id, placeholder:x.placeholder, aria:x.aria, required:x.required, maxlength:x.maxlength })) })) ).slice(0,12000));
