@@ -14,6 +14,7 @@ async function main() {
     id INTEGER PRIMARY KEY,
     locked_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
   )`);
+
   await db.exec(`CREATE TABLE IF NOT EXISTS acquisition_browser_cycles (
     id UUID PRIMARY KEY,
     started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -28,6 +29,43 @@ async function main() {
     pending INTEGER NOT NULL DEFAULT 0,
     error TEXT
   )`);
+
+  // Legacy Render/Supabase databases may already contain this table with an
+  // older, smaller schema. CREATE TABLE IF NOT EXISTS does not evolve it.
+  // Repair the telemetry contract in-place before the first INSERT/UPDATE so
+  // an old table cannot stop the acquisition browser worker.
+  const cycleColumns = [
+    ['started_at', 'TIMESTAMPTZ'],
+    ['finished_at', 'TIMESTAMPTZ'],
+    ['duration_ms', 'INTEGER'],
+    ['status', `TEXT NOT NULL DEFAULT 'running'`],
+    ['selected', 'INTEGER NOT NULL DEFAULT 0'],
+    ['sent', 'INTEGER NOT NULL DEFAULT 0'],
+    ['submitted_unconfirmed', 'INTEGER NOT NULL DEFAULT 0'],
+    ['channel_found', 'INTEGER NOT NULL DEFAULT 0'],
+    ['failed', 'INTEGER NOT NULL DEFAULT 0'],
+    ['pending', 'INTEGER NOT NULL DEFAULT 0'],
+    ['error', 'TEXT'],
+  ];
+  for (const [name, type] of cycleColumns) {
+    try {
+      await db.exec(`ALTER TABLE acquisition_browser_cycles ADD COLUMN ${name} ${type}`);
+    } catch {
+      // Column already exists or the backend adapter reports a harmless
+      // duplicate-column/schema race. The following queries remain idempotent.
+    }
+  }
+
+  const lockColumns = [
+    ['locked_at', 'TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP'],
+  ];
+  for (const [name, type] of lockColumns) {
+    try {
+      await db.exec(`ALTER TABLE acquisition_browser_worker_lock ADD COLUMN ${name} ${type}`);
+    } catch {
+      // Column already exists.
+    }
+  }
 
   const lock = await db.run(`INSERT INTO acquisition_browser_worker_lock (id, locked_at)
     VALUES (1, CURRENT_TIMESTAMP)
