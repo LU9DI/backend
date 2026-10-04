@@ -681,7 +681,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
       console.log('[acquisition-browser] stage', lead.id, 'contact_page_ready', contact.href);
       let formInfo: any = [];
       try {
-        formInfo = await page.$eval('form', (forms: any[]) => forms.slice(0, 20).map((form: any, formIndex: number) => ({
+        formInfo = await page.$$eval('form', (forms: any[]) => forms.slice(0, 20).map((form: any, formIndex: number) => ({
           formIndex,
           action: form.action || location.href,
           method: (form.method || 'post').toLowerCase(),
@@ -697,7 +697,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
         console.log('[acquisition-browser] stage', lead.id, 'form_scan_retry', lastError);
         await new Promise(resolve => setTimeout(resolve, 700));
         try {
-          formInfo = await page.$eval('form', (forms: any[]) => forms.slice(0, 20).map((form: any, formIndex: number) => ({
+          formInfo = await page.$$eval('form', (forms: any[]) => forms.slice(0, 20).map((form: any, formIndex: number) => ({
             formIndex,
             action: form.action || location.href,
             method: (form.method || 'post').toLowerCase(),
