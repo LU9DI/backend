@@ -5,6 +5,7 @@ import { getDb } from '../lib/db.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyInboundSecret, notifyN8n } from '../lib/n8n.js';
 import { acquisitionEngineStatus, queueEligibleAcquisition } from '../lib/acquisitionEngine.js';
+import { isValidEmail } from '../lib/emailValidation.js';
 
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 240, message: { error: 'Rate limit acquisition.' } });
 
@@ -396,7 +397,7 @@ export function mountAcquisitionRoutes(app: Express) {
     const company=s(b.company||b.nome_empresa,180);
     const source=s(b.source,120)||'website';
     const consent=b.consent===true;
-    if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) return res.status(400).json({error:'E-mail inválido.'});
+    if(!isValidEmail(email)) return res.status(400).json({error:'E-mail inválido.'});
     if(!consent) return res.status(400).json({error:'Consentimento explícito obrigatório.'});
     let lead=await db.get('SELECT id FROM leads WHERE LOWER(email)=? LIMIT 1',[email]);
     const leadId=String(lead?.id||crypto.randomUUID());
