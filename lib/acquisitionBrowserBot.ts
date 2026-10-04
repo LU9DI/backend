@@ -667,7 +667,15 @@ async function runOne(lead: any, signal?: AbortSignal) {
       const email = pick(/email|e-mail|correo|courriel/i);
       const company = pick(/company|empresa|sociedad|entreprise|firma/i);
       const subject = pick(/subject|assunto|asunto|objet|betreff/i);
-      let msg = pick(/message|mensagem|mensaje|nachricht|comments?|coment[aá]rio|inquiry|enquiry|request|consulta|solicita/i);
+      let msg = pick(/message|mensagem|mensaje|nachricht|comments?|coment[aá]rio|inquiry|enquiry|request|consulta|solicita|descri[cç][aã]o|details?|detalhes?|observa[cç][aã]o|informa[cç][aã]o|how.?can.?we.?help|como.?podemos.?ajudar/i);
+      if (!msg) {
+        msg = fields.find((f:any) =>
+          /textarea/i.test(f.tag) &&
+          !/search|senha|password|address|endere[cç]o|telefone|phone|subject|assunto|nome|name|email/i.test(
+            [f.name,f.id,f.placeholder,f.aria].join(' ')
+          )
+        );
+      }
       if (!msg) {
         const editable = await page.$('[contenteditable="true"]');
         if (editable) msg = { id: '', name: '', placeholder: '', aria: '', contenteditable: 'true' };
