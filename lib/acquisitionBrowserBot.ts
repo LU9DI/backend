@@ -625,7 +625,8 @@ async function runOne(lead: any, signal?: AbortSignal) {
           fields: Array.from(form.querySelectorAll('input,textarea,select')).map((el: any) => ({
             tag: el.tagName.toLowerCase(), type: el.type || '', name: el.name || '', id: el.id || '',
             placeholder: el.placeholder || '', aria: el.getAttribute('aria-label') || '', required: !!el.required,
-            value: el.value || '', contenteditable: el.getAttribute('contenteditable') || '',
+            maxlength: el.getAttribute('maxlength') || '', minlength: el.getAttribute('minlength') || '',
+            value: el.value || '', contenteditable: el.getAttribute('contenteditable') || '' ,
             options: el.tagName.toLowerCase()==='select' ? Array.from(el.options).slice(0,8).map((o:any)=>o.text) : []
           })),
           text: (form.innerText || '').slice(0,5000)
@@ -633,6 +634,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
       });
 
       console.log('[acquisition-browser] stage', lead.id, 'forms_detected', formInfo.length);
+      console.log('[acquisition-browser] stage', lead.id, 'form_fields', JSON.stringify(formInfo.map((f:any) => ({ index:f.formIndex, action:f.action, fields:f.fields.map((x:any) => ({ tag:x.tag, type:x.type, name:x.name, id:x.id, placeholder:x.placeholder, aria:x.aria, required:x.required, maxlength:x.maxlength })) })) ).slice(0,12000));
       if (!formInfo.length) {
         const text = await page.evaluate(() => (document.body?.innerText || '').slice(0,12000));
         const emails = Array.from(new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+[.][A-Z]{2,}/gi) || [])
@@ -668,6 +670,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
 
       const form = usableForms.find((f: any) => f.fields.some((x:any)=>/textarea/i.test(x.tag)))
         || usableForms.find((f: any) => f.fields.some((x:any)=>/message|mensagem|mensaje|nachricht|comments?|inquiry|enquiry/i.test([x.name,x.id,x.placeholder,x.aria].join(' '))))
+        || usableForms.find((f: any) => f.fields.some((x:any)=>Number(x.maxlength || 0) >= 200))
         || usableForms[0];
 
       const fields = form.fields;
@@ -681,7 +684,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
       let msg = pick(/message|mensagem|mensaje|nachricht|comments?|coment[aá]rio|inquiry|enquiry|request|consulta|solicita|descri[cç][aã]o|details?|detalhes?|observa[cç][aã]o|informa[cç][aã]o|how.?can.?we.?help|como.?podemos.?ajudar/i);
       if (!msg) {
         msg = fields.find((f:any) =>
-          /textarea/i.test(f.tag) &&
+          (/textarea/i.test(f.tag) || Number(f.maxlength || 0) >= 200) &&
           !/search|senha|password|address|endere[cç]o|telefone|phone|subject|assunto|nome|name|email/i.test(
             [f.name,f.id,f.placeholder,f.aria].join(' ')
           )
