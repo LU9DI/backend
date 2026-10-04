@@ -12,7 +12,7 @@ const ENABLED = process.env.ACQUISITION_BROWSER_BOT === '1';
 const CHILD_MODE = process.env.ACQUISITION_BROWSER_CHILD === '1';
 const INTERVAL_MS = Math.max(60_000, Number(process.env.ACQUISITION_BROWSER_INTERVAL_MS || 300_000));
 const DAILY_CAP = Math.max(1, Math.min(80, Number(process.env.ACQUISITION_BROWSER_DAILY_CAP || 80)));
-const CYCLE_CAP = Math.max(1, Math.min(10, Number(process.env.ACQUISITION_BROWSER_CYCLE_CAP || 10)));
+const CYCLE_CAP = Math.max(1, Math.min(6, Number(process.env.ACQUISITION_BROWSER_CYCLE_CAP || 3)));
 const CONCURRENCY = Math.max(1, Math.min(2, Number(process.env.ACQUISITION_BROWSER_CONCURRENCY || 1)));
 const MAX_ATTEMPTS = 2;
 let started = false;
@@ -514,7 +514,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
   browser = await puppeteer.launch({
     headless: true,
     executablePath: process.env.CHROMIUM_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-    timeout: 12_000,
+    timeout: 30_000,
     signal,
     args: [
       '--no-sandbox',
@@ -959,8 +959,8 @@ async function processLead(db: any, lead: any) {
         runOne(lead, controller.signal),
         new Promise((_, reject) => setTimeout(() => {
           controller.abort();
-          reject(new Error('browser_timeout_45s'));
-        }, 45_000)),
+          reject(new Error('browser_timeout_75s'));
+        }, 75_000)),
       ]);
     } finally {
       controller.abort();
