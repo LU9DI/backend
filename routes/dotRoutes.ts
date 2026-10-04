@@ -80,14 +80,14 @@ function cleanMessage(value: unknown): string {
 function redactSensitive(value: unknown): string {
   let text = String(value ?? '');
   const replacements: Array<[RegExp, string | ((...args: any[]) => string)]> = [
-    [/Bearer\\s+[A-Za-z0-9._~+/=-]{20,}/gi, 'Bearer [REDACTED]'],
-    [/(api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|senha|webhook[_-]?secret)\\s*[:=]\\s*[^\\s,;]+/gi, '$1=[REDACTED]'],
+    [/Bearer\s+[A-Za-z0-9._~+/=-]{20,}/gi, 'Bearer [REDACTED]'],
+    [/(api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|senha|webhook[_-]?secret)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]'],
     [/(gsk_|sk_)[A-Za-z0-9_-]{20,}/g, '[REDACTED_KEY]'],
     [/AIza[0-9A-Za-z_-]{20,}/g, '[REDACTED_KEY]'],
-    [/eyJ[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}/g, '[REDACTED_JWT]'],
-    [/\\b[A-Za-z0-9_-]{40,}\\b/g, '[REDACTED_TOKEN]'],
-    [/\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b/gi, '[REDACTED_EMAIL]'],
-    [/\\b(?:\\+?55\\s?)?(?:\\(?\\d{2}\\)?\\s?)?\\d{4,5}[-.\\s]?\\d{4}\\b/g, '[REDACTED_PHONE]'],
+    [/eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, '[REDACTED_JWT]'],
+    [/\b[A-Za-z0-9_-]{40,}\b/g, '[REDACTED_TOKEN]'],
+    [/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[REDACTED_EMAIL]'],
+    [/\b(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?\d{4,5}[-.\s]?\d{4}\b/g, '[REDACTED_PHONE]'],
   ];
   for (const [pattern, replacement] of replacements) text = text.replace(pattern, replacement as any);
   return text;
