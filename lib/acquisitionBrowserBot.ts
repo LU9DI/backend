@@ -628,7 +628,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
       }
 
       console.log('[acquisition-browser] stage', lead.id, 'contact_page_ready', contact.href);
-      const formInfo: any = await page.$eval('form', (forms: any[]) => forms.slice(0, 20).map((form: any, formIndex: number) => ({
+      const formInfo: any = await page.$$eval('form', (forms: any[]) => forms.slice(0, 20).map((form: any, formIndex: number) => ({
         formIndex,
         action: form.action || location.href,
         method: (form.method || 'post').toLowerCase(),
@@ -734,7 +734,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
       console.log('[acquisition-browser] stage', lead.id, 'form_filled');
 
       const requiredCheckboxes = formElement
-        ? await formElement.$eval('input[type="checkbox"][required]', (els: any[]) => els.length)
+        ? await formElement.$$eval('input[type="checkbox"][required]', (els: any[]) => els.length)
         : 0;
       if (requiredCheckboxes > 0) { lastError = 'checkbox_obrigatorio_requer_intervencao'; continue; }
 
