@@ -628,22 +628,17 @@ async function runOne(lead: any, signal?: AbortSignal) {
       }
 
       console.log('[acquisition-browser] stage', lead.id, 'contact_page_ready', contact.href);
-      const formInfo: any = await page.evaluate(() => {
-        const forms = Array.from(document.querySelectorAll('form'));
-        return forms.map((form: any, formIndex: number) => ({
-          formIndex,
-          action: form.action || location.href,
-          method: (form.method || 'post').toLowerCase(),
-          fields: Array.from(form.querySelectorAll('input,textarea,select')).map((el: any) => ({
-            tag: el.tagName.toLowerCase(), type: el.type || '', name: el.name || '', id: el.id || '',
-            placeholder: el.placeholder || '', aria: el.getAttribute('aria-label') || '', required: !!el.required,
-            maxlength: el.getAttribute('maxlength') || '', minlength: el.getAttribute('minlength') || '',
-            value: el.value || '', contenteditable: el.getAttribute('contenteditable') || '' ,
-            options: el.tagName.toLowerCase()==='select' ? Array.from(el.options).slice(0,8).map((o:any)=>o.text) : []
-          })),
-          text: (form.innerText || '').slice(0,5000)
-        }));
-      });
+      const formInfo: any = await page.$eval('form', (forms: any[]) => forms.slice(0, 20).map((form: any, formIndex: number) => ({
+        formIndex,
+        action: form.action || location.href,
+        method: (form.method || 'post').toLowerCase(),
+        fields: Array.from(form.querySelectorAll('input,textarea,select,[contenteditable="true"]')).slice(0, 80).map((el: any) => ({
+          tag: el.tagName.toLowerCase(), type: el.type || '', name: el.name || '', id: el.id || '',
+          placeholder: el.placeholder || '', aria: el.getAttribute('aria-label') || '', required: !!el.required,
+          maxlength: el.getAttribute('maxlength') || '', minlength: el.getAttribute('minlength') || '',
+          contenteditable: el.getAttribute('contenteditable') || ''
+        }))
+      })));
 
       console.log('[acquisition-browser] stage', lead.id, 'forms_detected', formInfo.length);
       console.log('[acquisition-browser] stage', lead.id, 'form_fields', JSON.stringify(formInfo.map((f:any) => ({ index:f.formIndex, action:f.action, fields:f.fields.map((x:any) => ({ tag:x.tag, type:x.type, name:x.name, id:x.id, placeholder:x.placeholder, aria:x.aria, required:x.required, maxlength:x.maxlength })) })) ).slice(0,12000));
