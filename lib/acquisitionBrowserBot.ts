@@ -715,7 +715,9 @@ async function runOne(lead: any, signal?: AbortSignal) {
       await fill(msg, target.body);
       console.log('[acquisition-browser] stage', lead.id, 'form_filled');
 
-      const requiredCheckboxes = await page.$eval('input[type="checkbox"][required]', els => els.length);
+      const requiredCheckboxes = formElement
+        ? await formElement.$eval('input[type="checkbox"][required]', els => els.length)
+        : 0;
       if (requiredCheckboxes > 0) { lastError = 'checkbox_obrigatorio_requer_intervencao'; continue; }
 
       const submit = formElement
