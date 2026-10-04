@@ -541,6 +541,26 @@ async function runOne(lead: any, signal?: AbortSignal) {
     });
     await page.setUserAgent('FiltraAI-Acquisition/1.0 (+https://filtraai.com)');
     await page.setViewport({ width: 1365, height: 900 });
+
+    // Some sites perform a client-side navigation immediately after DOMContentLoaded.
+    // A raw page.evaluate() can then lose its execution context mid-read. Retry
+    // bounded reads so navigation races do not abort the acquisition cycle.
+    const evaluateStable = async <T>(fn: (...args: any[]) => T, ...args: any[]): Promise<T> => {
+      let lastError: any = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          return await page.evaluate(fn, ...args);
+        } catch (e: any) {
+          lastError = e;
+          const message = clean(e?.message || e, 500);
+          if (!/Execution context was destroyed|Cannot find context with specified id|Most likely the page has been closed/i.test(message)) {
+            throw e;
+          }
+          await page.waitForTimeout(350 + attempt * 250).catch(() => null);
+        }
+      }
+      throw lastError;
+    };
     const staticContactHref = surface.contactLinks[0] || '';
     const initialUrl = staticContactHref || reachableBase.toString();
     console.log('[acquisition-browser] surface', lead.id, surface.kind, staticContactHref || 'homepage');
@@ -558,7 +578,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
     const target = message(lang, clean(lead.nome_empresa, 180));
     console.log('[acquisition-browser] stage', lead.id, 'page_loaded');
 
-    const links = await page.evaluate(() => Array.from(document.querySelectorAll('a')).map(a => ({
+    const links = await evaluateStable(() => Array.from(document.querySelectorAll('a')).map(a => ({
       text: (a.textContent || '').trim(),
       href: (a as HTMLAnchorElement).href
     })).filter(x => x.href));
@@ -570,7 +590,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
     const publicChannels = normalizePublicChannels(links
       .map(x => x.href)
       .filter(h => /^(mailto:|tel:)/i.test(h) || /(?:wa\.me|api\.whatsapp\.com|whatsapp\.com\/send)/i.test(h)));
-    const visiblePhone = normalizePublicPhones((await page.evaluate(() => document.body?.innerText || ''))
+    const visiblePhone = normalizePublicPhones((await evaluateStable(() => document.body?.innerText || ''))
       .match(/(?:\+\d[\d .()-]{7,}\d|\(\d{2}\)[ .-]?\d{4,5}[ .-]?\d{4}|\b\d{2}[ .-]?\d{4,5}[ .-]?\d{4}\b)/g) || []);
 
     // Preserve discovered public channels, but do not stop here: if the official
@@ -630,17 +650,17 @@ async function runOne(lead: any, signal?: AbortSignal) {
       let pageChannels: string[] = [];
       let pageText = '';
       try {
-        pageChannels = normalizePublicChannels(await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
+        pageChannels = normalizePublicChannels(await evaluateStable(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
           .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa[.]me|api[.]whatsapp[.]com|whatsapp[.]com\/send)/i.test(h)).slice(0, 10)));
-        pageText = await page.evaluate(() => document.body?.innerText || '');
+        pageText = await evaluateStable(() => document.body?.innerText || '');
       } catch (e: any) {
         lastError = clean(e?.message || e, 500);
         console.log('[acquisition-browser] stage', lead.id, 'page_read_retry', lastError);
         await page.waitForTimeout(700).catch(() => null);
         try {
-          pageChannels = normalizePublicChannels(await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
+          pageChannels = normalizePublicChannels(await evaluateStable(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
             .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa[.]me|api[.]whatsapp[.]com|whatsapp[.]com\/send)/i.test(h)).slice(0, 10)));
-          pageText = await page.evaluate(() => document.body?.innerText || '');
+          pageText = await evaluateStable(() => document.body?.innerText || '');
         } catch (retryError: any) {
           lastError = clean(retryError?.message || retryError, 500);
           continue;
@@ -694,7 +714,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
       console.log('[acquisition-browser] stage', lead.id, 'forms_detected', formInfo.length);
       console.log('[acquisition-browser] stage', lead.id, 'form_fields', JSON.stringify(formInfo.map((f:any) => ({ index:f.formIndex, action:f.action, fields:f.fields.map((x:any) => ({ tag:x.tag, type:x.type, name:x.name, id:x.id, placeholder:x.placeholder, aria:x.aria, required:x.required, maxlength:x.maxlength })) })) ).slice(0,12000));
       if (!formInfo.length) {
-        const text = await page.evaluate(() => (document.body?.innerText || '').slice(0,12000));
+        const text = await evaluateStable(() => (document.body?.innerText || '').slice(0,12000));
         const emails = Array.from(new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+[.][A-Z]{2,}/gi) || [])
           .map(x => x.toLowerCase())
           .filter(x => !/example[.]|noreply@|no-reply@/i.test(x)))).slice(0, 5);
@@ -811,7 +831,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
       await page.waitForTimeout(500);
 
       const finalUrl = await page.url();
-      const confirmation = await page.evaluate(() => document.body.innerText.slice(0,5000));
+      const confirmation = await evaluateStable(() => document.body.innerText.slice(0,5000));
       console.log('[acquisition-browser] stage', lead.id, 'submit_returned', finalUrl);
       const looksSuccessful = /(thank you|thanks|obrigad|gracias|merci|danke|grazie|sent successfully|mensagem enviada|enviado com sucesso|message sent)/i.test(confirmation);
       if (looksSuccessful) {
