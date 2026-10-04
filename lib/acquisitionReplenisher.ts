@@ -3,7 +3,7 @@ import { ensureAcquisitionEngineSchema } from './acquisitionEngine.js';
 import { googlePlacesLeads } from './acquisitionGooglePlaces.js';
 import crypto from 'crypto';
 
-const MIN_STOCK = Math.max(80, Number(process.env.ACQUISITION_MIN_STOCK || 560));
+// Replenishment is a safety buffer, not the acquisition critical path.\n// Keep the default low enough that existing browser-ready prospects are processed\n// before we spend time/credits querying external discovery providers.\nconst MIN_STOCK = Math.max(80, Number(process.env.ACQUISITION_MIN_STOCK || 80));
 const BATCH_SIZE = Math.min(200, Math.max(1, Number(process.env.ACQUISITION_REPLENISH_BATCH || 200)));
 const INTERVAL_MS = Math.max(60000, Number(process.env.ACQUISITION_REPLENISH_INTERVAL_MS || 600000));
 const FULLENRICH_BASE = 'https://app.fullenrich.com/api/v2';
