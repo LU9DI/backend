@@ -1,0 +1,14 @@
+name: Acquisition wake
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Keep acquisition worker warm
+        run: |
+          curl --fail --silent --show-error --max-time 20 https://filtra-ia-api.onrender.com/api/health
