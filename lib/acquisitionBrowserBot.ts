@@ -671,7 +671,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
         || usableForms[0];
 
       const fields = form.fields;
-      const formElements = await page.$('form');
+      const formElements = await page.$$('form');
       const formElement = formElements[Number(form.formIndex)] || null;
       const pick = (rx: RegExp) => fields.find((f:any) => rx.test([f.name,f.id,f.placeholder,f.aria].join(' ')));
       const name = pick(/(^|\b)(name|nome|nombre|nom|full.?name|contact.?name)(\b|$)/i);
