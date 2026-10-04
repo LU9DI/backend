@@ -183,14 +183,14 @@ export function mountDotRoutes(app: Express) {
       plan: access.plan || null,
       plan_label: access.planLabel || null,
       priority_access: ['rei', 'corporativo'],
-      scheduler: getDotSchedulerStatus(),
-      capabilities: [
+      scheduler: access.allowed && !access.demo ? getDotSchedulerStatus() : null,
+      capabilities: access.allowed ? [
         'analisar_reputacao',
         'detectar_padroes',
         'explicar_tendencias',
         'preparar_acoes',
         'memoria_de_conversa',
-      ],
+      ] : [],
     });
   });
 
@@ -337,7 +337,15 @@ export function mountDotRoutes(app: Express) {
 
   app.post('/api/dot/decisions/:id/:action', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
-    if (!access.allowed || !access.empresaId) return deny(res, access);
+    if (!access.allowed) return deny(res, access);
+    if (access.demo) {
+      const action = String(req.params.action);
+      if (!['prepare', 'reject'].includes(action) || Number(req.params.id) !== 1) {
+        return res.status(409).json({ error: 'Decisão demonstrativa inválida.' });
+      }
+      return res.json({ ok: true, demo: true, decision: { id: 1, status: action === 'prepare' ? 'prepared' : 'rejected' }, executed: false });
+    }
+    if (!access.empresaId) return deny(res, access);
     const action = String(req.params.action);
     // Aprovação de uma ação só pode ocorrer pela fila de ações, que exige
     // uma ação preparada e aplica a transação atômica decisão + ação.
