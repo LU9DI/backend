@@ -3,8 +3,9 @@ import crypto from 'crypto';
 import { getDb } from './db.js';
 import { enqueueRetry } from './retryQueue.js';
 import { enviarEmailAquisicao } from './mailer.js';
+import { inSendWindow } from './acquisitionWindow.js';
 
-const DAILY_CAP = Math.min(80, Math.max(1, Number(process.env.ACQUISITION_DAILY_CAP || 80)));
+const DAILY_CAP = Math.min(80, Math.max(1, Number(process.env.ACQUISITION_DAILY_CAP || 25)));
 const INSTITUTIONAL_DAILY_TARGET = Math.min(30, DAILY_CAP);
 const INSTITUTIONAL_KEYWORDS = /(associa[cç][aã]o|associacao|sindicato|federa[cç][aã]o|federacao|c[aâ]mara de com[eé]rcio|camara de comercio|entidade empresarial|uni[aã]o empresarial|conselho empresarial|instituto empresarial|confedera[cç][aã]o|confederacao)/i;
 const ENGINE_INTERVAL_MS = Math.max(30_000, Number(process.env.ACQUISITION_ENGINE_INTERVAL_MS || 60_000));
@@ -289,7 +290,7 @@ ${url}
 
 Depois, se fizer sentido, você pode testar a plataforma por 7 dias.
 
-Equipe filtra.ai
+Equipe Filtra.AI
 
 Se não quiser receber novas comunicações da Filtra.AI, cancele aqui: ${unsubscribeUrl}`;
   const safeCompany = company.replace(/[&<>"]/g, (m: string) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m] || m));
@@ -297,7 +298,7 @@ Se não quiser receber novas comunicações da Filtra.AI, cancele aqui: ${unsubs
   const safeUnsubscribeUrl = unsubscribeUrl.replace(/&/g, '&amp;');
   const html = institutional
     ? `<!doctype html><html lang="pt-BR"><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#202124;line-height:1.55"><div style="max-width:600px;margin:auto"><p>Olá <strong>${safeCompany}</strong>,</p><p>A <strong>Filtra.AI</strong> está oferecendo à entidade uma iniciativa gratuita que pode ser disponibilizada aos seus associados: uma auditoria de reputação no Google.</p><p>A auditoria mostra a evolução das avaliações e notas, principais pontos de atenção nos comentários recentes, oportunidades de melhoria na reputação online e avaliações que ainda não receberam resposta.</p><p>Não há custo para a entidade. Os associados interessados também podem testar o Filtra.AI gratuitamente por <strong>7 dias, sem cartão</strong>, para acompanhar avaliações, organizar feedback e utilizar a análise com IA.</p><p><a href="${safeClickUrl}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:700">Acessar auditoria gratuita</a></p><p>Auditoria e teste: <a href="https://filtraai.com">filtraai.com</a></p><p>Equipe Filtra.AI</p><p style="font-size:12px;color:#6b7280">Se não quiser receber novas comunicações da Filtra.AI, <a href="${safeUnsubscribeUrl}">clique aqui para cancelar</a>.</p><img src="${openUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px" /></div></body></html>`
-    : `<!doctype html><html lang="pt-BR"><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#202124;line-height:1.55"><div style="max-width:600px;margin:auto"><p>Olá,</p><p>Queria fazer uma pergunta rápida: vocês acompanham de forma estruturada o que os clientes estão dizendo nas avaliações?</p><p>A <strong>Filtra.AI</strong> transforma avaliações e feedback em oportunidades práticas para melhorar experiência, reputação e crescimento.</p><p>Podemos preparar uma auditoria gratuita da <strong>${safeCompany}</strong>, sem compromisso?</p><p><a href="${safeClickUrl}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:700">Ver auditoria gratuita</a></p><p>Depois, se fizer sentido, você pode testar a plataforma por 7 dias.</p><p>Equipe filtra.ai</p><p style="font-size:12px;color:#6b7280">Se não quiser receber novas comunicações da Filtra.AI, <a href="${safeUnsubscribeUrl}">clique aqui para cancelar</a>.</p><img src="${openUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px" /></div></body></html>`;
+    : `<!doctype html><html lang="pt-BR"><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#202124;line-height:1.55"><div style="max-width:600px;margin:auto"><p>Olá,</p><p>Queria fazer uma pergunta rápida: vocês acompanham de forma estruturada o que os clientes estão dizendo nas avaliações?</p><p>A <strong>Filtra.AI</strong> transforma avaliações e feedback em oportunidades práticas para melhorar experiência, reputação e crescimento.</p><p>Podemos preparar uma auditoria gratuita da <strong>${safeCompany}</strong>, sem compromisso?</p><p><a href="${safeClickUrl}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:700">Ver auditoria gratuita</a></p><p>Depois, se fizer sentido, você pode testar a plataforma por 7 dias.</p><p>Equipe Filtra.AI</p><p style="font-size:12px;color:#6b7280">Se não quiser receber novas comunicações da Filtra.AI, <a href="${safeUnsubscribeUrl}">clique aqui para cancelar</a>.</p><img src="${openUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px" /></div></body></html>`;
   return { subject, body, html };
 }
 
@@ -316,8 +317,7 @@ export async function queueEligibleAcquisition(limit = 25) {
 
     const reputation = await acquisitionReputationGuard(db);
     if (reputation.paused) return { queued: 0, skipped: 0, reason: 'reputation_pause', reputation };
-
-    const used = await sentToday(db);
+    if (!inSendWindow()) return { queued: 0, skipped: 0, reason: 'outside_send_window' };
     const capacity = Math.max(0, DAILY_CAP - used);
     if (!capacity) return { queued: 0, skipped: 0, reason: 'daily_cap', resend_fallback: resendFallback };
 
@@ -330,6 +330,8 @@ export async function queueEligibleAcquisition(limit = 25) {
        WHERE acquisition_eligible=1
          AND COALESCE(acquisition_suppressed,0)=0
          AND email IS NOT NULL AND TRIM(email)!=''
+         AND nome_empresa IS NOT NULL AND TRIM(nome_empresa)!=''
+         AND LOWER(email) NOT LIKE '%.gov.br' AND LOWER(email) NOT LIKE '%@gov.br'
          AND acquisition_opted_in_at IS NOT NULL
          AND (acquisition_next_at IS NULL OR acquisition_next_at <= ?)
          AND acquisition_stage IN ('eligible','ready','followup')
@@ -399,7 +401,7 @@ export function startAcquisitionWorker() {
   started = true;
   console.log('[acquisition] worker enabled; explicit disable requires ACQUISITION_ENGINE=0');
   const tick = () => {
-    queueEligibleAcquisition(25)
+    queueEligibleAcquisition(Math.max(1, Number(process.env.ACQUISITION_PER_TICK || 1)))
       .then(r => console.log('[acquisition]', r))
       .catch(e => console.warn('[acquisition worker]', e?.message || e));
     void runAcquisitionBrowserBotTick().catch(e =>
@@ -424,6 +426,8 @@ export async function acquisitionEngineStatus() {
       WHERE acquisition_eligible=1
         AND COALESCE(acquisition_suppressed,0)=0
         AND email IS NOT NULL AND TRIM(email)!=''
+        AND nome_empresa IS NOT NULL AND TRIM(nome_empresa)!=''
+        AND LOWER(email) NOT LIKE '%.gov.br' AND LOWER(email) NOT LIKE '%@gov.br'
         AND acquisition_opted_in_at IS NOT NULL
         AND (acquisition_next_at IS NULL OR acquisition_next_at <= ?)
         AND acquisition_stage IN ('eligible','ready','followup')`, [nowIso])
