@@ -35,8 +35,22 @@ async function main() {
       SET locked_at = CURRENT_TIMESTAMP
       WHERE acquisition_browser_worker_lock.locked_at < CURRENT_TIMESTAMP - INTERVAL '5 minutes'`);
   if (!Number(lock?.changes || 0)) {
-    console.log('[acquisition-browser] isolated worker skipped: another cycle is active');
-    return;
+    const stale = await db.run(`DELETE FROM acquisition_browser_worker_lock
+      WHERE id=1 AND locked_at < CURRENT_TIMESTAMP - INTERVAL '15 minutes'`);
+    if (!Number(stale?.changes || 0)) {
+      console.log('[acquisition-browser] isolated worker skipped: another cycle is active');
+      return;
+    }
+    const retryLock = await db.run(`INSERT INTO acquisition_browser_worker_lock (id, locked_at)
+      VALUES (1, CURRENT_TIMESTAMP)
+      ON CONFLICT (id) DO UPDATE
+        SET locked_at = CURRENT_TIMESTAMP
+        WHERE acquisition_browser_worker_lock.locked_at < CURRENT_TIMESTAMP - INTERVAL '15 minutes'`);
+    if (!Number(retryLock?.changes || 0)) {
+      console.log('[acquisition-browser] isolated worker skipped: lock contention');
+      return;
+    }
+    console.log('[acquisition-browser] recovered stale worker lock');
   }
 
   const cycleId = crypto.randomUUID();
