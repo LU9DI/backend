@@ -92,6 +92,7 @@ async function sendViaResend(opts: {
   text: string;
   html?: string;
   from: string;
+  replyTo?: string;
   idempotencyKey?: string;
 }): Promise<SendEmailResult> {
   const key = cleanEnv(process.env.RESEND_API_KEY);
@@ -108,6 +109,7 @@ async function sendViaResend(opts: {
       subject: opts.subject,
       text: opts.text,
       html: opts.html || opts.text.replace(/\n/g, '<br/>'),
+      ...(opts.replyTo ? { reply_to: opts.replyTo } : {}),
     }),
   });
 
@@ -163,6 +165,14 @@ export async function enviarEmail(opts: {
     console.warn(`[mail] ${error}`);
     return { ok: false, mode: 'error', error };
   }
+  // Captação precisa de um Reply-To real: o remetente padrão não recebe
+  // respostas, então sem isso o pedido de descadastro por resposta se perde.
+  const replyTo = purpose === 'acquisition' ? cleanEnv(process.env.ACQUISITION_REPLY_TO) : '';
+  if (purpose === 'acquisition' && !replyTo) {
+    const error = 'acquisition_email bloqueado: ACQUISITION_REPLY_TO não configurado';
+    console.warn(`[mail] ${error}`);
+    return { ok: false, mode: 'error', error };
+  }
   const from = defaultFrom();
   const to = String(opts.to || '').trim().toLowerCase();
 
@@ -174,7 +184,7 @@ export async function enviarEmail(opts: {
   // 1) Resend primeiro (mais confiável em cloud)
   if (resendConfigured() && !b2bPublicProspect) {
     try {
-      return await sendViaResend({ ...opts, to, from, idempotencyKey: opts.idempotencyKey });
+      return await sendViaResend({ ...opts, to, from, replyTo: replyTo || undefined, idempotencyKey: opts.idempotencyKey });
     } catch (e: any) {
       console.error('[mail] Resend exception:', e?.message || e);
       // cai no SMTP se existir
@@ -208,6 +218,7 @@ export async function enviarEmail(opts: {
       subject: opts.subject,
       text: opts.text,
       html: opts.html || opts.text.replace(/\n/g, '<br/>'),
+      ...(replyTo ? { replyTo } : {}),
       headers: { 'X-Mailer': 'Filtra.IA' },
     });
 
