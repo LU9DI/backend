@@ -49,9 +49,9 @@ DADOS DEMONSTRATIVOS:
 - Positivas: 91%
 - Alertas ativos: 37
 - Tendência: +18,4% nos últimos 14 dias
-- Sinais recentes: elogios ao atendimento; reclamações sobre tempo de espera; equipe frequentemente elogiada
-- O Filtra.AI já possui módulos de avaliações, IA, alertas, relatórios e CRM.
-IMPORTANTE: estes números são apenas para o protótipo local e não representam dados reais do cliente.
+- Sinais demonstrativos: elogios ao atendimento; reclamações sobre tempo de espera; equipe frequentemente elogiada
+- O protótipo local simula sinais e decisões para demonstrar o fluxo do Dot.
+IMPORTANTE: estes números e sinais são demonstrativos. Eles não representam dados reais e não comprovam integrações externas.
 `;
 
 type ChatItem = { role: 'user' | 'dot'; text: string; at: number };
@@ -291,7 +291,18 @@ export function mountDotRoutes(app: Express) {
 
   app.get('/api/dot/decisions', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
-    if (!access.allowed || !access.empresaId) return deny(res, access);
+    if (!access.allowed) return deny(res, access);
+    if (access.demo) return res.json({ ok: true, decisions: [{
+      id: 1, priority: 'alta', severity: 'warning',
+      reason: 'Tempo de espera aparece como tema recorrente no cenário demonstrativo.',
+      recommendation: 'Investigar as avaliações relacionadas e preparar uma correção interna.',
+      requiresApproval: true, status: 'pending',
+      options: [
+        { id: 'opcao_1', title: 'Investigar e acompanhar', description: 'Validar os fatos e acompanhar a correção internamente.', action: 'corrigir_e_acompanhar', risk: 'medio' },
+        { id: 'opcao_2', title: 'Escalar para responsável', description: 'Deixar a decisão final com o responsável da empresa.', action: 'escalar_responsavel', risk: 'baixo' },
+      ],
+    }] });
+    if (!access.empresaId) return deny(res, access);
     const decisions = await listDotDecisions(access.empresaId);
     res.json({ ok: true, decisions });
   });
@@ -411,7 +422,9 @@ export function mountDotRoutes(app: Express) {
 
   app.get('/api/dot/followups', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
-    if (!access.allowed || !access.empresaId) return deny(res, access);
+    if (!access.allowed) return deny(res, access);
+    if (access.demo) return res.json({ ok: true, followups: [] });
+    if (!access.empresaId) return deny(res, access);
     res.json({ ok: true, followups: await listDotFollowUps(access.empresaId) });
   });
 
@@ -498,7 +511,14 @@ export function mountDotRoutes(app: Express) {
 
   app.get('/api/dot/events', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
-    if (!access.allowed || !access.empresaId) return deny(res, access);
+    if (!access.allowed) return deny(res, access);
+    if (access.demo) return res.json({ ok: true, events: [{
+      id: 1, type: 'recurring_theme', severity: 'warning',
+      title: 'Tema recorrente detectado',
+      details: 'No cenário demonstrativo, reclamações sobre tempo de espera aparecem como sinal prioritário.',
+      created_at: new Date().toISOString(),
+    }] });
+    if (!access.empresaId) return deny(res, access);
     const events = await listDotEvents(access.empresaId);
     res.json({ ok: true, events });
   });
