@@ -313,7 +313,10 @@ async function openStreetMapProvider(limit: number, existingEmails = new Set<str
 }
 
 function providerOrder() {
-  return clean(process.env.ACQUISITION_PROVIDERS || 'osm,google_places,fullenrich')
+  // Prioriza fontes que já entregam dados comerciais estruturados e deixa OSM
+  // como fallback de cobertura. Isso reduz a dependência do Overpass sem
+  // eliminar a capacidade de reposição quando as demais fontes estiverem indisponíveis.
+  return clean(process.env.ACQUISITION_PROVIDERS || 'google_places,fullenrich,osm')
     .split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
 }
 
