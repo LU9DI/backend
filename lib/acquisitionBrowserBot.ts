@@ -1007,3 +1007,78 @@ async function processLead(db: any, lead: any) {
       await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=NULL,browser_channel_data=NULL,browser_status=?,browser_next_at=CURRENT_TIMESTAMP + INTERVAL '${retryHours} hours' WHERE id=?`,
         [error, nextStatus, lead.id]);
     }
+    if (channelFound) {
+      // Public-channel discovery is not a completed acquisition. Keep the lead
+      // retryable, but back it off so the same phone/WhatsApp/email discovery
+      // does not consume every browser cycle while we wait for a first-party
+      // capture surface to become available.
+      await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=?,browser_channel_data=?,browser_status='channel_found',browser_next_at=CURRENT_TIMESTAMP + INTERVAL '72 hours',acquisition_stage='manual_channel' WHERE id=?`,
+        [error, channelPayloadParsed?.channel || 'manual', JSON.stringify(channelPayloadParsed || {}).slice(0,5000), lead.id]);
+    } else {
+      await db.run(`UPDATE leads SET browser_attempts=browser_attempts+1,browser_last_at=CURRENT_TIMESTAMP,browser_last_result=?,browser_channel=NULL,browser_channel_data=NULL,browser_status=?,browser_next_at=CURRENT_TIMESTAMP + INTERVAL '${retryHours} hours' WHERE id=?`,
+        [error, nextStatus, lead.id]);
+    }
+    console.warn('[acquisition-browser]', lead.id, error);
+  } finally {
+    console.log('[acquisition-browser] done', lead.id, lead.nome_empresa || '');
+  }
+}
+
+export async function runAcquisitionBrowserBotTick(force = false) {
+  if (!ENABLED) return;
+  const now = Date.now();
+  if (!force && now - lastTriggeredAt < INTERVAL_MS) return;
+  lastTriggeredAt = now;
+
+  if (!CHILD_MODE) {
+    const script = path.join(process.cwd(), 'scripts', 'acquisitionBrowserOnce.ts');
+    const tsx = path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    const child = spawn(process.execPath, [tsx, script], {
+      env: { ...process.env, ACQUISITION_BROWSER_BOT: '1', ACQUISITION_BROWSER_CHILD: '1' },
+      stdio: 'inherit',
+    });
+    const watchdog = setTimeout(() => {
+      console.error('[acquisition-browser] worker timeout; killing child', { pid: child.pid, timeout_ms: 300000 });
+      try { child.kill('SIGKILL'); } catch {}
+    }, 300000);
+    console.log('[acquisition-browser] spawned isolated worker pid=' + String(child.pid || 'unknown'));
+    child.on('error', (e) => {
+      clearTimeout(watchdog);
+      console.error('[acquisition-browser] worker spawn failed:', e?.message || e);
+    });
+    child.on('exit', (code, signal) => {
+      clearTimeout(watchdog);
+      console.log('[acquisition-browser] worker exit', { code, signal });
+    });
+    return;
+  }
+
+  console.log('[acquisition-browser] worker heartbeat', new Date(now).toISOString());
+  try {
+    await Promise.race([
+      tick(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('tick_timeout_300s')), 300_000)),
+    ]);
+    console.log('[acquisition-browser] worker cycle complete');
+  } catch (e: any) {
+    running = false;
+    console.error('[acquisition-browser] worker tick failed:', e?.message || e);
+  }
+}
+
+export async function startAcquisitionBrowserBot() {
+  if (started) return;
+  if (!ENABLED) {
+    console.log('[acquisition-browser] OFF — defina ACQUISITION_BROWSER_BOT=1 para ativar');
+    return;
+  }
+  started = true;
+  const db = getDb();
+  await ensureSchema(db);
+  console.log(`[acquisition-browser] ON cap=${DAILY_CAP} interval=${INTERVAL_MS}ms scheduler=internal-isolated-worker`);
+  void runAcquisitionBrowserBotTick(true);
+  const timer = setInterval(() => {
+    void runAcquisitionBrowserBotTick(true);
+  }, INTERVAL_MS);
+  timer.unref();
+}
