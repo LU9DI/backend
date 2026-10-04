@@ -528,19 +528,32 @@ async function runOne(lead: any, signal?: AbortSignal) {
   console.log('[acquisition-browser] stage', lead.id, 'browser_launch_done');
   try {
     const page = await browser.newPage();
+    page.setDefaultTimeout(5_000);
+    page.setDefaultNavigationTimeout(7_000);
+    await page.setRequestInterception(true);
+    page.on('request', (request: any) => {
+      const type = request.resourceType();
+      if (type === 'image' || type === 'font' || type === 'media' || type === 'stylesheet') {
+        request.abort().catch(() => undefined);
+      } else {
+        request.continue().catch(() => undefined);
+      }
+    });
     await page.setUserAgent('FiltraAI-Acquisition/1.0 (+https://filtraai.com)');
     await page.setViewport({ width: 1365, height: 900 });
     const staticContactHref = surface.contactLinks[0] || '';
     const initialUrl = staticContactHref || reachableBase.toString();
     console.log('[acquisition-browser] surface', lead.id, surface.kind, staticContactHref || 'homepage');
     try {
-      await page.goto(initialUrl, { waitUntil: 'domcontentloaded', timeout: staticContactHref ? 3_000 : 4_500, signal });
+      await page.goto(initialUrl, { waitUntil: 'domcontentloaded', timeout: staticContactHref ? 7_000 : 7_000, signal });
     } catch (e: any) {
       const message = clean(e?.message || e, 500);
       if (!/Navigation timeout/i.test(message)) throw e;
     }
-    await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 800, signal }).catch(() => null);
-    const html = await page.content();
+    const html = await Promise.race([
+      page.content(),
+      new Promise<string>(resolve => setTimeout(() => resolve(''), 5_000)),
+    ]);
     const lang = detectLanguage(html, new URL(initialUrl));
     const target = message(lang, clean(lead.nome_empresa, 180));
     console.log('[acquisition-browser] stage', lead.id, 'page_loaded');
@@ -605,7 +618,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
 
     for (const contact of contactLinks) {
       try {
-        await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 3_000, signal });
+        await page.goto(contact.href, { waitUntil: 'domcontentloaded', timeout: 7_000, signal });
       } catch (e: any) {
         const navMessage = clean(e?.message || e, 500);
         if (!/Navigation timeout/i.test(navMessage)) {
@@ -613,8 +626,6 @@ async function runOne(lead: any, signal?: AbortSignal) {
           continue;
         }
       }
-      await page.waitForFunction(() => document.readyState !== 'loading', { timeout: 800, signal }).catch(() => null);
-
       const pageChannels = normalizePublicChannels(await page.evaluate(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
         .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa[.]me|api[.]whatsapp[.]com|whatsapp[.]com\/send)/i.test(h)).slice(0, 10)));
       const pageText = await page.evaluate(() => document.body?.innerText || '');
