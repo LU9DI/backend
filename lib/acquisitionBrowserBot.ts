@@ -549,7 +549,10 @@ async function runOne(lead: any, signal?: AbortSignal) {
       let lastError: any = null;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          return await page.evaluate(fn, ...args);
+          return await Promise.race([
+            page.evaluate(fn, ...args),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('browser_evaluate_timeout')), 3_000)),
+          ]);
         } catch (e: any) {
           lastError = e;
           const message = clean(e?.message || e, 500);
