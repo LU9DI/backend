@@ -736,7 +736,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
       if (requiredCheckboxes > 0) { lastError = 'checkbox_obrigatorio_requer_intervencao'; continue; }
 
       const submit = formElement
-        ? await formElement.$('button[type="submit"],input[type="submit"],button')
+        ? await formElement.$('button[type="submit"],input[type="submit"],button:not([type="button"]):not([type="reset"])')
         : null;
       if (!submit) { lastError = 'botao_envio_nao_encontrado'; continue; }
 
