@@ -556,7 +556,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
           if (!/Execution context was destroyed|Cannot find context with specified id|Most likely the page has been closed/i.test(message)) {
             throw e;
           }
-          await page.waitForTimeout(350 + attempt * 250).catch(() => null);
+          await new Promise(resolve => setTimeout(resolve, 350 + attempt * 250));
         }
       }
       throw lastError;
@@ -646,7 +646,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
           continue;
         }
       }
-      await page.waitForTimeout(350).catch(() => null);
+      await new Promise(resolve => setTimeout(resolve, 350));
       let pageChannels: string[] = [];
       let pageText = '';
       try {
@@ -656,7 +656,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
       } catch (e: any) {
         lastError = clean(e?.message || e, 500);
         console.log('[acquisition-browser] stage', lead.id, 'page_read_retry', lastError);
-        await page.waitForTimeout(700).catch(() => null);
+        await new Promise(resolve => setTimeout(resolve, 700));
         try {
           pageChannels = normalizePublicChannels(await evaluateStable(() => Array.from(document.querySelectorAll('a')).map((a: any) => a.href || '')
             .filter((h: string) => /^(mailto:|tel:)/i.test(h) || /(?:wa[.]me|api[.]whatsapp[.]com|whatsapp[.]com\/send)/i.test(h)).slice(0, 10)));
@@ -692,7 +692,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
       } catch (e: any) {
         lastError = clean(e?.message || e, 500);
         console.log('[acquisition-browser] stage', lead.id, 'form_scan_retry', lastError);
-        await page.waitForTimeout(700).catch(() => null);
+        await new Promise(resolve => setTimeout(resolve, 700));
         try {
           formInfo = await page.$eval('form', (forms: any[]) => forms.slice(0, 20).map((form: any, formIndex: number) => ({
             formIndex,
@@ -828,7 +828,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
         page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 3_000, signal }).catch(() => null),
         submit.click(),
       ]);
-      await page.waitForTimeout(500);
+      await new Promise(resolve => setTimeout(resolve, 500));
 
       const finalUrl = await page.url();
       const confirmation = await evaluateStable(() => document.body.innerText.slice(0,5000));
