@@ -691,7 +691,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
         );
       }
       if (!msg) {
-        const editable = await page.$('[contenteditable="true"]');
+        const editable = formElement ? await formElement.$('[contenteditable="true"]') : null;
         if (editable) msg = { id: '', name: '', placeholder: '', aria: '', contenteditable: 'true' };
       }
       if (!msg) { console.log('[acquisition-browser] stage', lead.id, 'message_field_missing'); lastError = 'campo_mensagem_nao_encontrado'; continue; }
@@ -719,7 +719,7 @@ async function runOne(lead: any, signal?: AbortSignal) {
       console.log('[acquisition-browser] stage', lead.id, 'form_filled');
 
       const requiredCheckboxes = formElement
-        ? await formElement.$eval('input[type="checkbox"][required]', els => els.length)
+        ? await formElement.$eval('input[type="checkbox"][required]', (els: any[]) => els.length)
         : 0;
       if (requiredCheckboxes > 0) { lastError = 'checkbox_obrigatorio_requer_intervencao'; continue; }
 
