@@ -15,7 +15,7 @@ export function prepareDotAction(action: string, demo = true): DotActionProposal
   if (known) {
     return {
       type: 'reputation_improvement',
-      title: 'Plano para reduzir reclamações sobre tempo de espera',
+      title: 'Plano de ação para reduzir reclamações sobre tempo de espera',
       objective: 'Investigar as avaliações afetadas, identificar o ponto operacional recorrente e preparar uma orientação para a equipe.',
       steps: [
         'Separar as avaliações recentes que citam tempo de espera.',
@@ -30,12 +30,12 @@ export function prepareDotAction(action: string, demo = true): DotActionProposal
 
   return {
     type: 'custom',
-    title: 'Ação preparada pelo Filtra Dot',
+    title: 'Plano de ação proposto pelo Filtra Dot',
     objective: action.trim().slice(0, 500),
     steps: [
       'Validar os dados envolvidos.',
       'Preparar a execução.',
-      'Solicitar aprovação antes de qualquer ação externa.',
+      'Solicitar aprovação antes de registrar qualquer ação interna.',
     ],
     requiresApproval: true,
     executed: false,
