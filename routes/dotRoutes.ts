@@ -59,10 +59,10 @@ Você pode:
 - analisar reputação e avaliações;
 - detectar padrões;
 - explicar tendências;
-- estruturar e preparar ações;
+- estruturar e preparar ações internas para aprovação;
 - usar a memória da conversa para manter continuidade.
 
-Preparar uma ação NÃO significa executá-la.
+Preparar uma ação NÃO significa executá-la. No estado atual do Dot, a execução aprovada registra um caso interno auditável; não produz efeito em sistemas externos.
 Só diga que uma ação foi executada quando uma ferramenta/rota específica desta conversa tiver realmente executado a operação.
 
 Não diga que você sincroniza CRM, cria tickets, publica respostas, envia mensagens, gera arquivos ou altera dashboards, a menos que exista execução comprovada por ferramenta.
@@ -115,9 +115,9 @@ DADOS DEMONSTRATIVOS:
 - Positivas: 91%
 - Alertas ativos: 37
 - Tendência: +18,4% nos últimos 14 dias
-- Sinais recentes: elogios ao atendimento; reclamações sobre tempo de espera; equipe frequentemente elogiada
-- O Filtra.AI já possui módulos de avaliações, IA, alertas, relatórios e CRM.
-IMPORTANTE: estes números são apenas para o protótipo local e não representam dados reais do cliente.
+- Sinais demonstrativos: elogios ao atendimento; reclamações sobre tempo de espera; equipe frequentemente elogiada
+- O protótipo local simula sinais e decisões para demonstrar o fluxo do Dot.
+IMPORTANTE: estes números e sinais são demonstrativos. Eles não representam dados reais e não comprovam integrações externas.
 `;
 
 type ChatItem = { role: 'user' | 'dot'; text: string; at: number };
@@ -280,7 +280,7 @@ export function mountDotRoutes(app: Express) {
       plan: access.plan || null,
       plan_label: access.planLabel || null,
       priority_access: ['rei', 'corporativo'],
-      scheduler: access.allowed ? getDotSchedulerStatus() : null,
+      scheduler: access.allowed && !access.demo ? getDotSchedulerStatus() : null,
       capabilities: access.allowed
         ? [
             'analisar_reputacao',
@@ -391,7 +391,27 @@ export function mountDotRoutes(app: Express) {
 
   app.get('/api/dot/decisions', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
-    if (!access.allowed || !access.empresaId) return deny(res, access);
+    if (!access.allowed) return deny(res, access);
+    if (access.demo) {
+      return res.json({
+        ok: true,
+        demo: true,
+        decisions: [{
+          id: 1,
+          priority: 'alta',
+          severity: 'warning',
+          reason: 'Tempo de espera aparece como tema recorrente no cenário demonstrativo.',
+          recommendation: 'Investigar a causa e acompanhar a evolução internamente.',
+          requiresApproval: true,
+          status: 'pending',
+          options: [
+            { id: 'opcao_1', title: 'Acompanhar e corrigir', description: 'Atuar sobre a causa identificada e acompanhar o resultado.', action: 'corrigir_e_acompanhar', risk: 'medio' },
+            { id: 'opcao_2', title: 'Escalar para responsável', description: 'Encaminhar com contexto e evidências para validação.', action: 'escalar_responsavel', risk: 'baixo' },
+          ],
+        }],
+      });
+    }
+    if (!access.empresaId) return deny(res, access);
     const decisions = await listDotDecisions(access.empresaId);
     res.json({ ok: true, decisions });
   });
@@ -426,7 +446,15 @@ export function mountDotRoutes(app: Express) {
 
   app.post('/api/dot/decisions/:id/:action', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
-    if (!access.allowed || !access.empresaId) return deny(res, access);
+    if (!access.allowed) return deny(res, access);
+    if (access.demo) {
+      const action = String(req.params.action);
+      if (!['prepare', 'reject'].includes(action) || Number(req.params.id) !== 1) {
+        return res.status(409).json({ error: 'Decisão demonstrativa inválida.' });
+      }
+      return res.json({ ok: true, demo: true, decision: { id: 1, status: action === 'prepare' ? 'prepared' : 'rejected' }, executed: false });
+    }
+    if (!access.empresaId) return deny(res, access);
     const action = String(req.params.action);
     // Aprovação de uma ação só pode ocorrer pela fila de ações, que exige
     // uma ação preparada e aplica a transação atômica decisão + ação.
