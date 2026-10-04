@@ -1,1 +1,478 @@
-FILE_FROM_ARTIFACT
+import { getDb } from './db.js';
+import { ensureAcquisitionEngineSchema } from './acquisitionEngine.js';
+import { googlePlacesLeads } from './acquisitionGooglePlaces.js';
+import crypto from 'crypto';
+
+// Replenishment is a safety buffer, not the acquisition critical path.
+// Keep the default low enough that existing browser-ready prospects are processed
+// before we spend time/credits querying external discovery providers.
+const MIN_STOCK = Math.max(80, Number(process.env.ACQUISITION_MIN_STOCK || 80));
+const BATCH_SIZE = Math.min(200, Math.max(1, Number(process.env.ACQUISITION_REPLENISH_BATCH || 200)));
+const INTERVAL_MS = Math.max(60000, Number(process.env.ACQUISITION_REPLENISH_INTERVAL_MS || 600000));
+const FULLENRICH_BASE = 'https://app.fullenrich.com/api/v2';
+
+let running = false;
+let started = false;
+let fullEnrichDataUntil = 0;
+let googlePlacesDataUntil = 0;
+
+const clean = (v: unknown, n = 5000) => String(v ?? '').trim().slice(0, n);
+const validEmail = (v: unknown) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean(v, 320));
+const institutionalKeywords = /(associa[cç][aã]o|associacao|sindicato|federa[cç][aã]o|federacao|c[aâ]mara de com[eé]rcio|camara de comercio|entidade empresarial|uni[aã]o empresarial|conselho empresarial|instituto empresarial|confedera[cç][aã]o|confederacao)/i;
+function acquisitionSegment(lead: any) {
+  const category = clean(lead?.profile?.category || lead?.profile?.types?.join?.(' ') || '', 1000);
+  const haystack = [lead?.company, lead?.source, category, JSON.stringify(lead?.profile || {})].join(' ');
+  return institutionalKeywords.test(haystack) || /trade_union|association|chamber|non_profit/i.test(haystack) ? 'institutional' : 'business';
+}
+const hash = (v: string) => crypto.createHash('sha256').update(v).digest('hex');
+
+const countries = ['Brazil', 'Portugal', 'Spain', 'Mexico', 'Argentina', 'Chile', 'Colombia'];
+const titles = [
+  'CEO', 'Chief Executive Officer', 'Founder', 'Owner',
+  'Chief Marketing Officer', 'Head of Marketing', 'Marketing Director',
+  'Head of Customer Success', 'Customer Success Director',
+  'Head of Operations', 'Operations Director', 'General Manager',
+];
+const seniorities = ['Owner', 'Founder', 'C-level', 'Head', 'Director', 'VP'];
+const headcounts = [{ min: 1, max: 500, exclude: false }];
+
+function filterValues(values: string[]) {
+  return values.map(value => ({ value, exact_match: false, exclude: false }));
+}
+
+function providerUrl() {
+  return clean(process.env.ACQUISITION_REPLENISH_URL, 2000) || `${FULLENRICH_BASE}/people/search`;
+}
+
+function providerToken() {
+  return clean(process.env.ACQUISITION_REPLENISH_TOKEN || process.env.FULLENRICH_API_KEY, 1000);
+}
+
+async function fullEnrichRequest(path: string, init: RequestInit = {}) {
+  const token = providerToken();
+  if (!token) throw new Error('FullEnrich API key ausente');
+  const headers = new Headers(init.headers);
+  headers.set('authorization', `Bearer ${token}`);
+  headers.set('content-type', 'application/json');
+  const response = await fetch(`${FULLENRICH_BASE}${path}`, { ...init, headers });
+  const raw = await response.text();
+  let data: any = {};
+  try { data = JSON.parse(raw); } catch { data = { raw }; }
+  if (!response.ok) throw new Error(`FullEnrich HTTP ${response.status}: ${clean(data?.message || data?.error || raw, 500)}`);
+  return data;
+}
+
+async function searchPeople(limit: number) {
+  const results: any[] = [];
+  let cursor: string | undefined;
+  const target = Math.min(200, Math.max(1, limit));
+  while (results.length < target) {
+    const payload: any = {
+      offset: 0,
+      limit: Math.min(100, target - results.length),
+      current_company_headcounts: headcounts,
+      person_locations: filterValues(countries),
+      current_position_titles: filterValues(titles),
+      current_position_seniority_level: filterValues(seniorities),
+    };
+    if (cursor) payload.search_after = cursor;
+    const data = await fullEnrichRequest('/people/search', { method: 'POST', body: JSON.stringify(payload) });
+    const people = Array.isArray(data?.people) ? data.people : [];
+    results.push(...people);
+    const next = clean(data?.metadata?.search_after, 2000);
+    if (!next || people.length === 0 || people.length < payload.limit) break;
+    cursor = next;
+  }
+  return results;
+}
+
+function toEnrichmentInput(person: any) {
+  const current = person?.employment?.current || {};
+  const company = current?.company || {};
+  const social = person?.social_profiles?.professional_network || {};
+  const fullName = clean(person?.full_name || person?.name, 200);
+  const parts = fullName.split(/\s+/).filter(Boolean);
+  const firstName = clean(person?.first_name || parts.shift() || '', 120);
+  const lastName = clean(person?.last_name || parts.join(' '), 120);
+  const domain = clean(company?.domain, 200);
+  const companyName = clean(company?.name, 200);
+  const linkedin = clean(social?.url, 500);
+  if ((!firstName || !lastName || (!domain && !companyName)) && !linkedin) return null;
+  return {
+    first_name: firstName,
+    last_name: lastName,
+    domain: domain || undefined,
+    company_name: companyName || undefined,
+    linkedin_url: linkedin || undefined,
+    enrich_fields: ['contact.work_emails'],
+    custom: { source: 'filtra_acquisition_engine', person_id: clean(person?.id, 180) },
+  };
+}
+
+async function enrichBatch(people: any[]) {
+  const data = people.map(toEnrichmentInput).filter(Boolean).slice(0, 100);
+  if (!data.length) return [];
+  const started = await fullEnrichRequest('/contact/enrich/bulk', {
+    method: 'POST',
+    body: JSON.stringify({ name: `Filtra acquisition ${new Date().toISOString()}`, data }),
+  });
+  const id = clean(started?.enrichment_id, 200);
+  if (!id) throw new Error('FullEnrich não retornou enrichment_id');
+  const deadline = Date.now() + 180000;
+  while (Date.now() < deadline) {
+    const result = await fullEnrichRequest(`/contact/enrich/bulk/${encodeURIComponent(id)}`);
+    const status = String(result?.status || '').toUpperCase();
+    if (status === 'FINISHED' || status === 'COMPLETED') return Array.isArray(result?.data) ? result.data : [];
+    if (status === 'FAILED' || status === 'ERROR') throw new Error(`FullEnrich enrichment ${id} terminou com ${status}`);
+    await new Promise(resolve => setTimeout(resolve, 5000));
+  }
+  throw new Error(`FullEnrich enrichment ${id} excedeu o timeout de 180s`);
+}
+
+function timezoneFor(countryCode: string) {
+  const map: Record<string, string> = {
+    BR: 'America/Sao_Paulo', PT: 'Europe/Lisbon', ES: 'Europe/Madrid',
+    MX: 'America/Mexico_City', AR: 'America/Argentina/Buenos_Aires',
+    CL: 'America/Santiago', CO: 'America/Bogota',
+  };
+  return map[countryCode] || null;
+}
+
+function mapEnriched(item: any) {
+  const email = clean(item?.contact_info?.most_probable_work_email?.email, 320).toLowerCase();
+  const status = clean(item?.contact_info?.most_probable_work_email?.status, 80).toUpperCase();
+  if (!validEmail(email) || ['INVALID', 'UNDELIVERABLE'].includes(status)) return null;
+  const profile = item?.profile || {};
+  const current = profile?.employment?.current || {};
+  const company = current?.company || {};
+  const countryCode = clean(profile?.location?.country_code, 8).toUpperCase();
+  return {
+    id: `fullenrich-${hash(email).slice(0, 32)}`,
+    email,
+    name: clean(profile?.full_name, 200),
+    company: clean(company?.name || item?.input?.company_name, 200),
+    title: clean(current?.title || profile?.headline, 240),
+    timezone: timezoneFor(countryCode),
+    source: 'FullEnrich',
+    status,
+    profile,
+  };
+}
+
+async function fullEnrichProvider() {
+  const url = providerUrl();
+  if (url !== `${FULLENRICH_BASE}/people/search`) {
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    const token = providerToken();
+    if (token) headers.authorization = `Bearer ${token}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ limit: BATCH_SIZE, min_stock: MIN_STOCK, exclude_existing: true, require_professional_email: true, source: 'filtra_acquisition_engine' }),
+    });
+    const raw = await response.text();
+    let data: any = {};
+    try { data = JSON.parse(raw); } catch {}
+    if (!response.ok) throw new Error(`replenishment provider HTTP ${response.status}`);
+    return { leads: Array.isArray(data?.leads) ? data.leads : (Array.isArray(data) ? data : []) };
+  }
+
+  const people = await searchPeople(BATCH_SIZE);
+  const out: any[] = [];
+  for (let i = 0; i < people.length; i += 100) {
+    const enriched = await enrichBatch(people.slice(i, i + 100));
+    for (const item of enriched) {
+      const mapped = mapEnriched(item);
+      if (mapped) out.push(mapped);
+    }
+  }
+  return { leads: out };
+}
+
+
+const OSM_URLS = [clean(process.env.ACQUISITION_OSM_OVERPASS_URL, 2000), 'https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter'].filter((value, index, all) => Boolean(value) && all.indexOf(value) === index);
+const OSM_TARGET_TYPES = /(hotel|hostel|guest_house|restaurant|cafe|bar|clinic|doctors|dentist|pharmacy|beauty|hairdresser|car_dealer|car_repair|retail|shop|supermarket|school|college|university|tourism|association|trade_union|chamber|non_profit|office)/i;
+const OSM_EXCLUDED_OFFICES = /^(government|governmental|embassy|consulate|city_hall|courthouse|police|fire_station|military|public_service|administrative)$/i;
+
+const OSM_CITIES = [
+  ['São Paulo', -23.82, -46.82, -23.35, -46.35],
+  ['Rio de Janeiro', -23.05, -43.80, -22.70, -43.05],
+  ['Belo Horizonte', -20.05, -44.15, -19.75, -43.80],
+  ['Curitiba', -25.65, -49.45, -25.30, -49.10],
+  ['Goiânia', -17.00, -49.50, -16.50, -49.00],
+] as const;
+
+function osmEmail(tags: any) {
+  const value = clean(tags?.email || tags?.['contact:email'], 320).toLowerCase();
+  return validEmail(value) ? value : '';
+}
+function osmWebsite(tags: any) {
+  return clean(tags?.website || tags?.['contact:website'], 1000);
+}
+function osmQuery(city: typeof OSM_CITIES[number]) {
+  const [name, south, west, north, east] = city;
+  const bbox = `${south},${west},${north},${east}`;
+  // Restrict discovery to objects that already expose a public email or official website.
+  return `[out:json][timeout:30];(\n    nwr["email"](${bbox});\n    nwr["contact:email"](${bbox});\n    nwr["website"](${bbox});\n    nwr["contact:website"](${bbox});\n  );out center tags;`;
+}
+async function osmWebsiteEmails(url: string) {
+  try {
+    const base = new URL(url);
+    const paths = ['', '/contato', '/contact'];
+    const found = new Set<string>();
+    for (const path of paths) {
+      const response = await fetch(new URL(path || '/', base), {
+        headers: { 'user-agent': 'FiltraAI-Acquisition/1.0 (+https://filtraai.com)' },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok || !(response.headers.get('content-type') || '').includes('text/html')) continue;
+      const html = (await response.text()).slice(0, 400000)
+        .replace(/&#64;|\[at\]|\(at\)/gi, '@')
+        .replace(/&#46;|\[dot\]|\(dot\)/gi, '.');
+      for (const email of html.match(/[^\s@]+@[^\s@]+\.[A-Za-z]{2,}/g) || []) {
+        const e = email.toLowerCase();
+        if (validEmail(e)) found.add(e);
+      }
+      if (found.size >= 3) break;
+    }
+    return [...found].slice(0, 5);
+  } catch { return []; }
+}
+async function openStreetMapProvider(limit: number, existingEmails = new Set<string>()) {
+  const target = Math.min(100, Math.max(1, limit));
+  const elements: any[] = [];
+  for (const city of OSM_CITIES) {
+    try {
+      let data: any = null;
+      let lastError: unknown = null;
+      for (const endpoint of OSM_URLS) {
+        try {
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+            body: 'data=' + encodeURIComponent(osmQuery(city)),
+            signal: AbortSignal.timeout(75000),
+          });
+          if (!response.ok) throw new Error(`Overpass HTTP ${response.status}`);
+          data = await response.json();
+          break;
+        } catch (error) {
+          lastError = error;
+          console.warn(`[acquisition-osm] city=${city} endpoint=${endpoint} failed:`, error instanceof Error ? error.message : String(error));
+        }
+      }
+      if (!data) throw lastError || new Error('Overpass indisponível');
+      for (const element of Array.isArray(data?.elements) ? data.elements : []) {
+        const tags = element?.tags || {};
+        const category = [tags.office, tags.amenity, tags.tourism, tags.shop, tags.healthcare, tags.craft, tags.leisure].filter(Boolean).join(' ');
+        const relevant = OSM_TARGET_TYPES.test(category);
+        const office = clean(tags?.office, 120);
+        const excludedOffice = OSM_EXCLUDED_OFFICES.test(office);
+        if (tags?.name && relevant && !excludedOffice && (osmWebsite(tags) || osmEmail(tags))) elements.push({ element, city });
+      }
+      console.log(`[acquisition-osm] city=${city[0]} elements=${data?.elements?.length || 0}`);
+      if (elements.length >= target * 8) break;
+    } catch (error: any) {
+      console.warn(`[acquisition-osm] city=${city[0]} failed:`, error?.message || error);
+    }
+  }
+  const ranked = elements.sort((a,b) => {
+    const score = (x:any) => {
+      const t=x?.element?.tags||{}, o=String(t.office||'').toLowerCase();
+      return (['association','trade_union','chamber','chamber_of_commerce','non_profit'].includes(o)?8:0)
+        +(t.tourism==='hotel'?5:0)+(t.amenity==='restaurant'||t.amenity==='clinic'||t.amenity==='doctors'?3:0)
+        +(osmWebsite(t)?3:0)+(osmEmail(t)?10:0);
+    };
+    return score(b)-score(a);
+  }).slice(0,target*4);
+  const leads:any[]=[]; const seen=new Set<string>();
+  const direct = ranked.filter(({element}: any) => { const email=osmEmail(element?.tags || {}); return Boolean(email) && !existingEmails.has(email); }).slice(0, target);
+  const website = ranked.filter(({element}: any) => !osmEmail(element?.tags || {}) && Boolean(osmWebsite(element?.tags || {}))).slice(0, 48);
+  const candidates = [...direct, ...website];
+  for(let i=0;i<candidates.length && leads.length<target;i+=8){
+    const results=await Promise.all(candidates.slice(i,i+8).map(async ({element,city})=>{
+      const t=element?.tags||{}; let emails:string[]=[];
+      const direct=osmEmail(t); if(direct && !existingEmails.has(direct)) emails=[direct];
+      else if(!direct && osmWebsite(t)) emails=await osmWebsiteEmails(osmWebsite(t));
+      return {element,city,emails};
+    }));
+    for(const {element,city,emails} of results) for(const email of emails){
+      if(seen.has(email) || existingEmails.has(email)) continue; seen.add(email);
+      const t=element?.tags||{}, website=osmWebsite(t);
+      leads.push({
+        id:`osm-${crypto.createHash('sha256').update(email).digest('hex').slice(0,32)}`,
+        email,
+        company:clean(t?.name||city[0],200),
+        source:'OpenStreetMap + official website',
+        timezone:'America/Sao_Paulo',
+        profile:{provider:'openstreetmap_overpass',osm_id:`${element?.type}:${element?.id}`,category:clean(t?.office||t?.amenity||t?.tourism,100),address:clean([t?.['addr:street'],t?.['addr:housenumber'],t?.['addr:city']||city[0],t?.['addr:state']].filter(Boolean).join(', '),500),website},
+      });
+      if(leads.length>=target) break;
+    }
+  }
+  console.log(`[acquisition-osm] done leads=${leads.length}`);
+  return {leads};
+}
+
+function providerOrder() {
+  // Prioriza fontes que já entregam dados comerciais estruturados e deixa OSM
+  // como fallback de cobertura. Isso reduz a dependência do Overpass sem
+  // eliminar a capacidade de reposição quando as demais fontes estiverem indisponíveis.
+  return clean(process.env.ACQUISITION_PROVIDERS || 'google_places,fullenrich,osm')
+    .split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+}
+
+async function providerRequest(db: any) {
+  const errors: string[] = [];
+  for (const provider of providerOrder()) {
+    try {
+      if (provider === 'osm') {
+        const existingRows = await db.all("SELECT LOWER(email) AS email FROM leads WHERE email IS NOT NULL AND TRIM(email)!=''");
+        const existingEmails = new Set<string>((Array.isArray(existingRows) ? existingRows : []).map((row: any) => clean(row?.email, 320).toLowerCase()).filter(validEmail));
+        const result = await openStreetMapProvider(Math.min(BATCH_SIZE, 100), existingEmails);
+        const fresh: any[] = [];
+        for (const lead of result.leads) {
+          const email = clean(lead?.email, 320).toLowerCase();
+          if (!validEmail(email) || existingEmails.has(email)) continue;
+          fresh.push(lead);
+        }
+        if (fresh.length) {
+          console.log('[acquisition-replenisher] provider=osm fresh=' + fresh.length + ' returned=' + result.leads.length);
+          return { leads: fresh };
+        }
+        errors.push('osm: nenhum lead novo encontrado');
+      } else if (provider === 'google_places') {
+        if (Date.now() < googlePlacesDataUntil) {
+          errors.push('google_places: cooldown por quota');
+          continue;
+        }
+        try {
+          const result = await googlePlacesLeads(BATCH_SIZE);
+          if (result.leads.length) {
+            console.log('[acquisition-replenisher] provider=google_places leads=' + result.leads.length);
+            return result;
+          }
+          errors.push('google_places: sem emails encontrados');
+        } catch (error: any) {
+          const message = clean(error?.message || error, 500);
+          if (/HTTP 429|quota|rate limit|RESOURCE_EXHAUSTED/i.test(message)) {
+            googlePlacesDataUntil = Date.now() + 6 * 60 * 60 * 1000;
+            console.warn('[acquisition-replenisher] provider=google_places quota atingida; cooldown de 6h');
+          } else {
+            console.warn('[acquisition-replenisher] provider=google_places falhou:', message);
+          }
+          errors.push('google_places: ' + message);
+        }
+      } else if (provider === 'fullenrich') {
+        if (Date.now() < fullEnrichDataUntil) {
+          errors.push('fullenrich: cooldown');
+          continue;
+        }
+        try {
+          const result = await fullEnrichProvider();
+          if (result.leads.length) {
+            console.log('[acquisition-replenisher] provider=fullenrich leads=' + result.leads.length);
+            return result;
+          }
+          errors.push('fullenrich: sem leads');
+        } catch (error: any) {
+          const message = clean(error?.message || error, 500);
+          if (/HTTP 403|not enough credits|insufficient credits|credit/i.test(message)) {
+            fullEnrichDataUntil = Date.now() + 6 * 60 * 60 * 1000;
+            console.warn('[acquisition-replenisher] provider=fullenrich indisponível; cooldown de 6h');
+          } else {
+            console.warn('[acquisition-replenisher] provider=fullenrich falhou:', message);
+          }
+          errors.push('fullenrich: ' + message);
+        }
+      } else {
+        errors.push(provider + ': provedor desconhecido');
+      }
+    } catch (error: any) {
+      errors.push(provider + ': ' + clean(error?.message || error, 500));
+    }
+  }
+  throw new Error('Nenhum provedor de reposição retornou leads. ' + errors.join(' | '));
+}
+
+async function existingEmailSet(db: any) {
+  const rows = await db.all("SELECT LOWER(email) AS email FROM leads WHERE email IS NOT NULL AND TRIM(email)!=''");
+  return new Set<string>((Array.isArray(rows) ? rows : []).map((row: any) => clean(row?.email, 320).toLowerCase()).filter(validEmail));
+}
+
+async function insertLeads(db: any, leads: any[]) {
+  const existing = await existingEmailSet(db);
+  let inserted = 0;
+  for (const lead of leads) {
+    const email = clean(lead?.email, 320).toLowerCase();
+    if (!validEmail(email) || existing.has(email)) continue;
+    const company = clean(lead?.company, 200);
+    if (!company) continue;
+    if (/\.gov\.br$/i.test(email.split('@')[1] || '')) continue;
+    const id = clean(lead?.id, 120) || `acq-${hash(email).slice(0, 32)}`;
+    const segment = acquisitionSegment(lead);
+    try {
+      await db.run(
+        `INSERT INTO leads (id, email, company, name, title, source, timezone, status, profile_json, segment, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, datetime('now'))
+         ON CONFLICT(email) DO NOTHING`,
+        [
+          id,
+          email,
+          company,
+          clean(lead?.name, 200) || null,
+          clean(lead?.title, 240) || null,
+          clean(lead?.source, 200) || 'acquisition',
+          clean(lead?.timezone, 80) || null,
+          JSON.stringify(lead?.profile || {}),
+          segment,
+        ],
+      );
+      existing.add(email);
+      inserted += 1;
+    } catch (error: any) {
+      console.warn('[acquisition-replenisher] insert failed:', clean(error?.message || error, 300));
+    }
+  }
+  return inserted;
+}
+
+async function currentStock(db: any) {
+  const row = await db.get("SELECT COUNT(*) AS n FROM leads WHERE status IN ('pending','channel_found','contact_attempted')");
+  return Number(row?.n || 0);
+}
+
+export async function replenishAcquisitionStock() {
+  if (running) return { skipped: true, reason: 'already_running' };
+  running = true;
+  try {
+    await ensureAcquisitionEngineSchema();
+    const db = await getDb();
+    const stock = await currentStock(db);
+    if (stock >= MIN_STOCK) {
+      return { skipped: true, reason: 'stock_ok', stock, min_stock: MIN_STOCK };
+    }
+    console.log('[acquisition-replenisher] stock=' + stock + ' min=' + MIN_STOCK + ' replenishing…');
+    const payload = await providerRequest(db);
+    const leads = Array.isArray(payload?.leads) ? payload.leads : [];
+    const inserted = await insertLeads(db, leads);
+    const stockAfter = await currentStock(db);
+    console.log('[acquisition-replenisher] inserted=' + inserted + ' stock_after=' + stockAfter);
+    return { skipped: false, stock, stock_after: stockAfter, returned: leads.length, inserted, min_stock: MIN_STOCK };
+  } finally {
+    running = false;
+  }
+}
+
+export function startAcquisitionReplenisher() {
+  if (started) return;
+  started = true;
+  const tick = () => {
+    replenishAcquisitionStock()
+      .then(r => console.log('[acquisition-replenisher]', r))
+      .catch(e => console.warn('[acquisition-replenisher]', e?.message || e));
+  };
+  tick();
+  setInterval(tick, INTERVAL_MS);
+}
