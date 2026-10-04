@@ -670,6 +670,14 @@ async function runOne(lead: any, signal?: AbortSignal) {
 
       const usableForms = formInfo.filter((f: any) => {
         if (/captcha|recaptcha|hcaptcha|turnstile/i.test(JSON.stringify(f))) return false;
+        const hasMessageSurface = f.fields.some((x: any) =>
+          /textarea/i.test(x.tag) ||
+          Number(x.maxlength || 0) >= 200 ||
+          /message|mensagem|mensaje|nachricht|comments?|coment[aá]rio|inquiry|enquiry|request|consulta|solicita|descri[cç][aã]o|details?|detalhes?|observa[cç][aã]o|informa[cç][aã]o|how.?can.?we.?help|como.?podemos.?ajudar/i.test(
+            [x.name, x.id, x.placeholder, x.aria].join(' ')
+          )
+        );
+        if (!hasMessageSurface) return false;
         try {
           const action = new URL(f.action || contact.href, page.url());
           return action.origin === base.origin;
