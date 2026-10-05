@@ -477,7 +477,8 @@ export async function processAcquisitionEmail(sendId: string) {
     to: String(send.email),
     subject: String(send.subject),
     text: String(send.body),
-    html: buildMessage(send).html,
+    // send.id é o ID do envio; os links de descadastro/clique/abertura precisam do ID do lead.
+    html: buildMessage({ ...send, id: send.lead_id }).html,
     idempotencyKey: String(send.idempotency_key),
     acquisitionContactBasis: String(send.acquisition_contact_basis || '')
   });
