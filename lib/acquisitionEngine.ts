@@ -248,6 +248,8 @@ async function institutionalSentToday(db: any) {
   return (rows || []).filter((row: any) => isInstitutionalLead(row)).length;
 }
 
+const cleanEnvAddr = (v: unknown) => String(v ?? '').trim().replace(/^["']|["']$/g, '');
+
 function buildMessage(lead: any) {
   const company = clean(lead.nome_empresa, 180) || 'sua empresa';
   const institutional = isInstitutionalLead(lead);
@@ -294,12 +296,12 @@ Equipe Filtra.AI
 
 Se não quiser receber novas comunicações da Filtra.AI, cancele aqui: ${unsubscribeUrl}`;
   const safeCompany = company.replace(/[&<>"]/g, (m: string) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m] || m));
-  const safeClickUrl = clickUrl.replace(/&/g, '&amp;');
+  const safeUrl = url.replace(/&/g, '&amp;');
   const safeUnsubscribeUrl = unsubscribeUrl.replace(/&/g, '&amp;');
   const html = institutional
-    ? `<!doctype html><html lang="pt-BR"><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#202124;line-height:1.55"><div style="max-width:600px;margin:auto"><p>Olá <strong>${safeCompany}</strong>,</p><p>A <strong>Filtra.AI</strong> está oferecendo à entidade uma iniciativa gratuita que pode ser disponibilizada aos seus associados: uma auditoria de reputação no Google.</p><p>A auditoria mostra a evolução das avaliações e notas, principais pontos de atenção nos comentários recentes, oportunidades de melhoria na reputação online e avaliações que ainda não receberam resposta.</p><p>Não há custo para a entidade. Os associados interessados também podem testar o Filtra.AI gratuitamente por <strong>7 dias, sem cartão</strong>, para acompanhar avaliações, organizar feedback e utilizar a análise com IA.</p><p><a href="${safeClickUrl}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:700">Acessar auditoria gratuita</a></p><p>Auditoria e teste: <a href="https://filtraai.com">filtraai.com</a></p><p>Equipe Filtra.AI</p><p style="font-size:12px;color:#6b7280">Se não quiser receber novas comunicações da Filtra.AI, <a href="${safeUnsubscribeUrl}">clique aqui para cancelar</a>.</p><img src="${openUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px" /></div></body></html>`
-    : `<!doctype html><html lang="pt-BR"><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#202124;line-height:1.55"><div style="max-width:600px;margin:auto"><p>Olá,</p><p>Queria fazer uma pergunta rápida: vocês acompanham de forma estruturada o que os clientes estão dizendo nas avaliações?</p><p>A <strong>Filtra.AI</strong> transforma avaliações e feedback em oportunidades práticas para melhorar experiência, reputação e crescimento.</p><p>Podemos preparar uma auditoria gratuita da <strong>${safeCompany}</strong>, sem compromisso?</p><p><a href="${safeClickUrl}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:700">Ver auditoria gratuita</a></p><p>Depois, se fizer sentido, você pode testar a plataforma por 7 dias.</p><p>Equipe Filtra.AI</p><p style="font-size:12px;color:#6b7280">Se não quiser receber novas comunicações da Filtra.AI, <a href="${safeUnsubscribeUrl}">clique aqui para cancelar</a>.</p><img src="${openUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px" /></div></body></html>`;
-  return { subject, body, html };
+    ? `<!doctype html><html lang="pt-BR"><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#202124;line-height:1.55"><div style="max-width:600px;margin:auto"><p>Olá <strong>${safeCompany}</strong>,</p><p>A <strong>Filtra.AI</strong> está oferecendo à entidade uma iniciativa gratuita que pode ser disponibilizada aos seus associados: uma auditoria de reputação no Google.</p><p>A auditoria mostra a evolução das avaliações e notas, principais pontos de atenção nos comentários recentes, oportunidades de melhoria na reputação online e avaliações que ainda não receberam resposta.</p><p>Não há custo para a entidade. Os associados interessados também podem testar o Filtra.AI gratuitamente por <strong>7 dias, sem cartão</strong>, para acompanhar avaliações, organizar feedback e utilizar a análise com IA.</p><p><a href="${safeUrl}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:700">Acessar auditoria gratuita</a></p><p>Auditoria e teste: <a href="https://filtraai.com">filtraai.com</a></p><p>Equipe Filtra.AI</p><p style="font-size:12px;color:#6b7280">Se não quiser receber novas comunicações da Filtra.AI, <a href="${safeUnsubscribeUrl}">clique aqui para cancelar</a>.</p></div></body></html>`
+    : `<!doctype html><html lang="pt-BR"><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#202124;line-height:1.55"><div style="max-width:600px;margin:auto"><p>Olá,</p><p>Queria fazer uma pergunta rápida: vocês acompanham de forma estruturada o que os clientes estão dizendo nas avaliações?</p><p>A <strong>Filtra.AI</strong> transforma avaliações e feedback em oportunidades práticas para melhorar experiência, reputação e crescimento.</p><p>Podemos preparar uma auditoria gratuita da <strong>${safeCompany}</strong>, sem compromisso?</p><p><a href="${safeUrl}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:700">Ver auditoria gratuita</a></p><p>Depois, se fizer sentido, você pode testar a plataforma por 7 dias.</p><p>Equipe Filtra.AI</p><p style="font-size:12px;color:#6b7280">Se não quiser receber novas comunicações da Filtra.AI, <a href="${safeUnsubscribeUrl}">clique aqui para cancelar</a>.</p></div></body></html>`;
+  return { subject, body, html, unsubscribeUrl };
 }
 
 export async function queueEligibleAcquisition(limit = 25) {
@@ -473,12 +475,18 @@ export async function processAcquisitionEmail(sendId: string) {
     return;
   }
 
+  const message = buildMessage({ ...send, id: send.lead_id });
   const result = await enviarEmailAquisicao({
     to: String(send.email),
     subject: String(send.subject),
     text: String(send.body),
     // send.id é o ID do envio; os links de descadastro/clique/abertura precisam do ID do lead.
-    html: buildMessage({ ...send, id: send.lead_id }).html,
+    html: message.html,
+    // Cabeçalhos de descadastro com um clique (RFC 8058): exigidos por Gmail/Outlook para remetentes em massa.
+    headers: {
+      'List-Unsubscribe': `<${message.unsubscribeUrl}>, <mailto:${cleanEnvAddr(process.env.ACQUISITION_REPLY_TO)}?subject=cancelar>`,
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+    },
     idempotencyKey: String(send.idempotency_key),
     acquisitionContactBasis: String(send.acquisition_contact_basis || '')
   });
