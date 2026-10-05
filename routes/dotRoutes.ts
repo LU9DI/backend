@@ -3,7 +3,7 @@ import rateLimit from 'express-rate-limit';
 import { callAI } from '../groqService.js';
 import { prepareDotAction } from '../services/dotTools.js';
 import { loadDotRealContext } from '../services/dotContext.js';
-import { getDotPreferences, saveDotPreferences } from '../services/dotPreferences.js';
+import { getDotPreferences, saveDotPreferences, DEFAULT_DOT_PREFERENCES } from '../services/dotPreferences.js';
 import { listDotEvents, runDotMonitor } from '../services/dotMonitor.js';
 import { resolveDotComplaint } from '../services/dotResolve.js';
 import { createDecisionsForEvents, listDotDecisions, updateDotDecision } from '../services/dotDecision.js';
@@ -149,7 +149,7 @@ function cleanMessage(value: unknown): string {
   return String(value ?? '').trim().slice(0, 4000);
 }
 
-function redactSensitive(value: unknown): string {
+export function redactSensitive(value: unknown): string {
   let text = String(value ?? '');
   const replacements: Array<[RegExp, string | ((...args: any[]) => string)]> = [
     [/Bearer\s+[A-Za-z0-9._~+/=-]{20,}/gi, 'Bearer [REDACTED]'],
@@ -159,7 +159,11 @@ function redactSensitive(value: unknown): string {
     [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[REDACTED_JWT]'],
     [/\b[A-Za-z0-9_-]{40,}\b/g, '[REDACTED_SECRET]'],
     [/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/g, '[REDACTED_EMAIL]'],
-    [/(?<!\d)(?:\+?\d[\d\s().-]{8,}\d)(?!\d)/g, '[REDACTED_PHONE]'],
+    [/(?<!\d)(?:\+?\(?\d)[\d\s().-]{8,}\d(?!\d)/g, (match: string) => {
+      // Datas ISO (2026-10-05) e sequências com menos de 10 dígitos não são telefones.
+      if (/^\d{4}-\d{2}-\d{2}/.test(match.trim())) return match;
+      return match.replace(/\D/g, '').length >= 10 ? '[REDACTED_PHONE]' : match;
+    }],
   ];
   for (const [pattern, replacement] of replacements) text = text.replace(pattern, replacement as any);
   return text;
@@ -176,9 +180,17 @@ function scopedSessionId(access: DotAccess, id: string): string {
   return access.empresaId ? `${access.empresaId}:${safeId}` : `demo:${safeId}`;
 }
 
+const MAX_SESSIONS = 500;
+
 function sessionHistory(id: string): ChatItem[] {
   const current = sessions.get(id);
   if (current) return current;
+  // Limite de sessões: o session_id vem do cliente, então o Map não pode crescer sem teto.
+  while (sessions.size >= MAX_SESSIONS) {
+    const oldest = sessions.keys().next().value;
+    if (oldest === undefined) break;
+    sessions.delete(oldest);
+  }
   const created: ChatItem[] = [];
   sessions.set(id, created);
   return created;
@@ -312,6 +324,7 @@ export function mountDotRoutes(app: Express) {
 
   app.get('/api/dot/preferences', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
+    if (access.allowed && access.demo) return res.json({ ok: true, demo: true, plan: access.plan, preferences: DEFAULT_DOT_PREFERENCES });
     if (!access.allowed || !access.empresaId) return deny(res, access);
     const preferences = await getDotPreferences(access.empresaId);
     res.json({ ok: true, plan: access.plan, preferences });
@@ -319,6 +332,7 @@ export function mountDotRoutes(app: Express) {
 
   app.put('/api/dot/preferences', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
+    if (access.allowed && access.demo) return res.json({ ok: true, demo: true, plan: access.plan, preferences: { ...DEFAULT_DOT_PREFERENCES, ...(req.body || {}) } });
     if (!access.allowed || !access.empresaId) return deny(res, access);
     const preferences = await saveDotPreferences(access.empresaId, req.body || {});
     res.json({ ok: true, plan: access.plan, preferences });
@@ -514,6 +528,7 @@ export function mountDotRoutes(app: Express) {
 
   app.get('/api/dot/cases', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
+    if (access.allowed && access.demo) return res.json({ ok: true, demo: true, cases: [] });
     if (!access.allowed || !access.empresaId) return deny(res, access);
     const db = (await import('../lib/db.js')).getDb();
     await db.exec(`CREATE TABLE IF NOT EXISTS dot_internal_cases (
@@ -539,12 +554,14 @@ export function mountDotRoutes(app: Express) {
 
   app.get('/api/dot/followups', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
+    if (access.allowed && access.demo) return res.json({ ok: true, demo: true, followups: [] });
     if (!access.allowed || !access.empresaId) return deny(res, access);
     res.json({ ok: true, followups: await listDotFollowUps(access.empresaId) });
   });
 
   app.post('/api/dot/followups/:id/complete', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
+    if (access.allowed && access.demo) return res.json({ ok: true, demo: true });
     if (!access.allowed || !access.empresaId) return deny(res, access);
     const outcome = cleanMessage(req.body?.outcome);
     const followUp = await completeDotFollowUp(access.empresaId, Number(req.params.id), outcome);
@@ -626,6 +643,7 @@ export function mountDotRoutes(app: Express) {
 
   app.get('/api/dot/events', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
+    if (access.allowed && access.demo) return res.json({ ok: true, demo: true, events: [] });
     if (!access.allowed || !access.empresaId) return deny(res, access);
     const events = await listDotEvents(access.empresaId);
     res.json({ ok: true, events });
@@ -633,6 +651,7 @@ export function mountDotRoutes(app: Express) {
 
   app.post('/api/dot/events/:id/ack', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
+    if (access.allowed && access.demo) return res.json({ ok: true, demo: true });
     if (!access.allowed || !access.empresaId) return deny(res, access);
     const db = (await import('../lib/db.js')).getDb();
     await db.run('UPDATE dot_events SET acknowledged_at = ? WHERE id = ? AND empresa_id = ?', [new Date().toISOString(), String(req.params.id), access.empresaId]);
