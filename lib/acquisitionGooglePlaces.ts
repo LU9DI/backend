@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { isUnderratedPlace } from './acquisitionPlaceFilter.js';
 
 const clean = (v: unknown, n = 5000) => String(v ?? '').trim().slice(0, n);
 const validEmail = (v: unknown) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean(v, 320));
@@ -199,7 +200,7 @@ export async function googlePlacesLeads(limit: number) {
   }
 
   const ranked = [...places.values()]
-    .filter(p => p?.websiteUri)
+    .filter(p => p?.websiteUri && isUnderratedPlace(p))
     .sort((a, b) => candidateScore(b) - candidateScore(a))
     .slice(0, target * 2);
 
