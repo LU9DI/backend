@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { getDb } from './db.js';
 import { enqueueRetry } from './retryQueue.js';
 import { enviarEmailAquisicao } from './mailer.js';
-import { inSendWindow } from './acquisitionWindow.js';
+import { currentSendPeriod, cumulativeCapForPeriod } from './acquisitionWindow.js';
 
 const DAILY_CAP = Math.min(80, Math.max(1, Number(process.env.ACQUISITION_DAILY_CAP || 25)));
 const INSTITUTIONAL_DAILY_TARGET = Math.min(30, DAILY_CAP);
@@ -317,9 +317,14 @@ export async function queueEligibleAcquisition(limit = 25) {
 
     const reputation = await acquisitionReputationGuard(db);
     if (reputation.paused) return { queued: 0, skipped: 0, reason: 'reputation_pause', reputation };
-    if (!inSendWindow()) return { queued: 0, skipped: 0, reason: 'outside_send_window' };
-    const capacity = Math.max(0, DAILY_CAP - used);
-    if (!capacity) return { queued: 0, skipped: 0, reason: 'daily_cap', resend_fallback: resendFallback };
+    const period = currentSendPeriod();
+    if (!period) return { queued: 0, skipped: 0, reason: 'outside_send_window' };
+
+    const used = await sentToday(db);
+    // O teto diário é dividido entre os períodos (manhã, tarde e noite).
+    const periodCap = cumulativeCapForPeriod(DAILY_CAP, period);
+    const capacity = Math.max(0, Math.min(DAILY_CAP, periodCap) - used);
+    if (!capacity) return { queued: 0, skipped: 0, reason: used >= DAILY_CAP ? 'daily_cap' : 'period_cap', period: period.index + 1, resend_fallback: resendFallback };
 
     const take = Math.min(capacity, Math.max(1, limit));
     const institutionalSent = await institutionalSentToday(db);

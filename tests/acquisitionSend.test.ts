@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { inSendWindow } from '../lib/acquisitionWindow.js';
+import { inSendWindow, currentSendPeriod, cumulativeCapForPeriod, parseSendPeriods } from '../lib/acquisitionWindow.js';
 import { enviarEmailAquisicao } from '../lib/mailer.js';
 
 // Horários em UTC; Brasília = UTC-3 (sem horário de verão).
@@ -62,4 +62,31 @@ test('captação envia reply_to para a Resend quando configurado', async () => {
     globalThis.fetch = realFetch;
     delete process.env.ACQUISITION_REPLY_TO;
   }
+});
+
+test('períodos padrão: manhã, tarde e noite com intervalos entre eles', () => {
+  delete process.env.ACQUISITION_SEND_HOURS;
+  delete process.env.ACQUISITION_SEND_WEEKENDS;
+  const seg13h = new Date('2026-10-05T16:00:00Z'); // 13h: intervalo
+  const seg15h = new Date('2026-10-05T18:00:00Z'); // 15h: tarde
+  const seg19h = new Date('2026-10-05T22:00:00Z'); // 19h: noite
+  const seg21h = new Date('2026-10-06T00:00:00Z'); // 21h: fim exclusivo
+  assert.deepEqual(currentSendPeriod(seg10h), { index: 0, total: 3 });
+  assert.equal(currentSendPeriod(seg13h), null);
+  assert.deepEqual(currentSendPeriod(seg15h), { index: 1, total: 3 });
+  assert.deepEqual(currentSendPeriod(seg19h), { index: 2, total: 3 });
+  assert.equal(currentSendPeriod(seg21h), null);
+});
+
+test('teto diário é dividido entre os períodos de forma acumulada', () => {
+  assert.equal(cumulativeCapForPeriod(25, { index: 0, total: 3 }), 9);
+  assert.equal(cumulativeCapForPeriod(25, { index: 1, total: 3 }), 17);
+  assert.equal(cumulativeCapForPeriod(25, { index: 2, total: 3 }), 25);
+  assert.equal(cumulativeCapForPeriod(10, { index: 0, total: 1 }), 10);
+});
+
+test('ACQUISITION_SEND_HOURS aceita lista e valor inválido volta ao padrão', () => {
+  assert.equal(parseSendPeriods('9-12,14-17').length, 2);
+  assert.equal(parseSendPeriods('abc').length, 3);
+  assert.equal(parseSendPeriods('12-9').length, 3);
 });
