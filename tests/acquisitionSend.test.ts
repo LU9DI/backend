@@ -90,3 +90,27 @@ test('ACQUISITION_SEND_HOURS aceita lista e valor inválido volta ao padrão', (
   assert.equal(parseSendPeriods('abc').length, 3);
   assert.equal(parseSendPeriods('12-9').length, 3);
 });
+
+test('captação envia cabeçalhos List-Unsubscribe (um clique) para a Resend', async () => {
+  process.env.ACQUISITION_ENGINE = '1';
+  process.env.RESEND_API_KEY = 're_test';
+  process.env.ACQUISITION_REPLY_TO = 'contato@exemplo.com';
+  const realFetch = globalThis.fetch;
+  let sentBody: any = null;
+  globalThis.fetch = (async (_url: any, init: any) => {
+    sentBody = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ id: 'msg_2' }), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const result = await enviarEmailAquisicao({
+      to: 'a@empresa.com.br', subject: 's', text: 't',
+      headers: { 'List-Unsubscribe': '<https://x.test/u>', 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' }
+    });
+    assert.equal(result.ok, true);
+    assert.equal(sentBody.headers['List-Unsubscribe-Post'], 'List-Unsubscribe=One-Click');
+    assert.equal(sentBody.headers['List-Unsubscribe'], '<https://x.test/u>');
+  } finally {
+    globalThis.fetch = realFetch;
+    delete process.env.ACQUISITION_REPLY_TO;
+  }
+});

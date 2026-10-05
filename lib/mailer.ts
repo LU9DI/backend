@@ -94,6 +94,7 @@ async function sendViaResend(opts: {
   from: string;
   replyTo?: string;
   idempotencyKey?: string;
+  headers?: Record<string, string>;
 }): Promise<SendEmailResult> {
   const key = cleanEnv(process.env.RESEND_API_KEY);
   const res = await fetch('https://api.resend.com/emails', {
@@ -110,6 +111,7 @@ async function sendViaResend(opts: {
       text: opts.text,
       html: opts.html || opts.text.replace(/\n/g, '<br/>'),
       ...(opts.replyTo ? { reply_to: opts.replyTo } : {}),
+      ...(opts.headers && Object.keys(opts.headers).length ? { headers: opts.headers } : {}),
     }),
   });
 
@@ -157,6 +159,7 @@ export async function enviarEmail(opts: {
   idempotencyKey?: string;
   purpose?: MailPurpose;
   acquisitionContactBasis?: string;
+  headers?: Record<string, string>;
 }): Promise<SendEmailResult> {
   const purpose = opts.purpose || 'transactional';
   const b2bPublicProspect = purpose === 'acquisition' && opts.acquisitionContactBasis === 'b2b_public_prospect';
@@ -253,6 +256,7 @@ export async function enviarEmailAquisicao(opts: {
   html?: string;
   idempotencyKey?: string;
   acquisitionContactBasis?: string;
+  headers?: Record<string, string>;
 }): Promise<SendEmailResult> {
   return enviarEmail({ ...opts, purpose: 'acquisition', acquisitionContactBasis: opts.acquisitionContactBasis });
 }

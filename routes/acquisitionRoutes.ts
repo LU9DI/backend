@@ -97,7 +97,7 @@ export function mountAcquisitionRoutes(app: Express) {
     res.redirect(302, destination.toString());
   }));
 
-  app.get('/api/public/acquisition/unsubscribe', limiter, asyncHandler(async (req,res) => {
+  const unsubscribeHandler = asyncHandler(async (req: any, res: any) => {
     const leadId = s(req.query.l, 120);
     const token = s(req.query.t, 200);
     if (!leadId || !token || !unsubscribeSecret()) return res.status(400).send('Link de cancelamento inválido.');
@@ -120,7 +120,9 @@ export function mountAcquisitionRoutes(app: Express) {
        JSON.stringify({user_agent:req.headers['user-agent'] || null}).slice(0,20000)]
     );
     res.status(200).send('<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Cancelamento confirmado</title><body style="font-family:Arial,sans-serif;padding:40px;max-width:680px;margin:auto"><h1>Cancelamento confirmado</h1><p>Você não receberá novas comunicações de aquisição da Filtra.AI.</p></body></html>');
-  }));
+  });
+  app.get('/api/public/acquisition/unsubscribe', limiter, unsubscribeHandler);
+  app.post('/api/public/acquisition/unsubscribe', limiter, unsubscribeHandler);
 
   app.get('/api/n8n/acquisition/engine-status', limiter, asyncHandler(async (req,res) => {
     if (!auth(req,res)) return;
