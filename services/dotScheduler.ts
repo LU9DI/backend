@@ -161,8 +161,11 @@ export async function runDueDotMonitors() {
 
 export function startDotMonitorScheduler() {
   if (timer) return;
-  if (process.env.NODE_ENV === 'production' && process.env.FILTRA_DOT_ENABLED !== '1') {
-    console.log('🤖 Filtra Dot monitor desativado — defina FILTRA_DOT_ENABLED=1 para ativar em produção.');
+  // Forçado OFF até validação local do Dot. Para ligar de novo: FILTRA_DOT_ENABLED=1 e FILTRA_DOT_FORCE_ON=1.
+  const forceOn = process.env.FILTRA_DOT_FORCE_ON === '1';
+  const enabled = process.env.FILTRA_DOT_ENABLED === '1' && forceOn;
+  if (!enabled) {
+    console.log('Filtra Dot monitor desativado — teste em localhost primeiro (precisa FILTRA_DOT_ENABLED=1 e FILTRA_DOT_FORCE_ON=1).');
     return;
   }
   const interval = Math.max(60_000, Number(process.env.FILTRA_DOT_MONITOR_TICK_MS || 300_000));
@@ -171,5 +174,5 @@ export function startDotMonitorScheduler() {
     void runDueDotMonitors().catch((error) => console.warn('Dot scheduler:', error?.message || error));
   }, interval);
   timer.unref();
-  console.log(`🤖 Filtra Dot monitor ativo — tick ${Math.round(interval / 1000)}s`);
+  console.log(`Filtra Dot monitor ativo — tick ${Math.round(interval / 1000)}s`);
 }
