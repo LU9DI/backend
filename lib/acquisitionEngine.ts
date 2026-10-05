@@ -346,7 +346,9 @@ export async function queueEligibleAcquisition(limit = 25) {
     );
     const institutional = (candidates || []).filter((lead: any) => isInstitutionalLead(lead));
     const general = (candidates || []).filter((lead: any) => !isInstitutionalLead(lead));
-    const institutionalTake = Math.min(take, institutionalRemaining);
+    // A cota institucional só reserva vagas se houver leads institucionais na fila;
+    // as vagas não usadas ficam para os demais leads.
+    const institutionalTake = Math.min(take, institutionalRemaining, institutional.length);
     // Email acquisition is permission-based. Public prospect discovery is
     // handled independently by the browser/manual-channel path and is never
     // promoted into the email queue without explicit marketing opt-in.
