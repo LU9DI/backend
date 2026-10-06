@@ -4,6 +4,7 @@ import { getDb } from './db.js';
 import { enqueueRetry } from './retryQueue.js';
 import { enviarEmailAquisicao } from './mailer.js';
 import { currentSendPeriod, cumulativeCapForPeriod } from './acquisitionWindow.js';
+import { legitInterestEnabled, legitDailyCap, canContactByLegitimateInterest, LEGIT_BASIS } from './acquisitionLegitimateInterest.js';
 
 const DAILY_CAP = Math.min(80, Math.max(1, Number(process.env.ACQUISITION_DAILY_CAP || 25)));
 const INSTITUTIONAL_DAILY_TARGET = Math.min(30, DAILY_CAP);
@@ -93,6 +94,16 @@ function localDayStartUtcIso(now = new Date()) {
   const d = new Date(now);
   d.setUTCHours(0, 0, 0, 0);
   return d.toISOString();
+}
+
+async function legitSentToday(db: any) {
+  const row = await db.get(
+    `SELECT COUNT(*) AS c FROM acquisition_sends s JOIN leads l ON l.id=s.lead_id
+     WHERE s.channel='email' AND s.status IN ('queued','sent') AND s.scheduled_at >= ?
+       AND l.acquisition_opted_in_at IS NULL`,
+    [localDayStartUtcIso()]
+  );
+  return Number(row?.c || 0);
 }
 
 async function sentToday(db: any) {
@@ -250,7 +261,7 @@ async function institutionalSentToday(db: any) {
 
 const cleanEnvAddr = (v: unknown) => String(v ?? '').trim().replace(/^["']|["']$/g, '');
 
-function buildMessage(lead: any) {
+export function buildMessage(lead: any) {
   const company = clean(lead.nome_empresa, 180) || 'sua empresa';
   const institutional = isInstitutionalLead(lead);
   const variant = crypto.createHash('sha256').update(String(lead.id)).digest('hex').charCodeAt(0) % 2 === 0 ? 'A' : 'B';
@@ -264,7 +275,10 @@ function buildMessage(lead: any) {
   const unsubscribeUrl = trackingBase + '/unsubscribe?l=' + encodeURIComponent(String(lead.id)) + '&t=' + encodeURIComponent(unsubscribeToken(String(lead.id)));
   const clickUrl = trackingBase + '/click?l=' + encodeURIComponent(String(lead.id)) + '&u=' + encodeURIComponent(url);
   const openUrl = trackingBase + '/open?l=' + encodeURIComponent(String(lead.id));
-  const body = institutional
+  const legit = !lead.acquisition_opted_in_at && String(lead.acquisition_contact_basis || '') === LEGIT_BASIS;
+  const legitFooter = `Por que você recebe esta mensagem: o e-mail de contato da ${company} está publicado em fonte pública (site da empresa). Esta é uma comunicação comercial B2B única, com base no legítimo interesse (LGPD, art. 7º, IX). Tratamos apenas o nome da empresa e o e-mail corporativo. Política de privacidade: https://filtraai.com/privacidade`;
+  const legitHtmlFooter = `Por que você recebe esta mensagem: o e-mail de contato da ${company.replace(/[&<>"]/g, '')} está publicado em fonte pública (site da empresa). Esta é uma comunicação comercial B2B única, com base no legítimo interesse (LGPD, art. 7º, IX). Tratamos apenas o nome da empresa e o e-mail corporativo. <a href="https://filtraai.com/privacidade">Política de privacidade</a>.`;
+  const body0 = institutional
     ? `Olá,
 
 A Filtra.AI está oferecendo à ${company} uma iniciativa gratuita que pode ser disponibilizada aos seus associados: uma auditoria de reputação no Google.
@@ -298,9 +312,13 @@ Se não quiser receber novas comunicações da Filtra.AI, cancele aqui: ${unsubs
   const safeCompany = company.replace(/[&<>"]/g, (m: string) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m] || m));
   const safeUrl = url.replace(/&/g, '&amp;');
   const safeUnsubscribeUrl = unsubscribeUrl.replace(/&/g, '&amp;');
-  const html = institutional
+  const html0 = institutional
     ? `<!doctype html><html lang="pt-BR"><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#202124;line-height:1.55"><div style="max-width:600px;margin:auto"><p>Olá <strong>${safeCompany}</strong>,</p><p>A <strong>Filtra.AI</strong> está oferecendo à entidade uma iniciativa gratuita que pode ser disponibilizada aos seus associados: uma auditoria de reputação no Google.</p><p>A auditoria mostra a evolução das avaliações e notas, principais pontos de atenção nos comentários recentes, oportunidades de melhoria na reputação online e avaliações que ainda não receberam resposta.</p><p>Não há custo para a entidade. Os associados interessados também podem testar o Filtra.AI gratuitamente por <strong>7 dias, sem cartão</strong>, para acompanhar avaliações, organizar feedback e utilizar a análise com IA.</p><p><a href="${safeUrl}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:700">Acessar auditoria gratuita</a></p><p>Auditoria e teste: <a href="https://filtraai.com">filtraai.com</a></p><p>Equipe Filtra.AI</p><p style="font-size:12px;color:#6b7280">Se não quiser receber novas comunicações da Filtra.AI, <a href="${safeUnsubscribeUrl}">clique aqui para cancelar</a>.</p></div></body></html>`
     : `<!doctype html><html lang="pt-BR"><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#202124;line-height:1.55"><div style="max-width:600px;margin:auto"><p>Olá,</p><p>Queria fazer uma pergunta rápida: vocês acompanham de forma estruturada o que os clientes estão dizendo nas avaliações?</p><p>A <strong>Filtra.AI</strong> transforma avaliações e feedback em oportunidades práticas para melhorar experiência, reputação e crescimento.</p><p>Podemos preparar uma auditoria gratuita da <strong>${safeCompany}</strong>, sem compromisso?</p><p><a href="${safeUrl}" style="display:inline-block;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:700">Ver auditoria gratuita</a></p><p>Depois, se fizer sentido, você pode testar a plataforma por 7 dias.</p><p>Equipe Filtra.AI</p><p style="font-size:12px;color:#6b7280">Se não quiser receber novas comunicações da Filtra.AI, <a href="${safeUnsubscribeUrl}">clique aqui para cancelar</a>.</p></div></body></html>`;
+  const body = legit ? `${body0}\n\n${legitFooter}` : body0;
+  const html = legit
+    ? html0.replace('</div></body></html>', `<p style="font-size:12px;color:#6b7280">${legitHtmlFooter}</p></div></body></html>`)
+    : html0;
   return { subject, body, html, unsubscribeUrl };
 }
 
@@ -332,22 +350,31 @@ export async function queueEligibleAcquisition(limit = 25) {
     const institutionalSent = await institutionalSentToday(db);
     const institutionalRemaining = Math.max(0, INSTITUTIONAL_DAILY_TARGET - institutionalSent);
     const candidates = await db.all(
-      `SELECT id,nome_empresa,email,fonte,raw_json,acquisition_source,acquisition_segment,acquisition_stage,acquisition_next_at
+      `SELECT id,nome_empresa,email,fonte,raw_json,acquisition_source,acquisition_segment,acquisition_stage,acquisition_next_at,acquisition_opted_in_at,acquisition_contact_basis
        FROM leads
        WHERE acquisition_eligible=1
          AND COALESCE(acquisition_suppressed,0)=0
          AND email IS NOT NULL AND TRIM(email)!=''
          AND nome_empresa IS NOT NULL AND TRIM(nome_empresa)!=''
          AND LOWER(email) NOT LIKE '%.gov.br' AND LOWER(email) NOT LIKE '%@gov.br'
-         AND acquisition_opted_in_at IS NOT NULL
+         AND (acquisition_opted_in_at IS NOT NULL OR (? = 1 AND acquisition_contact_basis = '${LEGIT_BASIS}'))
          AND (acquisition_next_at IS NULL OR acquisition_next_at <= ?)
          AND acquisition_stage IN ('eligible','ready','followup')
-       ORDER BY COALESCE(acquisition_next_at, criado_em) ASC
+       ORDER BY (acquisition_opted_in_at IS NULL) ASC, COALESCE(acquisition_next_at, criado_em) ASC
        LIMIT ?`,
-      [new Date().toISOString(), Math.max(take * 4, INSTITUTIONAL_DAILY_TARGET)]
+      [legitInterestEnabled() ? 1 : 0, new Date().toISOString(), Math.max(take * 4, INSTITUTIONAL_DAILY_TARGET) + 200]
     );
-    const institutional = (candidates || []).filter((lead: any) => isInstitutionalLead(lead));
-    const general = (candidates || []).filter((lead: any) => !isInstitutionalLead(lead));
+    // Legítimo interesse: só e-mail corporativo, com teto diário próprio (opt-in tem prioridade e não conta nele).
+    const legitSent = legitInterestEnabled() ? await legitSentToday(db) : 0;
+    let legitRoom = Math.max(0, legitDailyCap() - legitSent);
+    const eligibleNow = (candidates || []).filter((lead: any) => {
+      if (lead.acquisition_opted_in_at) return true;
+      if (!canContactByLegitimateInterest(lead) || legitRoom <= 0) return false;
+      legitRoom--;
+      return true;
+    });
+    const institutional = eligibleNow.filter((lead: any) => isInstitutionalLead(lead));
+    const general = eligibleNow.filter((lead: any) => !isInstitutionalLead(lead));
     // A cota institucional só reserva vagas se houver leads institucionais na fila;
     // as vagas não usadas ficam para os demais leads.
     const institutionalTake = Math.min(take, institutionalRemaining, institutional.length);
@@ -360,7 +387,7 @@ export async function queueEligibleAcquisition(limit = 25) {
     ];
 
     if (!leads.length) {
-      return { queued: 0, skipped: 0, capacity, used_before: used, reason: candidates?.length ? 'email_opt_in_required' : 'no_candidates', sendable_candidates: candidates?.length || 0, resend_fallback: resendFallback };
+      return { queued: 0, skipped: 0, capacity, used_before: used, reason: candidates?.length ? 'email_opt_in_required' : 'no_candidates', sendable_candidates: eligibleNow.length, resend_fallback: resendFallback };
     }
 
     let queued = 0;
@@ -469,7 +496,7 @@ export async function processAcquisitionEmail(sendId: string) {
       [`reputation_pause:${reputation.reason}`, sendId]);
     throw new Error(`Envio pausado por reputação: ${reputation.reason}`);
   }
-  const hasMarketingOptIn = Boolean(send.acquisition_opted_in_at);
+  const hasMarketingOptIn = Boolean(send.acquisition_opted_in_at) || canContactByLegitimateInterest(send);
   if (Number(send.acquisition_eligible) !== 1 || Number(send.acquisition_suppressed || 0) === 1 || !hasMarketingOptIn) {
     await db.run(`UPDATE acquisition_sends SET status='failed',failed_at=CURRENT_TIMESTAMP,last_error='lead não elegível/suprimido/sem base de contato',updated_at=CURRENT_TIMESTAMP WHERE id=?`, [sendId]);
     return;
