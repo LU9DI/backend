@@ -15,6 +15,20 @@ test('e-mail corporativo: aceita domínio próprio e recusa gratuito/público/in
   assert.equal(isCorporateEmail('x@cps.sp.gov.br'), false);
 });
 
+test('recusa governo estrangeiro, caixas de papel (ouvidoria/rh) e instituições não comerciais', () => {
+  assert.equal(isCorporateEmail('consular@ri.mofa.go.jp'), false);
+  assert.equal(isCorporateEmail('x@turismo.ba.gov.br'), false);
+  assert.equal(isCorporateEmail('ouvidoria@clinica.com.br'), false);
+  assert.equal(isCorporateEmail('rh@empresa.com.br'), false);
+  assert.equal(isCorporateEmail('contato@empresa.com.br'), true);
+  process.env.ACQUISITION_LEGIT_INTEREST = '1';
+  try {
+    for (const nome of ['Paróquia Santa Luzia', 'Igreja Batista X', 'Diretorio Academico de Fisica', 'Consulado Geral']) {
+      assert.equal(canContactByLegitimateInterest({ nome_empresa: nome, email: 'contato@empresa.com.br', acquisition_contact_basis: 'b2b_public_prospect' }), false, nome);
+    }
+  } finally { delete process.env.ACQUISITION_LEGIT_INTEREST; }
+});
+
 test('legítimo interesse: desligado por padrão', () => {
   delete process.env.ACQUISITION_LEGIT_INTEREST;
   assert.equal(canContactByLegitimateInterest({ email: 'a@empresa.com.br', acquisition_contact_basis: 'b2b_public_prospect' }), false);

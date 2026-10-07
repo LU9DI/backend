@@ -99,7 +99,7 @@ function localDayStartUtcIso(now = new Date()) {
 async function legitSentToday(db: any) {
   const row = await db.get(
     `SELECT COUNT(*) AS c FROM acquisition_sends s JOIN leads l ON l.id=s.lead_id
-     WHERE s.channel='email' AND s.status IN ('queued','sent') AND s.scheduled_at >= ?
+     WHERE s.channel='email' AND s.status IN ('queued','sent','failed') AND s.scheduled_at >= ?
        AND l.acquisition_opted_in_at IS NULL`,
     [localDayStartUtcIso()]
   );
@@ -110,11 +110,30 @@ async function sentToday(db: any) {
   const from = localDayStartUtcIso();
   const row = await db.get(
     `SELECT COUNT(*) AS c FROM acquisition_sends
-     WHERE channel='email' AND status IN ('queued','sent')
+     WHERE channel='email' AND status IN ('queued','sent','failed')
        AND scheduled_at >= ?`,
     [from]
   );
   return Number(row?.c || 0);
+}
+
+/**
+ * Disjuntor do canal sem opt-in: se o transporte (SMTP) está falhando — timeout/rede —
+ * não queima mais leads. Pausa quando, nas últimas 6h, há 3+ falhas de transporte e
+ * as falhas superam o dobro dos envios bem-sucedidos.
+ */
+async function legitTransportHealthy(db: any) {
+  const since = new Date(Date.now() - 6 * 3600_000).toISOString();
+  const row = await db.get(
+    `SELECT
+        COUNT(*) FILTER (WHERE s.status='failed' AND s.last_error ~* '(timeout|enetunreach|econn|etimedout|ehostunreach|socket|getaddrinfo)') AS bad,
+        COUNT(*) FILTER (WHERE s.status='sent') AS ok
+       FROM acquisition_sends s JOIN leads l ON l.id=s.lead_id
+      WHERE s.channel='email' AND l.acquisition_opted_in_at IS NULL AND s.scheduled_at >= ?`,
+    [since]
+  );
+  const bad = Number(row?.bad || 0), ok = Number(row?.ok || 0);
+  return !(bad >= 3 && bad > ok * 2);
 }
 
 /**
@@ -366,7 +385,8 @@ export async function queueEligibleAcquisition(limit = 25) {
     );
     // Legítimo interesse: só e-mail corporativo, com teto diário próprio (opt-in tem prioridade e não conta nele).
     const legitSent = legitInterestEnabled() ? await legitSentToday(db) : 0;
-    let legitRoom = Math.max(0, legitDailyCap() - legitSent);
+    const legitHealthy = legitInterestEnabled() ? await legitTransportHealthy(db) : true;
+    let legitRoom = legitHealthy ? Math.max(0, legitDailyCap() - legitSent) : 0;
     const eligibleNow = (candidates || []).filter((lead: any) => {
       if (lead.acquisition_opted_in_at) return true;
       if (!canContactByLegitimateInterest(lead) || legitRoom <= 0) return false;
