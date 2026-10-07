@@ -57,6 +57,34 @@ function defaultFrom(): string {
   );
 }
 
+/**
+ * O Nodemailer resolve A e AAAA e pode escolher IPv6, que o Render não alcança
+ * (ENETUNREACH). Resolve só IPv4 e conecta pelo IP, mantendo o SNI/validação TLS do host.
+ */
+export async function resolveIpv4(host: string, timeoutMs = 4000): Promise<string | null> {
+  if (!host || /^\d+\.\d+\.\d+\.\d+$/.test(host)) return host || null;
+  try {
+    const dns = await import('node:dns');
+    const addrs = await Promise.race([
+      dns.promises.resolve4(host),
+      new Promise<string[]>((_, rej) => setTimeout(() => rej(new Error('dns timeout')), timeoutMs)),
+    ]);
+    return addrs.length ? addrs[Math.floor(Math.random() * addrs.length)] : null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildTransportIpv4() {
+  const transport = buildTransport();
+  const ip = await resolveIpv4(transport.host);
+  if (ip && ip !== transport.host) {
+    (transport.tls as any).servername = transport.host;
+    transport.host = ip;
+  }
+  return transport;
+}
+
 function buildTransport() {
   const port = Number(cleanEnv(process.env.SMTP_PORT) || '587');
   const host = cleanEnv(process.env.SMTP_HOST);
@@ -139,7 +167,7 @@ export async function verifySmtp(): Promise<SendEmailResult> {
   }
   try {
     const nodemailer = await import('nodemailer');
-    const transporter = nodemailer.createTransport(buildTransport() as any);
+    const transporter = nodemailer.createTransport((await buildTransportIpv4()) as any);
     await transporter.verify();
     return { ok: true, mode: 'smtp' };
   } catch (e: any) {
@@ -208,7 +236,7 @@ export async function enviarEmail(opts: {
 
   try {
     const nodemailer = await import('nodemailer');
-    const transport = buildTransport();
+    const transport = await buildTransportIpv4();
     const transporter = nodemailer.createTransport(transport as any);
 
     console.log(

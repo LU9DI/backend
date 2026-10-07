@@ -75,3 +75,9 @@ test('mensagem por legítimo interesse informa origem, base legal e descadastro;
   const optin = buildMessage({ id: 'l2', nome_empresa: 'X', acquisition_opted_in_at: '2026-10-05', acquisition_contact_basis: 'b2b_public_prospect' });
   assert.doesNotMatch(optin.body, /legítimo interesse/);
 });
+
+test('resolveIpv4: IP literal passa direto e host inexistente cai em null', async () => {
+  const { resolveIpv4 } = await import('../lib/mailer.js');
+  assert.equal(await resolveIpv4('203.0.113.7'), '203.0.113.7');
+  assert.equal(await resolveIpv4('host-que-nao-existe.invalid', 1500), null);
+});
