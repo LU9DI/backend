@@ -2,7 +2,6 @@
   "nodeModulesDir": "auto",
   "deploy": {
     "install": "npm install --omit=dev --no-audit --no-fund",
-    "build": "npm run build",
     "runtime": {
       "type": "dynamic",
       "entrypoint": "./server.ts",
