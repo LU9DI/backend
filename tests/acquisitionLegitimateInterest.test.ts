@@ -81,3 +81,11 @@ test('resolveIpv4: IP literal passa direto e host inexistente cai em null', asyn
   assert.equal(await resolveIpv4('203.0.113.7'), '203.0.113.7');
   assert.equal(await resolveIpv4('host-que-nao-existe.invalid', 1500), null);
 });
+
+test('ACQUISITION_TEST_EMAILS libera apenas os endereços listados', () => {
+  process.env.ACQUISITION_TEST_EMAILS = 'teste@gmail.com';
+  try {
+    assert.equal(isCorporateEmail('teste@gmail.com'), true);
+    assert.equal(isCorporateEmail('outro@gmail.com'), false);
+  } finally { delete process.env.ACQUISITION_TEST_EMAILS; }
+});

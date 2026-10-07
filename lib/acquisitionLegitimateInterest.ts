@@ -27,10 +27,16 @@ export function legitDailyCap(): number {
   return Math.min(30, Math.max(1, Number.isFinite(n) ? Math.floor(n) : 10));
 }
 
+/** Endereços internos de teste (ACQUISITION_TEST_EMAILS, separados por vírgula) passam pelo filtro de domínio. */
+function isInternalTestEmail(e: string): boolean {
+  return String(process.env.ACQUISITION_TEST_EMAILS || '').toLowerCase().split(',').map(x => x.trim()).filter(Boolean).includes(e);
+}
+
 /** E-mail corporativo: domínio próprio, não provedor gratuito e não órgão público. */
 export function isCorporateEmail(email: unknown): boolean {
   const e = String(email ?? '').trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return false;
+  if (isInternalTestEmail(e)) return true;
   if (FREE_MAIL.test(e)) return false;
   if (PUBLIC_BODY.test(e)) return false;
   if (FOREIGN_GOV.test(e)) return false;
