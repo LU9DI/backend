@@ -13,7 +13,7 @@ RUN apt-get update \
 
 COPY package.json package-lock.json* ./
 
-RUN npm install --omit=dev --no-audit --no-fund \
+RUN if [ -f package-lock.json ]; then npm ci --omit=dev --no-audit --no-fund; else npm install --omit=dev --no-audit --no-fund; fi \
   && npm cache clean --force
 
 COPY . .
@@ -23,6 +23,7 @@ ENV PORT=5000
 ENV CHROMIUM_PATH=/usr/bin/chromium
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PUPPETEER_SKIP_DOWNLOAD=1
+ENV ACQUISITION_BROWSER_BOT=0
 
 EXPOSE 5000
 
