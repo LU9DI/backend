@@ -10,7 +10,7 @@ import {
   PLANOS_OFICIAIS,
   isPlanoOficial,
   allowPlanSwitch,
-  planTemPdf,
+  planTemRelatorio,
   planLabel,
 } from '../lib/plans.js';
 import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
@@ -27,7 +27,7 @@ export function mountPlanSwitchRoutes(app: Express) {
       planos: PLANOS_OFICIAIS.map((p) => ({
         key: p,
         label: planLabel(p),
-        pdf: planTemPdf(p),
+        relatorio: planTemRelatorio(p),
       })),
     });
   });
@@ -74,7 +74,7 @@ export function mountPlanSwitchRoutes(app: Express) {
         label: planLabel(raw),
         status: 'ativo',
         expira_em: expira.toISOString(),
-        pdf_disponivel: planTemPdf(raw),
+        relatorio_disponivel: planTemRelatorio(raw),
         modo_teste: true,
         mensagem: `Plano alterado para ${planLabel(raw)} (modo teste — sem cobrança Stripe).`,
       });
