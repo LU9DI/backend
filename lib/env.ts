@@ -9,6 +9,12 @@ export type EnvReport = {
   warnings: string[];
 };
 
+export function isProductionRuntime(): boolean {
+  const timeline = (process.env.DENO_TIMELINE || '').trim();
+  return process.env.NODE_ENV === 'production' ||
+    (process.env.DENO_DEPLOY === 'true' && timeline === 'production');
+}
+
 export function validateEnv(): EnvReport {
   const errors: string[] = [];
   const warnings: string[] = [];
