@@ -1,4 +1,4 @@
-# API Filtra.IA — Node + Chromium (Puppeteer PDF)
+# API Filtra.IA — Node runtime
 FROM node:20-bookworm-slim
 
 WORKDIR /app
