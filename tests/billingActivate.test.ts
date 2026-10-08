@@ -3,7 +3,7 @@
  */
 import assert from 'assert';
 import { resolvePlano, listPlanosPublicos, PLANOS } from '../stripeBilling.js';
-import { planTemPdf, isTrialPlan } from '../lib/plans.js';
+import { planTemRelatorio, isTrialPlan } from '../lib/plans.js';
 import { getTokenLimit, planTemIA } from '../lib/quota.js';
 import { planPermiteUnidades } from '../lib/unidades.js';
 
@@ -39,10 +39,10 @@ test('PLANOS unitAmount coerente com display', () => {
   }
 });
 
-test('PDF e IA por plano', () => {
-  assert.equal(planTemPdf('inicial'), false);
-  assert.equal(planTemPdf('pro'), true);
-  assert.equal(planTemPdf('trial'), true);
+test('relatório e IA por plano', () => {
+  assert.equal(planTemRelatorio('inicial'), false);
+  assert.equal(planTemRelatorio('pro'), true);
+  assert.equal(planTemRelatorio('trial'), true);
   assert.equal(planTemIA('inicial'), false);
   assert.equal(planTemIA('ultra'), true);
   assert.equal(isTrialPlan('teste'), true);
