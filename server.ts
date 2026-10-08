@@ -307,11 +307,6 @@ export async function startServer() {
     console.warn('ensureFiscalSchema:', e);
   }
   try {
-    await ensureReportPdfSchema(getDb());
-  } catch (e) {
-    console.warn('ensureReportPdfSchema:', e);
-  }
-  try {
     await ensurePlanPricingSchema(getDb());
     await refreshPlanPricesFromDb(getDb());
   } catch (e) {
