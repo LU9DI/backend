@@ -14,7 +14,7 @@ Use OCI Ampere A1 Flex in the tenancy home region with the Always Free allocatio
 4. Run `sudo bash bootstrap.sh`.
 5. Populate `/opt/filtra-ai/.env` with the same production variables used by Render.
 6. Do not commit the `.env`.
-7. Configure the Cloudflare Tunnel to forward to `http://127.0.0.1:5000`.
+7. Install Cloudflare Tunnel with `sudo CLOUDFLARE_TUNNEL_TOKEN='...' bash install-cloudflared.sh`. The Cloudflare tunnel `filtra-ai-oracle-backup` and hostname `backup-api.filtraai.com` are already configured; the token is intentionally never committed.
 
 ## GitHub secrets
 
@@ -22,6 +22,7 @@ Use OCI Ampere A1 Flex in the tenancy home region with the Always Free allocatio
 - `ORACLE_USER` — usually `ubuntu`
 - `ORACLE_SSH_KEY` — private key matching the VM
 - `ORACLE_KNOWN_HOSTS` — `ssh-keyscan -H <host>` output
+- `CLOUDFLARE_TUNNEL_TOKEN` — the tunnel token, if you want the GitHub workflow to automate tunnel installation
 
 After these are present, every push to `master` builds an ARM64 image, publishes both `latest` and the commit SHA to GHCR, then deploys the immutable SHA to the VPS.
 
