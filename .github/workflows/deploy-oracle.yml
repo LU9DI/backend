@@ -77,4 +77,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/oracle_key "$USER@$HOST" "echo '$GH_TOKEN' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin && /opt/filtra-ai/deploy.sh '${{ github.sha }}'; docker logout ghcr.io || true"
+          printf '%s\n' "$GH_TOKEN" | ssh -i ~/.ssh/oracle_key "$USER@$HOST" "docker login ghcr.io -u '${{ github.actor }}' --password-stdin && /opt/filtra-ai/deploy.sh '${{ github.sha }}'; docker logout ghcr.io || true"
