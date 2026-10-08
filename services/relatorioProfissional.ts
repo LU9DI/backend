@@ -91,6 +91,7 @@ function planBenefits(plan: string): string[] {
   if (normalized === 'trial') {
     return ['Período de teste de 7 dias', 'Acesso ao painel durante o período de avaliação'];
   }
+  if (normalized === 'trial') return ['Período de teste de 7 dias', 'Acesso ao painel durante o período de avaliação'];
   return PLAN_BENEFITS[normalized] || PLAN_BENEFITS.pro;
 }
 
