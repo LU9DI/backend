@@ -1,7 +1,7 @@
 /**
  * Logs operacionais para o painel técnico do admin:
  * - webhook_events (Stripe, n8n, etc.)
- * - pdf_generation_log (relatórios mensais)
+ * - relatorio_generation_log (relatórios mensais)
  */
 import type { Database } from 'sqlite';
 
@@ -18,7 +18,7 @@ export async function ensureOpsTables(db: Database): Promise<void> {
     )
   `);
   await db.exec(`
-    CREATE TABLE IF NOT EXISTS pdf_generation_log (
+    CREATE TABLE IF NOT EXISTS relatorio_generation_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       empresa_id TEXT,
       empresa_nome TEXT,
@@ -35,7 +35,7 @@ export async function ensureOpsTables(db: Database): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_webhook_events_created ON webhook_events(created_at DESC)`
   );
   await db.exec(
-    `CREATE INDEX IF NOT EXISTS idx_pdf_log_created ON pdf_generation_log(created_at DESC)`
+    `CREATE INDEX IF NOT EXISTS idx_relatorio_log_created ON pdf_generation_log(created_at DESC)`
   );
 }
 
@@ -67,7 +67,7 @@ export async function logWebhookEvent(
   }
 }
 
-export async function logPdfGeneration(
+export async function logRelatorioGeneration(
   db: Database,
   opts: {
     empresa_id?: string | null;
@@ -83,7 +83,7 @@ export async function logPdfGeneration(
   try {
     await ensureOpsTables(db);
     await db.run(
-      `INSERT INTO pdf_generation_log
+      `INSERT INTO relatorio_generation_log
         (empresa_id, empresa_nome, mes, status, bytes, duration_ms, error, auth_mode)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
@@ -98,7 +98,7 @@ export async function logPdfGeneration(
       ]
     );
   } catch (e: any) {
-    console.warn('[opsLog] pdf log falhou:', e?.message || e);
+    console.warn('[opsLog] relatório log falhou:', e?.message || e);
   }
 }
 
@@ -110,10 +110,10 @@ export async function recentWebhookEvents(db: Database, limit = 30) {
   );
 }
 
-export async function recentPdfLogs(db: Database, limit = 30) {
+export async function recentRelatorioLogs(db: Database, limit = 30) {
   await ensureOpsTables(db);
   return db.all(
-    `SELECT * FROM pdf_generation_log ORDER BY id DESC LIMIT ?`,
+    `SELECT * FROM relatorio_generation_log ORDER BY id DESC LIMIT ?`,
     [Math.min(100, Math.max(1, limit))]
   );
 }
