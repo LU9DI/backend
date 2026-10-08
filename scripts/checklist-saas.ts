@@ -1,5 +1,5 @@
 /**
- * Checklist Filtra.AI — validação automatizada (PDF sem tokens + cota + health).
+ * Checklist Filtra.AI — validação automatizada (relatório profissional + cota + health).
  *
  * Uso:
  *   API_URL=https://api.filtraai.com \
@@ -128,82 +128,35 @@ async function main() {
     fail('planos', e?.message || String(e));
   }
 
-  // 3) PDF sem auth → 401
+  // 3) Relatório sem auth → 401
   try {
-    const r = await req('/api/empresa/demo/relatorio.pdf');
-    if (r.status === 401 || r.status === 403) {
-      pass('pdf_sem_auth', `status=${r.status}`);
-    } else fail('pdf_sem_auth', `esperado 401/403, veio ${r.status}`);
+    const r = await req('/api/empresa/demo/relatorio');
+    if (r.status === 401 || r.status === 403) pass('relatorio_sem_auth', `status=${r.status}`);
+    else fail('relatorio_sem_auth', `esperado 401/403, veio ${r.status}`);
   } catch (e: any) {
-    fail('pdf_sem_auth', e?.message || String(e));
+    fail('relatorio_sem_auth', e?.message || String(e));
   }
 
   const token = await loginIfNeeded();
   const empresaId = (process.env.EMPRESA_ID || process.env.EMPRESA_REF || '').trim();
 
   if (!token || !empresaId) {
-    console.log(
-      '\n⚠️  Sem JWT+EMPRESA_ID — pulando testes autenticados de PDF/cota.\n' +
-        '   Exporte JWT e EMPRESA_ID (ou CNPJ+SENHA) e rode de novo.\n'
-    );
+    console.log('\n⚠️  Sem JWT+EMPRESA_ID — pulando testes autenticados de relatório/cota.\n');
   } else {
-    // 4) 1º PDF → deve ser PDF válido, idealmente MISS (ou HIT se cache quente)
-    const path = `/api/empresa/${encodeURIComponent(empresaId)}/relatorio.pdf?mes=${MES}&lang=${LANG}`;
-    let firstBytes = 0;
-    let firstCache = '';
+    // 4) Relatório profissional → JSON estruturado, sem arquivo binário.
+    const path = `/api/empresa/${encodeURIComponent(empresaId)}/relatorio?mes=${MES}`;
     try {
-      const t0 = Date.now();
-      const r1 = await req(path, { token });
-      const ms1 = Date.now() - t0;
-      const isPdf = r1.body.slice(0, 4).toString() === '%PDF';
-      firstCache = r1.headers.get('x-pdf-cache') || '';
-      const layout = r1.headers.get('x-pdf-layout') || '';
-      firstBytes = r1.body.length;
-
-      if (r1.status === 200 && isPdf) {
-        pass(
-          'pdf_primeiro',
-          `status=200 bytes=${firstBytes} cache=${firstCache || '?'} layout=${layout || '?'} ${ms1}ms`
-        );
-      } else {
-        fail(
-          'pdf_primeiro',
-          `status=${r1.status} pdf=${isPdf} body=${r1.body.toString('utf8').slice(0, 180)}`
-        );
-      }
-
-      // 5) 2º PDF → deve ser mais rápido e preferencialmente HIT
-      const t1 = Date.now();
-      const r2 = await req(path, { token });
-      const ms2 = Date.now() - t1;
-      const isPdf2 = r2.body.slice(0, 4).toString() === '%PDF';
-      const cache2 = r2.headers.get('x-pdf-cache') || '';
-
-      if (r2.status === 200 && isPdf2) {
-        pass(
-          'pdf_segundo',
-          `cache=${cache2 || '?'} ${ms2}ms (1º foi ${ms1}ms)`
-        );
-        if (cache2 === 'HIT') {
-          pass('pdf_cache_hit', '2º download veio do cache (sem regenerar)');
-        } else {
-          // ainda ok se MISS mas rápido — ambiente multi-instância pode não compartilhar memória
-          pass(
-            'pdf_cache_hit',
-            `cache=${cache2 || 'ausente'} (em multi-instância HIT pode falhar; bytes iguais=${r2.body.length === firstBytes})`
-          );
-        }
-        if (ms2 <= ms1 || cache2 === 'HIT') {
-          pass('pdf_sem_regressao_tempo', `2º ${ms2}ms <= 1º ${ms1}ms ou HIT`);
-        }
-      } else {
-        fail('pdf_segundo', `status=${r2.status}`);
-      }
+      const r = await req(path, { token });
+      if (r.status === 200 && r.json?.tipo === 'relatorio_profissional') {
+        pass('relatorio_profissional', `schema=${r.json.schema_version || '?'} periodo=${r.json.periodo || MES}`);
+        if (r.json?.geracao?.modelo_ia === null && Number(r.json?.geracao?.tokens || 0) === 0) pass('relatorio_deterministico', 'JSON-first; sem consumo de tokens');
+        else fail('relatorio_deterministico', 'metadados de geração inesperados');
+      } else fail('relatorio_profissional', `status=${r.status} body=${r.body.toString('utf8').slice(0, 220)}`);
     } catch (e: any) {
-      fail('pdf_download', e?.message || String(e));
+      fail('relatorio_profissional', e?.message || String(e));
     }
 
-    // 6) Cota / uso de tokens (endpoints opcionais)
+    // 5) Cota / uso de tokens (endpoints opcionais)
     const usagePaths = [
       `/api/empresa/${encodeURIComponent(empresaId)}/uso`,
       `/api/empresa/${encodeURIComponent(empresaId)}/quota`,
@@ -230,7 +183,7 @@ async function main() {
     if (!usageOk) {
       pass(
         'quota_tokens',
-        'endpoint de cota não exposto publicamente — validação via código (assertEmpresaTokenQuota + ai_usage). PDF não chama callAI.'
+        'endpoint de cota não exposto publicamente — validação via código (assertEmpresaTokenQuota + ai_usage). Relatório profissional não chama callAI.'
       );
     }
   }
@@ -241,7 +194,7 @@ async function main() {
   console.log(`\n📊 Resultado: ${ok} ok, ${bad} falha(s) de ${results.length}\n`);
 
   console.log('Notas fixas (código):');
-  console.log('  • Relatório profissional: JSON-first, sem PDF/Chromium/Puppeteer.');
+  console.log('  • Relatório profissional: JSON-first, sem arquivo binário, Chromium ou Puppeteer.');
   console.log('  • Tokens só sobem em callAI (resposta/tags/sentimento de reviews).');
   console.log('  • Inicial/Pro: PLAN_TOKEN_LIMITS = 0 (sem IA).');
   console.log('  • Ultra/Corp/Rei/Trial: cota mensal em lib/quota.ts.\n');
