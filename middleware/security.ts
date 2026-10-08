@@ -3,6 +3,9 @@
  */
 import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
+import { isProductionRuntime } from '../lib/env.js';
+
+
 
 export function requestIdMiddleware(req: Request, res: Response, next: NextFunction) {
   const incoming = String(req.headers['x-request-id'] || '').trim();
@@ -22,7 +25,7 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
     'camera=(), microphone=(), geolocation=(), interest-cohort=()'
   );
   // API JSON — CSP restritiva no próprio browser do client é do Next; aqui só API
-  if (process.env.NODE_ENV === 'production') {
+  if (isProductionRuntime()) {
     res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
   }
   next();
