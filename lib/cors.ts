@@ -9,8 +9,7 @@
 import type { CorsOptions } from 'cors';
 
 function isProductionRuntime(): boolean {
-  return process.env.NODE_ENV === 'production' ||
-    (process.env.DENO_DEPLOY === 'true' && process.env.DENO_TIMELINE === 'production');
+  return process.env.NODE_ENV === 'production';
 }
 
 export function buildCorsOptions(): CorsOptions {
