@@ -20,11 +20,7 @@ export function isTrialPlan(plan: string | null | undefined): boolean {
   return p === 'trial' || p === 'teste' || p === 'test';
 }
 
-export function planTemPdf(plan: string | null | undefined): boolean {
-  const p = String(plan || '').toLowerCase().trim();
-  if (!p) return false;
-  if (isTrialPlan(p)) return true;
-  if (['pro', 'ultra', 'corporativo', 'rei'].includes(p)) return true;
+export function planTemPdf(_plan: string | null | undefined): boolean {
   return false;
 }
 
