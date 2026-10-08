@@ -1,6 +1,6 @@
 services:
   filtra-api:
-    image: ghcr.io/lu9di/backend:latest
+    image: ghcr.io/lu9di/backend:${IMAGE_TAG:-latest}
     container_name: filtra-ai-api
     restart: unless-stopped
     env_file:
