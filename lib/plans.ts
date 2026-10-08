@@ -20,10 +20,7 @@ export function isTrialPlan(plan: string | null | undefined): boolean {
   return p === 'trial' || p === 'teste' || p === 'test';
 }
 
-export function planTemPdf(_plan: string | null | undefined): boolean {
-  return false;
-}
-
+/** Relatório profissional: substitui o formato legado de arquivo. */
 /** Relatório inteligente (texto → n8n). Inicial NÃO tem. Trial e Pro+ sim. */
 export function planTemRelatorio(plan: string | null | undefined): boolean {
   const p = String(plan || '').toLowerCase().trim();
@@ -31,11 +28,6 @@ export function planTemRelatorio(plan: string | null | undefined): boolean {
   if (p === 'inicial') return false;
   if (isTrialPlan(p)) return true;
   if (['pro', 'ultra', 'corporativo', 'rei'].includes(p)) return true;
-  return false;
-}
-
-/** Compatibilidade legada: nenhuma empresa recebe PDF novo. */
-export function empresaTemPdf(_empresa: { plan?: string | null; status?: string | null }): boolean {
   return false;
 }
 
