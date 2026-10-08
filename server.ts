@@ -258,6 +258,15 @@ async function gracefulShutdown(signal: string) {
 export async function startServer() {
   assertEnvOrExit();
   const JWT_SECRET = requireJwtSecret();
+
+  // Bind HTTP immediately so Deno Deploy warmup can reach liveness while
+  // database/schema/worker initialization continues in the same instance.
+  server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 API Filtra.IA listening on 0.0.0.0:${PORT}`);
+  });
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
+
   if (process.env.RUN_SUPABASE_MIGRATION === '1') {
     const { main: runMigration } = await import('./scripts/migrate-render-to-supabase.js');
     await runMigration();
@@ -401,12 +410,7 @@ export async function startServer() {
   app.use(notFoundHandler);
   app.use(errorHandler);
 
-  server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 API Filtra.IA em http://0.0.0.0:${PORT}`);
-    startDotMonitorScheduler();
-  });
-  server.keepAliveTimeout = 65_000;
-  server.headersTimeout = 66_000;
+  startDotMonitorScheduler();
 
   console.log(`📦 build ${BUILD.version} marker=${BUILD.marker}`);
   console.log(
