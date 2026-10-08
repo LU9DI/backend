@@ -256,7 +256,7 @@ export async function startServer() {
   assertEnvOrExit();
   const JWT_SECRET = requireJwtSecret();
 
-  // Bind HTTP immediately so Deno Deploy warmup can reach liveness while
+  // Bind HTTP immediately so platform health checks can reach liveness while
   // database/schema/worker initialization continues in the same instance.
   server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 API Filtra.IA listening on 0.0.0.0:${PORT}`);
