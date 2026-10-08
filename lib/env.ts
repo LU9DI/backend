@@ -13,6 +13,11 @@ export function validateEnv(): EnvReport {
   const errors: string[] = [];
   const warnings: string[] = [];
   const isProd = process.env.NODE_ENV === 'production';
+  const isDenoDeploy = process.env.DENO_DEPLOY === 'true';
+
+  if (isDenoDeploy && !isProd) {
+    errors.push('NODE_ENV=production é obrigatório no Deno Deploy.');
+  }
 
   const jwt = process.env.JWT_SECRET || '';
   if (!jwt) {
@@ -43,6 +48,16 @@ export function validateEnv(): EnvReport {
 
   if (isProd && !String(process.env.ADMIN_PASSWORD || '').trim()) {
     errors.push('ADMIN_PASSWORD é obrigatório em produção para criar o primeiro admin.');
+  }
+
+  if (isProd) {
+    const webauthnRpId = process.env.WEBAUTHN_RP_ID?.trim() || '';
+    const webauthnOrigin = process.env.WEBAUTHN_ORIGIN?.trim() || '';
+    if (!webauthnRpId || !webauthnOrigin) {
+      errors.push('WEBAUTHN_RP_ID e WEBAUTHN_ORIGIN são obrigatórios em produção.');
+    } else if (/^localhost(?:\\.|$)/i.test(webauthnRpId) || /^http:\\/\\/localhost(?::|$)/i.test(webauthnOrigin)) {
+      errors.push('WebAuthn em produção não pode usar localhost como RP ID/origin.');
+    }
   }
 
   if (isProd) {
