@@ -12,9 +12,7 @@ export type EnvReport = {
 };
 
 export function isProductionRuntime(): boolean {
-  const timeline = (process.env.DENO_TIMELINE || '').trim();
-  return process.env.NODE_ENV === 'production' ||
-    (process.env.DENO_DEPLOY === 'true' && timeline === 'production');
+  return process.env.NODE_ENV === 'production';
 }
 
 export function validateEnv(): EnvReport {
@@ -24,12 +22,6 @@ export function validateEnv(): EnvReport {
   const isDenoDeploy = process.env.DENO_DEPLOY === 'true';
   const isDenoProduction = isDenoDeploy && timeline === 'production';
   const isProd = process.env.NODE_ENV === 'production' || isDenoProduction;
-
-  // Deno Deploy usa contextos separados: Production e Development.
-  // Preview/branch são Development timelines e não devem exigir NODE_ENV=production.
-  if (isDenoProduction && process.env.NODE_ENV !== 'production') {
-    errors.push('NODE_ENV=production é obrigatório na timeline Production do Deno Deploy.');
-  }
 
   const jwt = process.env.JWT_SECRET || '';
   if (!jwt) {
