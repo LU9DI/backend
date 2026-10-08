@@ -84,18 +84,6 @@ import {
   countMissingSentiment,
 } from './services/sentimentBackfill.js';
 
-// Deno Deploy executes the dynamic entrypoint during the build to cache the dependency graph.
-// Build-context variables intentionally do not include Production secrets, so never start the
-// application or validate runtime-only configuration while the builder is probing the entrypoint.
-const isDenoDeployBuild = Boolean(process.env.DENO_DEPLOY_BUILD_ID);
-if (isDenoDeployBuild) {
-  console.log('Filtra.IA build probe: runtime startup skipped.');
-  process.exit(0);
-}
-
-assertEnvOrExit();
-const JWT_SECRET = requireJwtSecret();
-
 const BUILD = {
   version: '1.3.0',
   marker: 'puppeteer-pdf-v1',
@@ -267,7 +255,9 @@ async function gracefulShutdown(signal: string) {
   }
 }
 
-async function main() {
+export async function startServer() {
+  assertEnvOrExit();
+  const JWT_SECRET = requireJwtSecret();
   if (process.env.RUN_SUPABASE_MIGRATION === '1') {
     const { main: runMigration } = await import('./scripts/migrate-render-to-supabase.js');
     await runMigration();
@@ -434,7 +424,4 @@ async function main() {
   process.once('SIGINT', () => void gracefulShutdown('SIGINT'));
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+
