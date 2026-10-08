@@ -226,11 +226,11 @@ export function mountRelatorioRoutes(app: Express) {
 
   app.post('/api/empresa/:ref/relatorio/enviar', autenticarToken, sendLimiter, sendHandler);
 
-  // Compatibilidade explícita com clientes antigos: o produto não gera mais PDF.
+  // Compatibilidade explícita com clientes antigos: o formato de arquivo legado foi aposentado.
   // Mantemos as rotas legadas para diferenciar migração (410) de rota inexistente (404).
   const legacyPdfGone = (_req: AuthRequest, res: Response) => res.status(410).json({
-    error: 'O formato PDF foi aposentado. Use /api/empresa/:ref/relatorio para o relatório profissional estruturado.',
-    code: 'REPORT_PDF_GONE',
+    error: 'O formato de arquivo legado foi aposentado. Use /api/empresa/:ref/relatorio para o relatório profissional estruturado.',
+    code: 'REPORT_LEGACY_FORMAT_GONE',
     endpoint: '/api/empresa/:ref/relatorio',
   });
 
