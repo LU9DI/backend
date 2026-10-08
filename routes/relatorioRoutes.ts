@@ -30,13 +30,13 @@ function podeAcessarEmpresa(req: AuthRequest, empresaId: string): boolean {
   return Boolean(req.user?.empresa_id && req.user.empresa_id === empresaId);
 }
 
-function reportMonth(req: AuthRequest): string {
+function reportMonth(req: AuthRequest): { ok: true; value: string } | { ok: false; error: string } {
   const check = validateReportMonth(req.query.mes || req.body?.mes, {
     defaultToCurrent: true,
     minYear: 2020,
     allowFutureMonths: 0,
   });
-  return check.ok ? check.value : new Date().toISOString().slice(0, 7);
+  return check.ok ? check : check;
 }
 
 function planError(empresa: any) {
@@ -114,7 +114,9 @@ export function mountRelatorioRoutes(app: Express) {
     if (!podeAcessarEmpresa(req, empresa.id)) return res.status(403).json({ error: 'Sem permissão.' });
     if (!empresaTemRelatorio(empresa)) return res.status(403).json(planError(empresa));
 
-    const mesAno = reportMonth(req);
+    const month = reportMonth(req);
+    if (!month.ok) return res.status(400).json({ error: month.error, code: 'INVALID_REPORT_MONTH' });
+    const mesAno = month.value;
     const relatorio = await buildRelatorioProfissional(getDb(), empresa, mesAno);
 
     return res.json({
@@ -135,8 +137,11 @@ export function mountRelatorioRoutes(app: Express) {
     if (!podeAcessarEmpresa(req, empresa.id)) return res.status(403).json({ error: 'Sem permissão.' });
     if (!empresaTemRelatorio(empresa)) return res.status(403).json(planError(empresa));
 
-    const mesAno = reportMonth(req);
+    const month = reportMonth(req);
+    if (!month.ok) return res.status(400).json({ error: month.error, code: 'INVALID_REPORT_MONTH' });
+    const mesAno = month.value;
     let destinatarios = normalizeDestinatarios(req.body || {});
+    if (destinatarios.length > 20) return res.status(400).json({ error: 'Máximo de 20 destinatários.', code: 'TOO_MANY_RECIPIENTS' });
 
     if (destinatarios.length === 0) {
       try {
@@ -183,6 +188,7 @@ export function mountRelatorioRoutes(app: Express) {
       tipo: 'relatorio_profissional',
       schema_version: relatorio.schema_version,
       empresa_id: empresa.id,
+      cliente_id: empresa.id,
       slug: empresa.slug,
       nome_empresa: empresa.nome_empresa,
       plan: empresa.plan,
