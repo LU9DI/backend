@@ -1,6 +1,6 @@
 /** Identidade do deploy. */
 export const APP_VERSION = '1.1.7';
-export const BUILD_MARKER = 'reportlab-pdf-v1';
+export const BUILD_MARKER = 'structured-report-v2';
 
 const STARTED_AT = new Date().toISOString();
 const STARTED_MS = Date.now();
