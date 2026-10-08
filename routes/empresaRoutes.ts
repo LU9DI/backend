@@ -9,7 +9,6 @@ import {
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { ensureReviewFraudColumns } from '../lib/reviewFraud.js';
 import {
-  planTemPdf,
   allowPlanSwitch,
   PLANOS_OFICIAIS,
   planLabel,
@@ -516,7 +515,6 @@ function emptyPainelPayload(empresa: any, reason?: string) {
   const plan = String(empresa.plan || 'trial').toLowerCase();
   const trial = isTrialPlan(plan);
   const nivel = nivelDashboard(plan);
-  const pdf_disponivel = planTemPdf(plan);
   const tem_ia = trial || planTemIA(plan);
   const wpp = normalizarWhatsapp(empresa.whatsapp_suporte);
   const statusAcesso =
@@ -574,7 +572,6 @@ function emptyPainelPayload(empresa: any, reason?: string) {
     },
     dashboard: {
       nivel,
-      pdf_disponivel,
       tem_ia,
       trial_completo: trial,
       plan_switch: allowPlanSwitch(),
@@ -606,7 +603,6 @@ function emptyPainelPayload(empresa: any, reason?: string) {
       painel: `${base}/painel/${ref}`,
       widget: `${base}/widget/${ref}`,
       embed: `${base}/avaliacao/${ref}`,
-      relatorio_pdf: pdf_disponivel ? `/api/empresa/${ref}/relatorio.pdf` : null,
       login: `${base}/login`,
     },
     ...(reason ? { _degraded: true, _reason: String(reason).slice(0, 200) } : {}),
@@ -689,8 +685,7 @@ export function mountEmpresaRoutes(app: Express) {
         plan,
         status,
         expira_em: expira,
-        mensagem: `Plano ${planLabel(plan)} ativo (modo teste — sem cobrança).`,
-        pdf_disponivel: planTemPdf(plan),
+        mensagem: `Plano ${planLabel(plan)} ativo (modo teste — sem cobrança).`: planTemPdf(plan),
       });
     })
   );
@@ -901,8 +896,7 @@ export function mountEmpresaRoutes(app: Express) {
         const plan = String(empresa.plan || 'trial').toLowerCase();
         const trial = isTrialPlan(plan);
         const nivel = nivelDashboard(plan);
-        const pdf_disponivel = planTemPdf(plan);
-        const tem_ia = trial || planTemIA(plan);
+              const tem_ia = trial || planTemIA(plan);
 
         let feedback_usados = 0;
         let token_usados = 0;
@@ -980,7 +974,6 @@ export function mountEmpresaRoutes(app: Express) {
           },
           dashboard: {
             nivel,
-            pdf_disponivel,
             tem_ia,
             trial_completo: trial,
             plan_switch: allowPlanSwitch(),
@@ -1012,7 +1005,6 @@ export function mountEmpresaRoutes(app: Express) {
             painel: `${base}/painel/${ref}`,
             widget: `${base}/widget/${ref}`,
             embed: `${base}/avaliacao/${ref}`,
-            relatorio_pdf: pdf_disponivel ? `/api/empresa/${ref}/relatorio.pdf` : null,
             login: `${base}/login`,
           },
         });
