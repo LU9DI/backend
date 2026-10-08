@@ -14,6 +14,7 @@ RUN apt-get update \
 COPY package.json package-lock.json* ./
 
 RUN if [ -f package-lock.json ]; then npm ci --omit=dev --no-audit --no-fund; else npm install --omit=dev --no-audit --no-fund; fi \
+  && npm install --no-save --omit=dev --no-audit --no-fund tsx@4.19.3 \
   && npm cache clean --force
 
 COPY . .
