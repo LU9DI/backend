@@ -2,7 +2,7 @@
  * Área técnica do admin:
  * - Status webhooks Stripe / n8n / PayPal / Mercado Pago (Pix)
  * - Auditoria de críticas retidas
- * - Status PDF + fila de retry
+ * - Status de relatórios + fila de retry
  */
 import type { Express, Request, Response } from 'express';
 import { getDb } from '../lib/db.js';
@@ -11,7 +11,7 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import {
   ensureOpsTables,
   logWebhookEvent,
-  recentPdfLogs,
+  recentRelatorioLogs,
   webhookHealth,
 } from '../lib/opsLog.js';
 import { stripeConfigured } from '../stripeBilling.js';
@@ -186,7 +186,7 @@ export function mountAdminTecnicoRoutes(app: Express) {
       });
 
       const retry = await retryQueueStats(db);
-      const pdfLogs = await recentPdfLogs(db, 20);
+      const relatorioLogs = await recentRelatorioLogs(db, 20);
 
       // These flags describe actual server configuration, not whether an event
       // happened during the last 24h. A fresh production instance can have zero
@@ -225,7 +225,7 @@ export function mountAdminTecnicoRoutes(app: Express) {
         events: allEvents,
         criticas: criticasFmt,
         retry,
-        pdf: pdfLogs,
+        relatorios: relatorioLogs,
       });
     })
   );
