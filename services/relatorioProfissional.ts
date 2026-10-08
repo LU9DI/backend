@@ -18,6 +18,7 @@ type Review = {
   id?: string;
   rating?: unknown;
   unidade_id?: string | null;
+  origin?: string | null;
   createdAt?: unknown;
   created_at?: unknown;
   createdat?: unknown;
@@ -256,11 +257,11 @@ export async function buildRelatorioProfissional(
   if (['corporativo', 'rei'].includes(plan)) {
     try {
       const raw = await db.all(
-        'SELECT id, nome FROM unidades WHERE empresa_id = ? AND (ativo IS NULL OR ativo = 1 OR ativo = true) ORDER BY nome',
+        'SELECT id, nome, slug FROM unidades WHERE empresa_id = ? AND (ativo IS NULL OR ativo = 1 OR ativo = true) ORDER BY nome',
         [empresa.id],
       ) as any[];
       unidades = raw.map((u) => {
-        const reviews = reais.filter((r) => String(r.unidade_id || '') === String(u.id));
+        const reviews = reais.filter((r) => String(r.unidade_id || '') === String(u.id) || (u.slug && String(r.origin || '').trim().toLowerCase() === String(u.slug).trim().toLowerCase()));
         const total = reviews.length;
         const avg = total ? Math.round((reviews.reduce((s, r) => s + Number(r.rating || 0), 0) / total) * 10) / 10 : 0;
         return { id: u.id, nome: u.nome, avaliacoes: total, nota_media: avg, criticas: reviews.filter((r) => Number(r.rating) <= 2).length };
@@ -348,6 +349,9 @@ export function normalizeDestinatarios(body: any): RelatorioDestino[] {
     if (typeof item === 'string') push(item.includes('@') ? 'email' : 'whatsapp', item);
     else if (item && typeof item === 'object') push(item.canal || item.channel || item.tipo, item.destino || item.to || item.value);
   }
+  const sharedDestination = body?.destino || body?.destination || body?.to || null;
+  const sharedChannels = body?.canais || body?.channels || [];
+  if (sharedDestination && Array.isArray(sharedChannels)) for (const canal of sharedChannels) push(canal, String(sharedDestination));
   if (body?.email) push('email', String(body.email));
   if (body?.whatsapp) push('whatsapp', String(body.whatsapp));
   if (body?.sms) push('sms', String(body.sms));
