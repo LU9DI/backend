@@ -35,7 +35,7 @@ export async function ensureOpsTables(db: Database): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_webhook_events_created ON webhook_events(created_at DESC)`
   );
   await db.exec(
-    `CREATE INDEX IF NOT EXISTS idx_relatorio_log_created ON pdf_generation_log(created_at DESC)`
+    `CREATE INDEX IF NOT EXISTS idx_relatorio_log_created ON relatorio_generation_log(created_at DESC)`
   );
 }
 
