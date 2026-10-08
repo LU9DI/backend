@@ -219,6 +219,17 @@ export function mountRelatorioRoutes(app: Express) {
   });
 
   app.post('/api/empresa/:ref/relatorio/enviar', autenticarToken, sendLimiter, sendHandler);
+
+  // Compatibilidade explícita com clientes antigos: o produto não gera mais PDF.
+  // Mantemos as rotas legadas para diferenciar migração (410) de rota inexistente (404).
+  const legacyPdfGone = (_req: AuthRequest, res: Response) => res.status(410).json({
+    error: 'O formato PDF foi aposentado. Use /api/empresa/:ref/relatorio para o relatório profissional estruturado.',
+    code: 'REPORT_PDF_GONE',
+    endpoint: '/api/empresa/:ref/relatorio',
+  });
+
+  app.get('/api/empresa/:ref/relatorio.pdf', legacyPdfGone);
+  app.get('/api/empresa/:ref/relatorio-inteligente.pdf', legacyPdfGone);
   app.post('/api/empresa/:ref/relatorio/inteligente', autenticarToken, sendLimiter, sendHandler);
   app.post('/api/empresa/:ref/relatorio/send', autenticarToken, sendLimiter, sendHandler);
 }
