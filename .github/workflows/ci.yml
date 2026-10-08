@@ -35,4 +35,14 @@ jobs:
         run: npm run build
 
       - name: Unit and integration tests
-        run: npm test
+        run: npm test 2>&1 | tee test-output.log
+        env:
+          NODE_OPTIONS: --enable-source-maps
+
+      - name: Upload test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-log
+          path: test-output.log
+          if-no-files-found: warn
