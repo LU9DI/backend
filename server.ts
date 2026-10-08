@@ -7,7 +7,7 @@ import cookieParser from 'cookie-parser';
 import 'dotenv/config';
 import type { Server } from 'http';
 
-import { assertEnvOrExit } from './lib/env.js';
+import { assertEnvOrExit, isProductionRuntime } from './lib/env.js';
 import { initDB, getDb, dbEngine, pingDb, closeDB } from './lib/db.js';
 import { requireJwtSecret, setAuthCookie, autenticarToken } from './lib/auth.js';
 import { jwtRotationStatus } from './lib/jwtKeys.js';
@@ -180,7 +180,7 @@ app.get('/api/health', async (_req, res) => {
 });
 
 app.get('/api/metrics', (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
+  if (isProductionRuntime()) {
     const secret = (process.env.METRICS_TOKEN || process.env.JOBS_SECRET || '').trim();
     const got = String(req.headers['x-metrics-token'] || req.headers['x-jobs-secret'] || '');
     if (!secret || got !== secret) {
