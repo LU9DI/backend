@@ -19,7 +19,7 @@ const LABELS: Record<string, string> = {
 const FEATURES: Record<string, { features: string[]; missingFeatures?: string[]; highlight?: boolean }> = {
   inicial: {
     features: ['100 feedbacks/mês', 'WPP Integrado', 'Dashboard'],
-    missingFeatures: ['Integrado com IA'],
+    missingFeatures: ['Integrado com IA', 'Relatório PDF'],
   },
   pro: {
     features: ['300 feedbacks/mês', 'WPP Integrado', 'Dashboard', '1 Relatório PDF/mês'],
@@ -30,10 +30,37 @@ const FEATURES: Record<string, { features: string[]; missingFeatures?: string[];
     highlight: true,
   },
   corporativo: {
-    features: ['2.500 feedbacks/mês', 'WPP Integrado', 'IA Ativa', '1 Relatório PDF/mês', 'Dashboard Multi-unidades', 'Suporte Prioritário', 'Acesso antecipado a novas funções'],
+    features: [
+      '2.500 feedbacks/mês',
+      'WPP Integrado',
+      'IA Ativa',
+      '1 Relatório PDF/mês',
+      'Dashboard Multi-unidades',
+      'Ranking das unidades',
+      'Insights operacionais por unidade',
+      'Prioridades operacionais',
+      'Links de avaliação por unidade',
+      'Suporte Prioritário',
+      'Acesso antecipado a novas funções',
+    ],
   },
   rei: {
-    features: ['8.000 feedbacks/mês', 'WPP Integrado', 'IA Ativa', '1 Relatório PDF/mês', 'Dashboard Multi-unidades', 'Suporte Prioritário', 'Acesso antecipado a novas funções'],
+    features: [
+      '8.000 feedbacks/mês',
+      'WPP Integrado',
+      'IA Ativa',
+      '1 Relatório PDF/mês',
+      'Dashboard Multi-unidades',
+      'Ranking das unidades',
+      'Insights operacionais por unidade',
+      'Prioridades operacionais',
+      'Radar estratégico',
+      'Oportunidades de crescimento',
+      'Links de avaliação por unidade',
+      'Relatório executivo completo',
+      'Suporte Prioritário',
+      'Acesso antecipado a novas funções',
+    ],
   },
 };
 
