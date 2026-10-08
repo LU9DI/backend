@@ -2,10 +2,12 @@
  * Deno Deploy runtime entrypoint.
  *
  * During the build, Deploy executes the dynamic entrypoint to cache the
- * dependency graph. The probe must stay alive but must not start the app,
- * validate production secrets, connect to the database, or launch workers.
+ * dependency graph. The build context has no DENO_TIMELINE, while actual
+ * runtime timelines expose production/preview/branch values. Keep the build
+ * probe alive without starting the application.
  */
-const isBuildProbe = Boolean(Deno.env.get("DENO_DEPLOY_BUILD_ID"));
+const timeline = (Deno.env.get("DENO_TIMELINE") || "").trim();
+const isBuildProbe = timeline.length === 0;
 
 if (isBuildProbe) {
   const port = Number(Deno.env.get("PORT") || 8000);
