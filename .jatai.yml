@@ -1,0 +1,7 @@
+---
+app: jataicloud
+name: jataicloud
+stack: node
+preset: base
+region: br-se1
+branch: feat/professional-reports-v2
