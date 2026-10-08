@@ -92,7 +92,11 @@ export function mountRelatorioRoutes(app: Express) {
     const destinatarios = normalizeDestinatarios(req.body || {});
     if (destinatarios.length > 20) return res.status(400).json({ error: 'Máximo de 20 destinatários.' });
 
-    await getDb().exec('ALTER TABLE empresas ADD COLUMN IF NOT EXISTS relatorio_destinatarios TEXT');
+    try {
+      await getDb().exec('ALTER TABLE empresas ADD COLUMN relatorio_destinatarios TEXT');
+    } catch {
+      // Coluna já existe; a operação é idempotente entre SQLite e Postgres.
+    }
     await getDb().run(
       'UPDATE empresas SET relatorio_destinatarios = ? WHERE id = ?',
       [JSON.stringify(destinatarios), empresa.id],
