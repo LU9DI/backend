@@ -2,13 +2,11 @@
   "nodeModulesDir": "auto",
   "deploy": {
     "install": "npm install --omit=dev --no-audit --no-fund",
-    "build": "deno eval \"console.log('Filtra.IA build skipped')\"",
     "runtime": {
       "type": "dynamic",
       "entrypoint": "./server.ts",
       "memoryLimit": 768
     },
-    "region": "us",
-    "buildTimeout": "10m"
+    "region": "us"
   }
 }
