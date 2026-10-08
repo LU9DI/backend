@@ -9,7 +9,10 @@ import { isProductionRuntime } from '../lib/env.js';
 
 export function requestIdMiddleware(req: Request, res: Response, next: NextFunction) {
   const incoming = String(req.headers['x-request-id'] || '').trim();
-  const id = incoming || crypto.randomUUID();
+  // Accept only bounded, printable request IDs. Never echo arbitrary header
+  // contents into every response or downstream log context.
+  const safeIncoming = /^[A-Za-z0-9._:-]{1,128}$/.test(incoming) ? incoming : '';
+  const id = safeIncoming || crypto.randomUUID();
   (req as any).requestId = id;
   res.setHeader('X-Request-Id', id);
   next();
