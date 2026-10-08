@@ -184,7 +184,7 @@ app.get('/api/health', async (_req, res) => {
       gemini: ai.stats.gemini.latency,
     },
     http_latency: getHttpMetrics().global,
-    env: process.env.NODE_ENV || 'development',
+    env: process.env.NODE_ENV || (process.env.DENO_TIMELINE ? `deno:${process.env.DENO_TIMELINE}` : 'unset'),
     time: new Date().toISOString(),
   };
 
