@@ -6,7 +6,7 @@ import { normalizeDestinatarios } from '../services/relatorioProfissional.js';
 
 type Route = { method: string; path: string; handler: Function };
 
-test('legacy PDF report endpoints return 410 Gone', () => {
+test('legacy report-file endpoints return 410 Gone', () => {
   const routes: Route[] = [];
   const app = {
     get(path: string, ...handlers: Function[]) { routes.push({ method: 'GET', path, handler: handlers.at(-1)! }); },
@@ -32,7 +32,7 @@ test('legacy PDF report endpoints return 410 Gone', () => {
 
     route.handler({} as any, response as any);
     assert.equal(response.statusCode, 410);
-    assert.equal(response.payload?.code, 'REPORT_PDF_GONE');
+    assert.equal(response.payload?.code, 'REPORT_LEGACY_FORMAT_GONE');
     assert.equal(response.payload?.endpoint, '/api/empresa/:ref/relatorio');
   }
 });
