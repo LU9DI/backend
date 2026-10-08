@@ -19,14 +19,14 @@ const LABELS: Record<string, string> = {
 const FEATURES: Record<string, { features: string[]; missingFeatures?: string[]; highlight?: boolean }> = {
   inicial: {
     features: ['100 feedbacks/mês', 'WPP Integrado', 'Dashboard'],
-    missingFeatures: ['Integrado com IA', 'Relatório PDF'],
+    missingFeatures: ['Integrado com IA', 'Relatório profissional'],
   },
   pro: {
-    features: ['300 feedbacks/mês', 'WPP Integrado', 'Dashboard', '1 Relatório PDF/mês'],
+    features: ['300 feedbacks/mês', 'WPP Integrado', 'Dashboard', 'Relatório profissional'],
     missingFeatures: ['Integrado com IA'],
   },
   ultra: {
-    features: ['800 feedbacks/mês', 'WPP Integrado', 'IA Ativa', '1 Relatório PDF/mês', 'Dashboard com análises'],
+    features: ['800 feedbacks/mês', 'WPP Integrado', 'IA Ativa', 'Relatório profissional', 'Dashboard com análises'],
     highlight: true,
   },
   corporativo: {
@@ -34,7 +34,7 @@ const FEATURES: Record<string, { features: string[]; missingFeatures?: string[];
       '2.500 feedbacks/mês',
       'WPP Integrado',
       'IA Ativa',
-      '1 Relatório PDF/mês',
+      'Relatório profissional',
       'Dashboard Multi-unidades',
       'Ranking das unidades',
       'Insights operacionais por unidade',
@@ -49,7 +49,7 @@ const FEATURES: Record<string, { features: string[]; missingFeatures?: string[];
       '8.000 feedbacks/mês',
       'WPP Integrado',
       'IA Ativa',
-      '1 Relatório PDF/mês',
+      'Relatório profissional',
       'Dashboard Multi-unidades',
       'Ranking das unidades',
       'Insights operacionais por unidade',
