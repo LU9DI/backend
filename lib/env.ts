@@ -1,3 +1,5 @@
+import 'dotenv/config';
+
 /**
  * Validação de variáveis de ambiente na subida.
  * Em produção: JWT forte + DATABASE_URL Postgres (exceto SQLITE_ALLOW_PROD=1).
