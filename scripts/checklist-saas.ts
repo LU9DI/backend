@@ -241,7 +241,7 @@ async function main() {
   console.log(`\n📊 Resultado: ${ok} ok, ${bad} falha(s) de ${results.length}\n`);
 
   console.log('Notas fixas (código):');
-  console.log('  • PDF (1º e N) NÃO chama Groq/Gemini — só SQL + PDFKit.');
+  console.log('  • Relatório profissional: JSON-first, sem PDF/Chromium/Puppeteer.');
   console.log('  • Tokens só sobem em callAI (resposta/tags/sentimento de reviews).');
   console.log('  • Inicial/Pro: PLAN_TOKEN_LIMITS = 0 (sem IA).');
   console.log('  • Ultra/Corp/Rei/Trial: cota mensal em lib/quota.ts.\n');
