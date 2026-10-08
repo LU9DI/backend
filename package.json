@@ -15,7 +15,9 @@
     "audit": "npm audit --omit=dev",
     "mcp:smoke": "tsx scripts/mcp-smoke-test.ts"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@modelcontextprotocol/express": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
@@ -29,7 +31,6 @@
     "express-rate-limit": "^7.5.0",
     "jsonwebtoken": "^9.0.2",
     "nodemailer": "^10.0.1",
-    "pdfkit": "^0.17.2",
     "pg": "^8.13.3",
     "tsx": "^4.19.3",
     "web-push": "^3.6.7",
