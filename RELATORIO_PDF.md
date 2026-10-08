@@ -1,33 +1,45 @@
-# Relatórios PDF por plano
+# Relatório profissional (substitui o PDF)
 
-Geração em `relatorioPdf.ts`. Cache no endpoint evita gastar tokens de IA em re-download.
+O relatório do Filtra.AI deixou de ser um arquivo PDF como produto principal.
 
-## Níveis
+## Fonte única
 
-| Plano | Conteúdo |
-|-------|----------|
-| **Inicial** | Sem PDF mensal |
-| **Pro** | Capa Filtra.AI · KPIs (volume, média, críticas, positivas) · barras 1★–5★ · positivas vs críticas |
-| **Ultra** (+ Trial) | Tudo do Pro · sentimento (pos/neu/neg) · temas detectados pela IA |
-| **Corporativo** | Tudo do Ultra · ranking de unidades · **1 página por filial** (KPIs + barras) |
-| **Rei** | Tudo do Corp · **donut** positivas/críticas · barras de gargalos · donut + temas **por filial** |
+A API entrega um objeto JSON estruturado por período:
 
-## Visual
+- resumo executivo;
+- KPIs;
+- distribuição de estrelas;
+- sentimento;
+- temas recorrentes;
+- unidades;
+- riscos;
+- oportunidades;
+- recomendações;
+- benefícios do plano atual;
+- comparação entre planos;
+- narrativa didática: **o que aconteceu → por que importa → onde atuar → riscos → oportunidades → o que fazer agora**;
+- versões prontas para e-mail, WhatsApp, SMS e WeChat.
 
-- Cabeçalho navy + faixa índigo
-- Cards de KPI com acento lateral
-- Gráficos nativos (PDFKit)
-- Rodapé com data de emissão e numeração de páginas
+A estrutura é deliberadamente previsível para que automações e modelos de IA consigam transformar o mesmo dado em diferentes formatos sem depender de PDF, OCR ou layout de página.
 
-## Filiais (Corp / Rei)
+## Rotas
 
-```sql
-INSERT INTO unidades (id, empresa_id, nome, slug, ativo)
-VALUES ('uuid', 'empresa_id', 'Filial Centro', 'filial-centro', 1);
-```
+- `GET /api/empresa/:ref/relatorio?mes=YYYY-MM` — relatório profissional estruturado.
+- `POST /api/empresa/:ref/relatorio/enviar` — distribuição por canais.
+- `GET /api/empresa/:ref/relatorio.pdf` — **410 Gone**; PDF foi descontinuado como formato de produto.
 
-Nas reviews: `unidade_id` ou `origin` = slug. Sem filiais cadastradas, usa página **Matriz / Geral**.
+## Benefícios por plano
 
-## Elegibilidade
+O relatório retorna `plano.beneficios_incluidos` e `plano.comparativo` com os cinco planos oficiais:
 
-`planTemPdf` / `empresaTemPdf` em `lib/plans.ts`: pro, ultra, corporativo, rei e trial.
+1. Inicial
+2. Pro
+3. Ultra
+4. Corporativo
+5. REI
+
+REI herda os benefícios do Corporativo e acrescenta inteligência estratégica, incluindo radar estratégico, oportunidades de crescimento e relatório executivo.
+
+## PDF legado
+
+Os geradores antigos podem permanecer temporariamente no repositório para recuperação histórica/testes, mas não devem ser montados no painel nem usados pela rota principal. Novas funcionalidades devem consumir o relatório estruturado.
