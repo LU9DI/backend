@@ -1,7 +1,7 @@
 /**
  * Relatório profissional — objeto estruturado, visual no painel e distribuição por canais.
  *
- * PDF deixa de ser o formato do produto. A estrutura JSON é a fonte única para
+ * O relatório estruturado é o formato canônico do produto. A estrutura JSON é a fonte única para
  * painel, e-mail, WhatsApp, SMS/WeChat e futuras camadas de IA.
  */
 import type { Express, Response } from 'express';
@@ -217,17 +217,4 @@ export function mountRelatorioRoutes(app: Express) {
   app.post('/api/empresa/:ref/relatorio/enviar', autenticarToken, sendLimiter, sendHandler);
   app.post('/api/empresa/:ref/relatorio/inteligente', autenticarToken, sendLimiter, sendHandler);
   app.post('/api/empresa/:ref/relatorio/send', autenticarToken, sendLimiter, sendHandler);
-
-  // Compatibilidade explícita: PDF deixou de ser o produto. Não geramos arquivo nem iniciamos Chromium.
-  const legacyPdfHandler = asyncHandler(async (_req: AuthRequest, res: Response) => {
-    return res.status(410).json({
-      error: 'PDF descontinuado como formato de relatório.',
-      code: 'REPORT_FORMAT_RETIRED',
-      replacement: '/api/empresa/:ref/relatorio',
-      message: 'Use o relatório profissional estruturado, disponível no painel e pelos canais de distribuição.',
-    });
-  });
-
-  app.get('/api/empresa/:ref/relatorio-inteligente.pdf', autenticarToken, legacyPdfHandler);
-  app.get('/api/empresa/:ref/relatorio.pdf', autenticarToken, legacyPdfHandler);
 }
