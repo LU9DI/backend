@@ -55,7 +55,7 @@ export function validateEnv(): EnvReport {
     const webauthnOrigin = process.env.WEBAUTHN_ORIGIN?.trim() || '';
     if (!webauthnRpId || !webauthnOrigin) {
       errors.push('WEBAUTHN_RP_ID e WEBAUTHN_ORIGIN são obrigatórios em produção.');
-    } else if (/^localhost(?:\\.|$)/i.test(webauthnRpId) || /^http:\\/\\/localhost(?::|$)/i.test(webauthnOrigin)) {
+    } else if (/^localhost(?:\.|$)/i.test(webauthnRpId) || /^http:\/\/localhost(?::|$)/i.test(webauthnOrigin)) {
       errors.push('WebAuthn em produção não pode usar localhost como RP ID/origin.');
     }
   }
