@@ -245,10 +245,10 @@ const mcpRateLimit = rateLimit({
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: { error: 'Muitas solicitações ao conector Filtra.AI. Tente novamente mais tarde.', code: 'MCP_RATE_LIMITED' },
-  keyGenerator: (req) => {
-    const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-    return forwarded || req.ip || 'unknown';
-  },
+  // Express already normalizes the client IP according to trust proxy.
+  // Do not trust a user-supplied X-Forwarded-For value directly: doing so
+  // would let callers rotate the limiter key and bypass the public quota.
+  keyGenerator: (req) => req.ip || 'unknown',
 });
 
 export const mcpApp = createMcpExpressApp({
