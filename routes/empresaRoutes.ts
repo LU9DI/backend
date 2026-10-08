@@ -685,7 +685,7 @@ export function mountEmpresaRoutes(app: Express) {
         plan,
         status,
         expira_em: expira,
-        mensagem: `Plano ${planLabel(plan)} ativo (modo teste — sem cobrança).`: planTemPdf(plan),
+        mensagem: `Plano ${planLabel(plan)} ativo (modo teste — sem cobrança).`,
       });
     })
   );
