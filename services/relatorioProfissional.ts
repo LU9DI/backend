@@ -306,6 +306,18 @@ export async function buildRelatorioProfissional(
     riscos,
     oportunidades,
     recomendacoes: buildRecommendations(kpis, temasAtencao),
+    narrativa: {
+      o_que_aconteceu: buildSummary(plan, kpis),
+      por_que_importa: kpis.percentual_criticas > 0
+        ? `Há ${kpis.criticas} avaliações críticas que podem indicar pontos de atrito na experiência.`
+        : 'Os sinais disponíveis não mostram concentração relevante de avaliações críticas.',
+      onde_atuar: unidades.length
+        ? `Priorizar a leitura comparativa das ${unidades.length} unidades com avaliações no período.`
+        : 'Atuar primeiro sobre os temas recorrentes e avaliações críticas do conjunto da empresa.',
+      riscos: riscos.map((x: any) => x.titulo),
+      oportunidades: oportunidades.map((x: any) => x.titulo),
+      o_que_fazer_agora: buildRecommendations(kpis, temasAtencao),
+    },
     origem: 'dados_reais_do_painel',
   };
 
