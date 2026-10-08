@@ -70,11 +70,9 @@ import { smtpConfigured } from './lib/mailer.js';
 import { n8nConfigured } from './lib/n8n.js';
 import { ensureAcquisitionEngineSchema, startAcquisitionWorker } from './lib/acquisitionEngine.js';
 import { startAcquisitionReplenisher } from './lib/acquisitionReplenisher.js';
-import { startAcquisitionBrowserBot } from './lib/acquisitionBrowserBot.js';
 import { startProductHuntAcquisition } from './lib/acquisitionProductHunt.js';
 import { startHubSpotAcquisitionSync } from './lib/hubspotAcquisitionSync.js';
 import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
-import { ensureReportPdfSchema } from './lib/reportPdfStore.js';
 import {
   anonymizeOldClientWhatsapp,
   ensureReviewTreatmentColumns,
@@ -259,7 +257,7 @@ export async function startServer() {
   assertEnvOrExit();
   const JWT_SECRET = requireJwtSecret();
 
-  // Bind HTTP immediately so Deno Deploy warmup can reach liveness while
+  // Bind HTTP immediately so platform health checks can reach liveness while
   // database/schema/worker initialization continues in the same instance.
   server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 API Filtra.IA listening on 0.0.0.0:${PORT}`);
@@ -339,16 +337,6 @@ export async function startServer() {
   try {
     await ensureAcquisitionEngineSchema(getDb());
     startAcquisitionWorker();
-    // Browser capture is the revenue-critical path. Do not let lead discovery
-    // providers consume startup/CPU/network budget before existing prospects
-    // have a chance to be contacted. Replenishment starts after the browser bot.
-    try {
-      console.log('[acquisition-browser] bootstrap start');
-      await startAcquisitionBrowserBot();
-      console.log('[acquisition-browser] bootstrap complete');
-    } catch (e: any) {
-      console.error('[acquisition-browser] bootstrap failed:', e?.message || e);
-    }
     setTimeout(() => {
       try {
         startAcquisitionReplenisher();
