@@ -13,7 +13,7 @@ A API de produção usa runtime Node.js e o relatório profissional estruturado 
 - **Chromium/Puppeteer:** não fazem parte do runtime.
 - **SQLite:** somente desenvolvimento local.
 
-O Jataí detecta o `Dockerfile` na raiz e usa a imagem customizada. O container deve escutar em `process.env.PORT`; o `Dockerfile` atual mantém a porta padrão 5000 quando nenhuma porta é injetada pela plataforma.
+O Jataí detecta o `Dockerfile` na raiz e usa a imagem customizada. O container deve escutar em `process.env.PORT`; o `Dockerfile` atual usa `3000` como fallback local e o Jataí injeta a porta configurada no app.
 
 ## Variáveis obrigatórias em produção
 
@@ -47,9 +47,9 @@ Para a entrada pública da API, prefira o domínio da API atrás do Cloudflare e
 O projeto já possui um Dockerfile compatível com o runtime:
 
 1. Jataí detecta o Dockerfile.
-2. O Docker instala somente dependências de produção.
+2. O Docker instala as dependências declaradas no `package.json`; `tsx` está em `dependencies` porque é necessário ao `npm start` do runtime.
 3. `npm start` executa `tsx node-entrypoint.ts`.
-4. A aplicação escuta em `0.0.0.0:${PORT}`.
+4. A aplicação escuta em `0.0.0.0:${PORT}` (porta 3000 no fallback local).
 5. O Jataí publica HTTPS automaticamente.
 
 O primeiro app Base do time é gratuito conforme o plano atual do Jataí. Não devemos criar worker separado nesta etapa: os processos adicionais são cobrados como Hex independentes.
