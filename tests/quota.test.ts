@@ -7,7 +7,7 @@ import {
   PLAN_FEEDBACK_LIMITS,
   PLAN_TOKEN_LIMITS,
 } from '../lib/quota.js';
-import { planTemPdf, isTrialPlan } from '../lib/plans.js';
+import { planTemRelatorio, isTrialPlan } from '../lib/plans.js';
 
 describe('planTemIA', () => {
   it('inicial e pro sem IA', () => {
@@ -48,14 +48,14 @@ describe('getTokenLimit', () => {
   });
 });
 
-describe('planTemPdf', () => {
-  it('inicial sem PDF; pro+ e trial com PDF', () => {
-    assert.equal(planTemPdf('inicial'), false);
-    assert.equal(planTemPdf('pro'), true);
-    assert.equal(planTemPdf('ultra'), true);
-    assert.equal(planTemPdf('corporativo'), true);
-    assert.equal(planTemPdf('rei'), true);
-    assert.equal(planTemPdf('trial'), true);
+describe('planTemRelatorio', () => {
+  it('inicial sem relatório; pro+ e trial com relatório', () => {
+    assert.equal(planTemRelatorio('inicial'), false);
+    assert.equal(planTemRelatorio('pro'), true);
+    assert.equal(planTemRelatorio('ultra'), true);
+    assert.equal(planTemRelatorio('corporativo'), true);
+    assert.equal(planTemRelatorio('rei'), true);
+    assert.equal(planTemRelatorio('trial'), true);
     assert.equal(isTrialPlan('teste'), true);
   });
 });
