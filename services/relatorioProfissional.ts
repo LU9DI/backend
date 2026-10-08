@@ -37,7 +37,7 @@ const PLAN_BENEFITS: Record<string, string[]> = {
     'Até 300 feedbacks por ciclo',
     'Dashboard operacional',
     'WhatsApp integrado',
-    'Relatório profissional do período',
+    'Relatório inteligente',
   ],
   ultra: [
     'Até 800 feedbacks por ciclo',
@@ -88,9 +88,6 @@ function normalizePlan(value: unknown): string {
 
 function planBenefits(plan: string): string[] {
   const normalized = normalizePlan(plan);
-  if (normalized === 'trial') {
-    return ['Período de teste de 7 dias', 'Acesso ao painel durante o período de avaliação'];
-  }
   if (normalized === 'trial') return ['Período de teste de 7 dias', 'Acesso ao painel durante o período de avaliação'];
   return PLAN_BENEFITS[normalized] || PLAN_BENEFITS.pro;
 }
