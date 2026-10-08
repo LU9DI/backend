@@ -84,6 +84,15 @@ import {
   countMissingSentiment,
 } from './services/sentimentBackfill.js';
 
+// Deno Deploy executes the dynamic entrypoint during the build to cache the dependency graph.
+// Build-context variables intentionally do not include Production secrets, so never start the
+// application or validate runtime-only configuration while the builder is probing the entrypoint.
+const isDenoDeployBuild = Boolean(process.env.DENO_DEPLOY_BUILD_ID);
+if (isDenoDeployBuild) {
+  console.log('Filtra.IA build probe: runtime startup skipped.');
+  process.exit(0);
+}
+
 assertEnvOrExit();
 const JWT_SECRET = requireJwtSecret();
 
