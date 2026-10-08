@@ -223,19 +223,19 @@ export async function buildRelatorioProfissional(
   let rows: Review[] = [];
   try {
     rows = await db.all(
-      'SELECT * FROM reviews WHERE empresa_id = ? ORDER BY createdAt DESC LIMIT 10000',
-      [empresa.id],
+      'SELECT * FROM reviews WHERE empresa_id = ? AND substr(createdAt, 1, 7) = ? ORDER BY createdAt DESC LIMIT 10000',
+      [empresa.id, periodo],
     ) as Review[];
   } catch {
     try {
       rows = await db.all(
-        'SELECT * FROM reviews WHERE empresa_id = ? ORDER BY created_at DESC LIMIT 10000',
-        [empresa.id],
+        'SELECT * FROM reviews WHERE empresa_id = ? AND substr(created_at, 1, 7) = ? ORDER BY created_at DESC LIMIT 10000',
+        [empresa.id, periodo],
       ) as Review[];
     } catch { rows = []; }
   }
 
-  const reais = rows.filter((row) => !isTest(row) && dateOf(row).startsWith(periodo));
+  const reais = rows.filter((row) => !isTest(row));
   const avaliacoes = reais.length;
   const soma = reais.reduce((sum, row) => sum + Number(row.rating || 0), 0);
   const notaMedia = avaliacoes ? Math.round((soma / avaliacoes) * 10) / 10 : 0;
