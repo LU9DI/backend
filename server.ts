@@ -84,7 +84,7 @@ import {
 
 const BUILD = {
   version: '1.3.0',
-  marker: 'puppeteer-pdf-v1',
+  marker: 'professional-report-v2',
   started_at: new Date().toISOString(),
 };
 
@@ -164,7 +164,7 @@ app.get('/api/health', async (_req, res) => {
     smtp: smtpConfigured(),
     n8n: n8nConfigured(),
     fiscal: fiscalConfigured(),
-    pdf_engine: 'puppeteer',
+    report_engine: 'structured-json',
     ai_latency: {
       groq: ai.stats.groq.latency,
       gemini: ai.stats.gemini.latency,
@@ -402,7 +402,7 @@ export async function startServer() {
   console.log(`📧 SMTP: ${smtpConfigured() ? 'configurado' : 'OFF'}`);
   console.log(`🔗 n8n: ${n8nConfigured() ? 'webhook ON' : 'OFF'}`);
   console.log(`🧾 NFS-e: ${fiscalConfigured() ? 'configurado' : 'OFF'}`);
-  console.log('📄 PDF: puppeteer');
+  console.log('📄 Relatórios: structured-json / canais');
   if (!wechatConfigured()) {
     console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
   }
