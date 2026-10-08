@@ -1,7 +1,7 @@
 {
   "nodeModulesDir": "auto",
   "deploy": {
-    "install": "npm ci --omit=dev --no-audit --no-fund",
+    "install": "npm install --omit=dev --no-audit --no-fund",
     "build": "deno eval \"console.log('Filtra.IA build skipped')\"",
     "runtime": {
       "type": "dynamic",
