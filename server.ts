@@ -70,11 +70,9 @@ import { smtpConfigured } from './lib/mailer.js';
 import { n8nConfigured } from './lib/n8n.js';
 import { ensureAcquisitionEngineSchema, startAcquisitionWorker } from './lib/acquisitionEngine.js';
 import { startAcquisitionReplenisher } from './lib/acquisitionReplenisher.js';
-import { startAcquisitionBrowserBot } from './lib/acquisitionBrowserBot.js';
 import { startProductHuntAcquisition } from './lib/acquisitionProductHunt.js';
 import { startHubSpotAcquisitionSync } from './lib/hubspotAcquisitionSync.js';
 import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
-import { ensureReportPdfSchema } from './lib/reportPdfStore.js';
 import {
   anonymizeOldClientWhatsapp,
   ensureReviewTreatmentColumns,
@@ -308,11 +306,6 @@ export async function startServer() {
     console.warn('ensureFiscalSchema:', e);
   }
   try {
-    await ensureReportPdfSchema(getDb());
-  } catch (e) {
-    console.warn('ensureReportPdfSchema:', e);
-  }
-  try {
     await ensurePlanPricingSchema(getDb());
     await refreshPlanPricesFromDb(getDb());
   } catch (e) {
@@ -341,13 +334,6 @@ export async function startServer() {
     // Browser capture is the revenue-critical path. Do not let lead discovery
     // providers consume startup/CPU/network budget before existing prospects
     // have a chance to be contacted. Replenishment starts after the browser bot.
-    try {
-      console.log('[acquisition-browser] bootstrap start');
-      await startAcquisitionBrowserBot();
-      console.log('[acquisition-browser] bootstrap complete');
-    } catch (e: any) {
-      console.error('[acquisition-browser] bootstrap failed:', e?.message || e);
-    }
     setTimeout(() => {
       try {
         startAcquisitionReplenisher();
