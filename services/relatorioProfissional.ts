@@ -41,30 +41,38 @@ const PLAN_BENEFITS: Record<string, string[]> = {
   ],
   ultra: [
     'Até 800 feedbacks por ciclo',
-    'Tudo do Pro',
+    'WhatsApp integrado',
     'IA integrada',
-    'Dashboard com análises avançadas',
-    'Relatório profissional com sentimento e temas',
+    'Relatório inteligente',
+    'Dashboard com análises',
   ],
   corporativo: [
     'Até 2.500 feedbacks por ciclo',
-    'Tudo do Ultra',
-    'Dashboard multiunidades',
+    'WhatsApp integrado',
+    'IA integrada',
+    'Relatório inteligente',
+    'Dashboard Multi-unidades',
     'Ranking das unidades',
     'Insights operacionais por unidade',
     'Prioridades operacionais',
-    'Links de avaliação por unidade',
-    'Suporte prioritário',
+    'Link de avaliação por unidade',
+    'Suporte Prioritário',
     'Acesso antecipado a novas funções',
   ],
   rei: [
     'Até 8.000 feedbacks por ciclo',
-    'Tudo do Corporativo',
+    'WhatsApp integrado',
+    'IA integrada',
+    'Relatório inteligente',
+    'Dashboard Multi-unidades',
+    'Ranking das unidades',
+    'Insights operacionais por unidade',
+    'Prioridades operacionais',
     'Radar estratégico',
     'Oportunidades de crescimento',
+    'Link de avaliação por unidade',
     'Relatório executivo completo',
-    'Visão consolidada para diretoria e gestão',
-    'Suporte prioritário',
+    'Suporte Prioritário',
     'Acesso antecipado a novas funções',
   ],
 };
@@ -74,12 +82,15 @@ const PLAN_ORDER = ['inicial', 'pro', 'ultra', 'corporativo', 'rei'];
 function normalizePlan(value: unknown): string {
   const p = String(value || '').trim().toLowerCase();
   if (p === 'corp' || p === 'corporate') return 'corporativo';
-  if (p === 'teste' || p === 'test' || p.startsWith('trial')) return 'rei';
+  if (p === 'teste' || p === 'test' || p === 'trial' || p.startsWith('trial')) return 'trial';
   return PLANOS_OFICIAIS.includes(p as any) ? p : 'pro';
 }
 
 function planBenefits(plan: string): string[] {
   const normalized = normalizePlan(plan);
+  if (normalized === 'trial') {
+    return ['Período de teste de 7 dias', 'Acesso ao painel durante o período de avaliação'];
+  }
   return PLAN_BENEFITS[normalized] || PLAN_BENEFITS.pro;
 }
 
