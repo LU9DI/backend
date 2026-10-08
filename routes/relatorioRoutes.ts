@@ -159,7 +159,11 @@ export function mountRelatorioRoutes(app: Express) {
 
     const relatorio = await buildRelatorioProfissional(getDb(), empresa, mesAno);
     const channels = [...new Set(destinatarios.map((d) => d.canal))];
-    const idempotencyKey = `professional-report:${empresa.id}:${mesAno}:${channels.sort().join(',')}`;
+    const recipientFingerprint = destinatarios
+      .map((d) => `${d.canal}:${d.destino.trim().toLowerCase()}`)
+      .sort()
+      .join('|');
+    const idempotencyKey = `professional-report:${empresa.id}:${mesAno}:${channels.sort().join(',')}:${recipientFingerprint}`;
 
     if (!n8nConfigured()) {
       return res.status(503).json({
