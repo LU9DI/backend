@@ -356,5 +356,5 @@ export function normalizeDestinatarios(body: any): RelatorioDestino[] {
   if (body?.whatsapp) push('whatsapp', String(body.whatsapp));
   if (body?.sms) push('sms', String(body.sms));
   if (body?.wechat) push('wechat', String(body.wechat));
-  return out.slice(0, 20);
+  return out;
 }
