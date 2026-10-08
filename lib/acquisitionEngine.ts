@@ -1,4 +1,3 @@
-import { runAcquisitionBrowserBotTick } from './acquisitionBrowserBot.js';
 import crypto from 'crypto';
 import { getDb } from './db.js';
 import { enqueueRetry } from './retryQueue.js';
@@ -460,9 +459,7 @@ export function startAcquisitionWorker() {
     queueEligibleAcquisition(Math.max(1, Number(process.env.ACQUISITION_PER_TICK || 1)))
       .then(r => console.log('[acquisition]', r))
       .catch(e => console.warn('[acquisition worker]', e?.message || e));
-    void runAcquisitionBrowserBotTick().catch(e =>
-      console.warn('[acquisition-browser heartbeat]', e?.message || e)
-    );
+
   };
   tick();
   setInterval(tick, ENGINE_INTERVAL_MS);
