@@ -10,9 +10,12 @@ import {
 } from './jwtKeys.js';
 import { getDb } from './db.js';
 import { empresaTemAcesso } from '../services/billingService.js';
+import { isProductionRuntime } from './env.js';
+
+
 
 export const COOKIE_NAME = 'saas_auth_token';
-const isProd = process.env.NODE_ENV === 'production';
+const isProd = isProductionRuntime();
 
 export { signAccessToken, verifyAccessToken };
 export type { JwtPayload };
