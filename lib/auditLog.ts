@@ -14,7 +14,7 @@ export type AuditAction =
   | 'billing.block'
   | 'empresa.whatsapp'
   | 'empresa.google'
-  | 'pdf.download'
+  | 'relatorio.download'
   | 'unidade.create'
   | 'unidade.delete'
   | 'webauthn.register'
