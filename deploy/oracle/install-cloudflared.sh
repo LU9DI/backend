@@ -11,7 +11,7 @@ curl -L --fail --silent --show-error -o /tmp/cloudflared.deb "https://github.com
 dpkg -i /tmp/cloudflared.deb
 rm -f /tmp/cloudflared.deb
 mkdir -p /etc/cloudflared
-printf '%s\n' "$TOKEN" > /etc/cloudflared/tunnel-token
+printf 'CLOUDFLARE_TUNNEL_TOKEN=%s\n' "$TOKEN" > /etc/cloudflared/tunnel-token
 chmod 600 /etc/cloudflared/tunnel-token
 cat >/etc/systemd/system/cloudflared-filtra.service <<'UNIT'
 [Unit]
