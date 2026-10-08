@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mountRelatorioRoutes } from '../routes/relatorioRoutes.js';
 import { planTemRelatorio } from '../lib/plans.js';
+import { normalizeDestinatarios } from '../services/relatorioProfissional.js';
 
 type Route = { method: string; path: string; handler: Function };
 
@@ -43,4 +44,12 @@ test('report entitlement is not advertised for Initial plan', () => {
   assert.equal(planTemRelatorio('corporativo'), true);
   assert.equal(planTemRelatorio('rei'), true);
   assert.equal(planTemRelatorio('trial'), true);
+});
+
+test('recipient normalization preserves all recipients so the route can reject more than 20', () => {
+  const recipients = Array.from({ length: 21 }, (_, i) => ({
+    canal: 'email',
+    destino: `user${i}@example.com`,
+  }));
+  assert.equal(normalizeDestinatarios({ destinatarios: recipients }).length, 21);
 });
