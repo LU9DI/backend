@@ -7,17 +7,15 @@
   "scripts": {
     "dev": "tsx watch server.ts",
     "build": "node -e \"console.log('Filtra.IA build ok')\"",
-    "start": "tsx server.ts",
-    "start:prod": "tsx server.ts",
+    "start": "tsx node-entrypoint.ts",
+    "start:prod": "tsx node-entrypoint.ts",
     "smtp:test": "tsx scripts/smtp-connectivity-test.ts",
     "checklist": "tsx scripts/checklist-saas.ts",
     "test": "tsx --test tests/**/*.test.ts",
     "audit": "npm audit --omit=dev",
     "mcp:smoke": "tsx scripts/mcp-smoke-test.ts"
   },
-  "engines": {
-    "node": ">=20"
-  },
+  "engines": { "node": ">=20" },
   "dependencies": {
     "@modelcontextprotocol/express": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
