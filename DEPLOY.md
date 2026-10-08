@@ -1,32 +1,24 @@
-# Deploy Filtra.IA API (Render)
+# Deploy — Filtra.AI
 
-## Branch correta
+A API de produção usa o runtime Node e o relatório profissional estruturado como formato canônico.
 
-O serviço no Render deve apontar para **uma** destas branches e fazer deploy do commit mais recente:
+## Runtime atual
 
-- `main` — build esperado: `1.1.4+` / marker com `pdf-postgres`
-- `fix/render-production-start` — build esperado: `1.1.5` / `pdf-postgres-trial-fix`
+- Produção: Render (`filtra-ia-api`).
+- Backup: Oracle Cloud Always Free, quando provisionado.
+- Frontend: Cloudflare Pages.
+- Relatórios: JSON-first, exibidos no painel e distribuídos por e-mail, WhatsApp, SMS e WeChat.
+- O runtime não depende de Chromium, Puppeteer ou geração de arquivos para relatórios.
 
-## Como confirmar
+## Validação
 
-```bash
-curl -sS https://api.filtraai.com/api/live
-```
+O healthcheck principal é `/api/live`; a prontidão completa fica em `/api/ready`.
+O endpoint `/api/health` expõe informações operacionais e o marcador de build.
 
-Se ainda aparecer `1.1.3` ou `codex-hardening-n8n-pg-metrics-intact`, o Render **não** está no commit novo.
+A branch `feat/professional-reports-v2` consolida a migração para relatório profissional estruturado. Não trate branches antigas ou marcadores históricos como indicação do runtime atual.
 
-## Passos no Render
+## Relatório profissional
 
-1. Dashboard → serviço da API
-2. Settings → Branch = `main` **ou** `fix/render-production-start` (a que você usa)
-3. Manual Deploy → Deploy latest commit
-4. Aguarde Live
-5. Confira `/api/live` de novo
+Trial e planos Pro+ possuem relatório profissional estruturado. O plano Inicial não inclui relatórios.
 
-## PDF
-
-Trial e planos Pro+ geram PDF. Plano `inicial` não.
-
-## Segurança
-
-Em produção, defina `ALLOW_PLAN_SWITCH=0` (ou remova a variável) para não permitir troca de plano sem pagamento.
+O relatório é um objeto JSON versionado e serve como fonte única para painel e distribuição multicanal. Endpoints legados de arquivo retornam 410 Gone.
