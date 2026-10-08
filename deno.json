@@ -4,7 +4,7 @@
     "install": "npm install --omit=dev --no-audit --no-fund",
     "runtime": {
       "type": "dynamic",
-      "entrypoint": "./server.ts",
+      "entrypoint": "./deploy-entrypoint.ts",
       "memoryLimit": 768
     },
     "region": "us"
