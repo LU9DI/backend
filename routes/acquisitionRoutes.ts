@@ -135,16 +135,12 @@ export function mountAcquisitionRoutes(app: Express) {
     res.json({success:true, result});
   }));
 
-  app.post('/api/n8n/acquisition/browser/tick', limiter, asyncHandler(async (req,res) => {
-    const secret = String(req.headers['x-acquisition-cron-secret'] || '');
-    const expected = String(process.env.ACQUISITION_BROWSER_CRON_SECRET || '').trim();
-    if (!expected || !secret || secret.length !== expected.length ||
-        !crypto.timingSafeEqual(Buffer.from(secret), Buffer.from(expected))) {
-      return res.status(401).json({ error: 'Acquisition cron secret inválido ou ausente.' });
-    }
-    const { runAcquisitionBrowserBotTick } = await import('../lib/acquisitionBrowserBot.js');
-    await runAcquisitionBrowserBotTick(true);
-    res.status(202).json({ success: true, queued: true, triggered_at: new Date().toISOString() });
+  app.post('/api/n8n/acquisition/browser/tick', limiter, asyncHandler(async (_req,res) => {
+    return res.status(410).json({
+      error: 'Automação de navegador descontinuada.',
+      code: 'BROWSER_AUTOMATION_RETIRED',
+      message: 'A aquisição operacional do Filtra.AI não inicia Chromium/Puppeteer.',
+    });
   }));
 
   app.post('/api/n8n/acquisition/leads/eligibility', limiter, asyncHandler(async (req,res) => {
