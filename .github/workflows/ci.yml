@@ -75,11 +75,10 @@ jobs:
           test "$code" = "201" || { echo "Jatai deploy request failed: HTTP $code"; cat "$deploy_json"; exit 1; }
           deploy_id="$(ruby -rjson -e 'd=JSON.parse(File.read(ARGV[0])); abort("Deploy version mismatch") unless d["version"] == ARGV[1] && d["app_slug"] == ARGV[2] && d["id"]; puts d["id"]' "$deploy_json" "$DEPLOY_VERSION" "$JATAI_APP_SLUG")"
           echo "Jatai accepted deploy $deploy_id for $DEPLOY_VERSION"
-          unset JATAI_API_TOKEN
 
           for attempt in $(seq 1 48); do
             code="$(curl --silent --show-error --output "$app_json" --write-out '%{http_code}' --max-time 20 \
-              -H "Authorization: Bearer ${{ secrets.JATAI_API_TOKEN }}" "$api/apps/$JATAI_APP_SLUG")"
+              -H "Authorization: Bearer $JATAI_API_TOKEN" "$api/apps/$JATAI_APP_SLUG")"
             if [ "$code" = "200" ]; then
               state="$(ruby -rjson -e 'a=JSON.parse(File.read(ARGV[0])); d=a["last_deploy"] || {}; puts [d["id"],d["status"],d["commit_sha"]].join("|")' "$app_json")"
               echo "Deploy state ($attempt/48): $state"
