@@ -20,6 +20,12 @@ export function isTrialPlan(plan: string | null | undefined): boolean {
   return p === 'trial' || p === 'teste' || p === 'test';
 }
 
+/** Relatório profissional mensal: Pro, Ultra, Corporativo e REI. */
+export function planTemRelatorioMensal(plan: string | null | undefined): boolean {
+  const normalized = String(plan || '').toLowerCase().trim();
+  return ['pro', 'ultra', 'corporativo', 'corporate', 'corp', 'rei'].includes(normalized);
+}
+
 export function planTemPdf(plan: string | null | undefined): boolean {
   const p = String(plan || '').toLowerCase().trim();
   if (!p) return false;
