@@ -10,9 +10,10 @@ import { createDecisionsForEvents, listDotDecisions, updateDotDecision } from '.
 import { prepareDotActionFromDecision, approveDotAction, executeDotAction, listDotActions } from '../services/dotActionQueue.js';
 import { listDotFollowUps, completeDotFollowUp } from '../services/dotFollowUp.js';
 import { resumeMissionAfterApprovedExecution } from '../services/dotAgentMissionRunner.js';
-import { planLabel } from '../lib/plans.js';
+import { planLabel, normalizePlanAlias } from '../lib/plans.js';
 import { resolveDotGate } from '../services/dotAccessGate.js';
 import { getDotSchedulerStatus } from '../services/dotScheduler.js';
+import { getDotAgentWorkerStatus } from '../services/dotAgentWorker.js';
 import { getTokenLimit, getFeatureTokenLimit, tokensUsadosFeatureMes } from '../lib/quota.js';
 import { selectDotModel } from '../services/dotModelRouting.js';
 import { requireDotAccess, type DotAccessResource, type DotAccessAction } from '../services/dotAccessControl.js';
@@ -83,8 +84,8 @@ function cleanupDotTokenReservations(now = Date.now()) {
 }
 
 function dotPlanKey(plan?: string | null): string {
-  const normalized = String(plan || 'rei').toLowerCase();
-  return normalized === 'corp' ? 'corporativo' : normalized;
+  // 'corp'/'corporate' → 'corporativo': a mesma normalização usada no gate e na cota.
+  return normalizePlanAlias(plan || 'rei') || 'rei';
 }
 
 function dotResponseTokenLimit(plan?: string | null): number {
@@ -340,6 +341,7 @@ export function mountDotRoutes(app: Express) {
       plan_label: access.planLabel || 'Rei',
       priority_access: ['rei', 'corporativo'],
       scheduler: getDotSchedulerStatus(),
+      worker: getDotAgentWorkerStatus(),
       token_budget: await getDotTokenUsage(access.empresaId, access.plan),
       token_warning_threshold: 0.8,
       capabilities: [

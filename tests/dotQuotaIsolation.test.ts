@@ -37,8 +37,9 @@ async function setup() {
 quotaTest('Cota por feature: limites declarados apenas para planos com acesso ao Dot', async () => {
   assert.ok(getFeatureTokenLimit('rei', 'dot') > 0);
   assert.ok(getFeatureTokenLimit('corporativo', 'dot') > 0);
-  // 'corp' é alias de 'corporativo'.
+  // 'corp' e 'corporate' são aliases de 'corporativo'.
   assert.equal(getFeatureTokenLimit('corp', 'dot'), getFeatureTokenLimit('corporativo', 'dot'));
+  assert.equal(getFeatureTokenLimit('corporate', 'dot'), getFeatureTokenLimit('corporativo', 'dot'));
   // Planos sem acesso ao Dot não recebem orçamento.
   assert.equal(getFeatureTokenLimit('trial', 'dot'), 0);
   assert.equal(getFeatureTokenLimit('ultra', 'dot'), 0);

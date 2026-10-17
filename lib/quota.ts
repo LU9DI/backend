@@ -1,6 +1,7 @@
 /** Limites de feedbacks/mês e cotas de IA (tokens). Postgres-safe. */
 import { getDb, dbEngine } from './db.js';
 import { getCurrentMonth } from './planUtils.js';
+import { normalizePlanAlias } from './plans.js';
 
 export const PLAN_FEEDBACK_LIMITS: Record<string, number> = {
   trial: 30,
@@ -68,8 +69,8 @@ export const FEATURE_TOKEN_LIMITS: Record<string, Record<string, number>> = {
 };
 
 function normalizePlanKey(plan: string | null | undefined): string {
-  const p = String(plan || '').toLowerCase();
-  return p === 'corp' ? 'corporativo' : p;
+  // 'corp' e 'corporate' são aliases de 'corporativo' (mesma matriz de planos).
+  return normalizePlanAlias(plan);
 }
 
 export function getFeatureTokenLimit(plan: string | null | undefined, feature: string): number {

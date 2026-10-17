@@ -26,4 +26,4 @@ curl -X POST localhost:5000/api/dot/chat -H 'content-type: application/json' \
 ## Monitor agendado (opcional)
 
 O agendador do Dot fica desligado por padrão. Para ligar localmente: `FILTRA_DOT_ENABLED=1` e `FILTRA_DOT_FORCE_ON=1`.
-Em produção, `FILTRA_DOT_ENABLED=1` também é necessário para as rotas de chat/explicação.
+Em produção, `FILTRA_DOT_ENABLED=1` também é necessário para as rotas de chat/explicação — a configuração completa de produção está em [docs/DOT_PRODUCAO.md](DOT_PRODUCAO.md).

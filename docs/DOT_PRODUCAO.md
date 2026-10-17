@@ -1,0 +1,111 @@
+# Filtra Dot em produção — configuração, ativação e verificação
+
+Este documento descreve **o que precisa estar configurado** para o benefício
+Filtra Dot funcionar em produção, como verificar a saúde do recurso e como
+desligá-lo com segurança (rollback). Ele complementa `docs/DOT_LOCAL.md`.
+
+> Regra deste documento: nunca registrar valores de segredos — apenas nomes de
+> variáveis e finalidade.
+
+## 1. Quem tem direito ao benefício (matriz canônica)
+
+| Plano | Dot |
+| --- | --- |
+| `rei` | ✅ completo |
+| `corporativo` (aliases `corp` e `corporate`) | ✅ completo |
+| `trial`, `teste` | ❌ (o trial de 7 dias não concede o Dot) |
+| `inicial`, `pro`, `ultra` | ❌ |
+
+O gate é único (`services/dotAccessGate.ts`, função `resolveDotGate`) e vale
+para **todas** as rotas de empresa (`/api/dot/*` e `/api/dot/agent/*`). Aliases
+de plano são normalizados por `normalizePlanAlias` (`lib/plans.ts`) antes da
+checagem, de forma consistente com cobrança, relatórios e cotas.
+
+Além do plano, o gate exige: token de acesso válido, empresa existente com
+assinatura/trial válidos (`empresaTemAcesso`) e conta que não seja admin da
+plataforma. Permissões granulares (por recurso/ação) continuam sendo exigidas
+por operação em `services/dotAccessControl.ts`.
+
+## 2. Variáveis de ambiente
+
+Todas são opcionais para o processo iniciar; as marcadas como "produção"
+precisam estar definidas para o recurso ficar acessível.
+
+| Variável | Efeito | Padrão |
+| --- | --- | --- |
+| `FILTRA_DOT_ENABLED` | **Produção.** Monta as rotas do Dot (`/api/dot/*`, `/api/dot/agent/*`) e liga o worker do agente. Sem ela, só existe o tombstone `GET /api/dot/status` → 403. | desligado |
+| `DOT_AGENT_WORKER_ENABLED` | `0` desliga o worker do agente (missões em background). | ligado junto do Dot |
+| `DOT_AGENT_WORKER_INTERVAL_MS` | Intervalo do worker. Mínimo aplicado: 60000 ms. | `300000` |
+| `FILTRA_DOT_FORCE_ON` | **Liga o monitor agendado** (varredura de todas as empresas elegíveis). Requer `FILTRA_DOT_ENABLED=1`. Manter desligado até validar carga/idempotência/recuperação em produção. | desligado |
+| `FILTRA_DOT_MONITOR_TICK_MS` | Intervalo do monitor. Mínimo aplicado: 60000 ms. | `300000` |
+| `DOT_MISSION_MAX_STEP_ATTEMPTS` | Tentativas por etapa antes de pausar a missão. | `3` |
+| `DOT_REI_RESPONSE_TOKENS` | Teto de tokens de saída por resposta no plano Rei. | `1800` |
+| `DOT_CORPORATIVO_RESPONSE_TOKENS` | Teto de tokens de saída por resposta no Corporativo. | `1200` |
+| `DOT_TOKEN_RESERVATION_TTL_MS` | TTL da reserva de tokens por resposta. | `30000` |
+| `DOT_DEMO_MODE` | Modo demonstração sem login — **só tem efeito fora de produção** (em produção é ignorado). | desligado |
+| `GROQ_API_KEY` / `GEMINI_API_KEY` | Provedor de IA para `/api/dot/chat` e `/api/dot/explain` e para as etapas generativas do agente. Sem nenhuma das duas, o chat responde 503 (o restante do Dot funciona). | — |
+
+Banco, JWT e demais variáveis seguem o padrão da API (não são específicas do
+Dot). As cotas de tokens do Dot são **isoladas** (`feature='dot'` em
+`ai_usage`): não consomem nem são consumidas pelo orçamento de avaliações.
+
+## 3. Sub-sistemas em background e suas garantias
+
+- **Monitor agendado** (`services/dotScheduler.ts`) — varre empresas elegíveis
+  (planos Rei/Corporativo, status ativo/trial) e cria eventos/decisões/ações
+  preparadas. Fica **desligado** sem `FILTRA_DOT_FORCE_ON=1`. Uma rodada por
+  vez, com lock durável (`dotCoordination`) + lock por empresa.
+- **Worker do agente** (`services/dotAgentWorker.ts`) — avança missões
+  `planned/working` em etapas determinísticas, no máximo 6 por rodada, sem
+  chamar IA. Executa por missão com lock em memória + claim durável no banco;
+  falhas repetidas pausam a missão em vez de repetir indefinidamente.
+  Também é acordado sob demanda (`wakeDotAgentWorker`) quando o usuário cria,
+  aprova ou retoma algo — o timer é apenas a rede de recuperação.
+- **Barreira de aprovação** (`services/dotExecutionGateway.ts` +
+  `dotAgentMissionRunner.ts`) — aprovar **não executa**. A execução exige
+  aprovação registrada e permissão de `execute`; nenhuma ação atual tem efeito
+  externo (`external_side_effect=false`); executores futuros passam pelo mesmo
+  gateway.
+
+## 4. Verificação pós-deploy (com uma conta Rei/Corporativo de teste)
+
+```bash
+# 1) Status responde e mostra os sub-sistemas:
+curl -s https://api.filtraai.com/api/dot/status -H "Authorization: Bearer $TOKEN"
+#    → enabled:true | scheduler.timer_active conforme FORCE_ON | worker.timer_active
+#      worker.disabled:false (se o worker estiver desligado, timer_active:false)
+
+# 2) Rotas de empresa respondem para plano autorizado:
+curl -s https://api.filtraai.com/api/dot/agent/workspace -H "Authorization: Bearer $TOKEN"
+
+# 3) Plano sem direito recebe 403 com motivo:
+#    DOT_AGENT_PLAN_REQUIRED / "acesso antecipado para os planos Rei e Corporativo".
+
+# 4) Sem token e com token inválido: 403.
+```
+
+Verificações adicionais: hs da API (`/api/health` `ok:true`), log do processo
+com `[dot] Filtra Dot habilitado…`, `🤖 DOT agente em background…` e
+`[dot-scheduler] candidatos observados …`. O endpoint de status nunca expõe
+segredos, valores de cota de outras empresas ou dados de negócio.
+
+## 5. Como desligar (rollback)
+
+- Emergência total: remover `FILTRA_DOT_ENABLED` do serviço e reiniciar →
+  rotas recolhidas (somente o tombstone 403 em `/api/dot/status`).
+- Parar somente o monitor: remover `FILTRA_DOT_FORCE_ON`.
+- Parar somente o worker: `DOT_AGENT_WORKER_ENABLED=0` (missões continuam
+  avançando por ação do usuário via `wakeDotAgentWorker`).
+
+Nenhuma dessas mudanças remove dados: missões, decisões, ações, auditoria e
+permissões permanecem no banco.
+
+## 6. Limitações conhecidas
+
+- Sem `GROQ_API_KEY`/`GEMINI_API_KEY`, chat/explicação respondem 503 (falha
+  segura, sem vazar detalhes em produção).
+- O monitor é pesado por natureza; ligar `FILTRA_DOT_FORCE_ON` somente depois
+  de acompanhar uma rodada manual (`POST /api/dot/monitor/run`) em horário de
+  baixa.
+- Este documento cobre o recurso na API. O painel mostra o Dot para planos
+  Rei/Corporativo e o uso depende de autenticação de um usuário da empresa.

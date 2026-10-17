@@ -8,6 +8,17 @@ export function isPlanoOficial(p: string): p is PlanoOficial {
 }
 
 /**
+ * Normaliza aliases de plano para o código canônico usado nas regras de negócio.
+ * `corp` e `corporate` são o mesmo plano `corporativo` (ver billingService) e
+ * precisam valer o mesmo acesso em todas as trilhas (Dot, cotas, relatórios).
+ */
+export function normalizePlanAlias(plan: string | null | undefined): string {
+  const p = String(plan || '').toLowerCase().trim();
+  if (p === 'corp' || p === 'corporate') return 'corporativo';
+  return p;
+}
+
+/**
  * Troca de planos por teste (sem Stripe).
  * Produção: SEMPRE desligado — a env ALLOW_PLAN_SWITCH é ignorada.
  * Fora de produção: ligado por padrão; ALLOW_PLAN_SWITCH=0/false desliga.

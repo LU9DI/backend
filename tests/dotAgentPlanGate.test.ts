@@ -1,8 +1,8 @@
 /**
  * M1 — gate único de plano/assinatura para todas as rotas de empresa do Dot.
  *
- * A matriz real: Rei, Corporativo e o alias `corp` têm Dot; trial de 7 dias,
- * Ultra, Pro e Inicial NÃO têm. O gate vale para /api/dot/agent/* inteiro
+ * A matriz real: Rei, Corporativo e os aliases `corp`/`corporate` têm Dot;
+ * trial de 7 dias, Ultra, Pro e Inicial NÃO têm. O gate vale para /api/dot/agent/* inteiro
  * (workspace, permissions, tools, goals e missions), não só para uma rota.
  */
 import assert from 'node:assert/strict';
@@ -30,6 +30,7 @@ const empresas = {
   rei: crypto.randomUUID(),
   corporativo: crypto.randomUUID(),
   corp: crypto.randomUUID(),
+  corporate: crypto.randomUUID(),
   trial: crypto.randomUUID(),
   ultra: crypto.randomUUID(),
   pro: crypto.randomUUID(),
@@ -109,6 +110,7 @@ before(async () => {
   await seedEmpresa(empresas.rei, 'rei', 'ativo', future);
   await seedEmpresa(empresas.corporativo, 'corporativo', 'ativo', future);
   await seedEmpresa(empresas.corp, 'corp', 'ativo', future);
+  await seedEmpresa(empresas.corporate, 'corporate', 'ativo', future);
   await seedEmpresa(empresas.trial, 'trial', 'trial', future);
   await seedEmpresa(empresas.ultra, 'ultra', 'ativo', future);
   await seedEmpresa(empresas.pro, 'pro', 'ativo', future);
@@ -126,8 +128,8 @@ after(async () => {
 });
 
 describe('M1: gate de plano do Dot em /api/dot/agent/*', () => {
-  it('libera workspace, permissions, tools e missions para rei/corporativo/corp', async () => {
-    for (const key of ['rei', 'corporativo', 'corp'] as const) {
+  it('libera workspace, permissions, tools e missions para rei/corporativo/corp/corporate', async () => {
+    for (const key of ['rei', 'corporativo', 'corp', 'corporate'] as const) {
       const token = tokenFor(empresas[key]);
       const workspace = await get('/api/dot/agent/workspace', token);
       assert.equal(workspace.status, 200, `${key}: ${JSON.stringify(workspace.data)}`);

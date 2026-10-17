@@ -90,7 +90,7 @@ async function runDueDotMonitorsUnlocked() {
     const companies = await db.all(
       `SELECT id, plan, status, dot_monitor_last_at FROM empresas
        WHERE status IN ('ativo', 'trial')
-         AND LOWER(IFNULL(plan, '')) IN ('rei', 'corporativo', 'corp')`
+         AND LOWER(IFNULL(plan, '')) IN ('rei', 'corporativo', 'corp', 'corporate')`
     );
     const schedulerCandidates = await db.all(
       `SELECT status, LOWER(IFNULL(plan, '')) AS plan, COUNT(*) AS total

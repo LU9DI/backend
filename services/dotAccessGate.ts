@@ -2,6 +2,7 @@ import type { Request } from 'express';
 import { extrairToken, verifyAccessToken, isAdminUser } from '../lib/auth.js';
 import { findEmpresa } from '../lib/db.js';
 import { empresaTemAcesso } from './billingService.js';
+import { normalizePlanAlias } from '../lib/plans.js';
 import { ensureDotInternalPermissionBaseline } from './dotAccessControl.js';
 
 /**
@@ -13,8 +14,8 @@ import { ensureDotInternalPermissionBaseline } from './dotAccessControl.js';
  *  1. Token de acesso obrigatório (modo demonstração só fora de produção).
  *  2. Conta admin da plataforma não é conta de empresa.
  *  3. A empresa precisa existir e estar com assinatura/trial válidos.
- *  4. O Dot está em acesso antecipado: somente planos `rei`, `corporativo`
- *     e o alias `corp`. Trial de 7 dias NÃO concede o agente Dot — isso não é
+ *  4. O Dot está em acesso antecipado: somente planos `rei` e `corporativo`
+ *     (aliases `corp`/`corporate` são normalizados). Trial de 7 dias NÃO concede
  *     um benefício do trial, e conceder acesso por engano seria criar um
  *     benefício que a matriz de planos não declara.
  *
@@ -32,7 +33,9 @@ export type DotGateResult = {
   reason?: string;
 };
 
-const DOT_ALLOWED_PLANS = ['rei', 'corporativo', 'corp'];
+// Aliases ('corp', 'corporate') são normalizados para 'corporativo' antes da
+// checagem (`normalizePlanAlias`), mantendo a matriz canônica Rei + Corporativo.
+const DOT_ALLOWED_PLANS = ['rei', 'corporativo'];
 const DOT_MANAGER_ROLES = ['empresa', 'owner', 'empresa_admin', 'admin_empresa'];
 
 export function dotDemoEnabled(): boolean {
@@ -68,7 +71,7 @@ export async function resolveDotGate(req: Request): Promise<DotGateResult> {
       return { allowed: false, demo: false, userId, canManagePermissions: false, reason: 'Assinatura/trial inativo.' };
     }
 
-    const plan = String(empresa.plan || '').toLowerCase();
+    const plan = normalizePlanAlias(empresa.plan);
     if (!DOT_ALLOWED_PLANS.includes(plan)) {
       return {
         allowed: false,

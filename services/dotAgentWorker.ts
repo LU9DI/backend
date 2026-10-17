@@ -61,6 +61,16 @@ export function wakeDotAgentWorker() {
   return tickInFlight;
 }
 
+/** Estado do worker para observabilidade em `/api/dot/status`. */
+export function getDotAgentWorkerStatus() {
+  return {
+    disabled: process.env.DOT_AGENT_WORKER_ENABLED === '0',
+    timer_active: Boolean(timer),
+    running,
+    interval_ms: Math.max(60_000, Number(process.env.DOT_AGENT_WORKER_INTERVAL_MS || 300_000)),
+  };
+}
+
 export function stopDotAgentWorker() {
   if (!timer) return;
   clearInterval(timer);
