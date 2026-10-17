@@ -20,12 +20,12 @@ RUN if [ -f package-lock.json ]; then npm ci --omit=dev --no-audit --no-fund; el
 COPY . .
 
 ENV NODE_ENV=production
-ENV PORT=5000
+ENV PORT=3000
 ENV CHROMIUM_PATH=/usr/bin/chromium
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PUPPETEER_SKIP_DOWNLOAD=1
 ENV ACQUISITION_BROWSER_BOT=0
 
-EXPOSE 5000
+EXPOSE 3000
 
 CMD ["npm", "start"]

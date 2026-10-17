@@ -2,7 +2,7 @@ name: Backend CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, 'feat/**']
   pull_request:
     branches: [master]
   workflow_dispatch:
@@ -38,3 +38,70 @@ jobs:
 
       - name: Unit and integration tests
         run: npm test
+
+  deploy_jatai:
+    name: Deploy Jatai after green tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/feat/professional-reports-v2'
+    permissions:
+      contents: read
+    steps:
+      - name: Deploy tested commit through Jatai REST API
+        env:
+          JATAI_API_TOKEN: ${{ secrets.JATAI_API_TOKEN }}
+          JATAI_APP_SLUG: jataicloud
+          DEPLOY_VERSION: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${JATAI_API_TOKEN:?Missing GitHub Actions secret JATAI_API_TOKEN}"
+          api="https://jataicloud.com.br/api/v1"
+          app_json="$(mktemp)"
+          deploy_json="$(mktemp)"
+          trap 'rm -f "$app_json" "$deploy_json"; unset JATAI_API_TOKEN' EXIT
+
+          code="$(curl --silent --show-error --output "$app_json" --write-out '%{http_code}' --max-time 20 \
+            -H "Authorization: Bearer $JATAI_API_TOKEN" "$api/apps/$JATAI_APP_SLUG")"
+          test "$code" = "200" || { echo "Jatai app lookup failed: HTTP $code"; cat "$app_json"; exit 1; }
+          ruby -rjson -e 'a=JSON.parse(File.read(ARGV[0])); abort("Target app slug mismatch") unless a["slug"] == ARGV[1]; puts "Target app confirmed: #{a["slug"]}, status=#{a["status"]}, url=#{a["url"]}"' "$app_json" "$JATAI_APP_SLUG"
+          app_url="$(ruby -rjson -e 'puts JSON.parse(File.read(ARGV[0]))["url"]' "$app_json")"
+          test -n "$app_url" || { echo "Jatai app response did not include URL"; exit 1; }
+
+          code="$(curl --silent --show-error --output "$deploy_json" --write-out '%{http_code}' --max-time 30 \
+            -X POST -H "Authorization: Bearer $JATAI_API_TOKEN" -H 'Content-Type: application/json' \
+            --data "{\"deploy\":{\"version\":\"$DEPLOY_VERSION\"}}" "$api/apps/$JATAI_APP_SLUG/deploys")"
+          test "$code" = "201" || { echo "Jatai deploy request failed: HTTP $code"; cat "$deploy_json"; exit 1; }
+          deploy_id="$(ruby -rjson -e 'd=JSON.parse(File.read(ARGV[0])); abort("Deploy version mismatch") unless d["version"] == ARGV[1] && d["app_slug"] == ARGV[2] && d["id"]; puts d["id"]' "$deploy_json" "$DEPLOY_VERSION" "$JATAI_APP_SLUG")"
+          echo "Jatai accepted deploy $deploy_id for $DEPLOY_VERSION"
+
+          for attempt in $(seq 1 48); do
+            code="$(curl --silent --show-error --output "$app_json" --write-out '%{http_code}' --max-time 20 \
+              -H "Authorization: Bearer $JATAI_API_TOKEN" "$api/apps/$JATAI_APP_SLUG")"
+            if [ "$code" = "200" ]; then
+              state="$(ruby -rjson -e 'a=JSON.parse(File.read(ARGV[0])); d=a["last_deploy"] || {}; puts [d["id"],d["status"],d["commit_sha"]].join("|")' "$app_json")"
+              echo "Deploy state ($attempt/48): $state"
+              case "$state" in
+                "$deploy_id|live|$DEPLOY_VERSION") break ;;
+                "$deploy_id|failed|"*|"$deploy_id|error|"*) echo "Jatai reported deployment failure"; cat "$app_json"; exit 1 ;;
+              esac
+            else
+              echo "Jatai status query returned HTTP $code"
+            fi
+            if [ "$attempt" -eq 48 ]; then echo "Timed out waiting for Jatai deploy to become live"; cat "$app_json"; exit 1; fi
+            sleep 10
+          done
+
+          for attempt in $(seq 1 18); do
+            live="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 15 "$app_url/api/live" || true)"
+            ready="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 15 "$app_url/api/ready" || true)"
+            echo "Production probes ($attempt/18): live=$live ready=$ready"
+            if [ "$live" = "200" ] && [ "$ready" = "200" ]; then
+              echo "Jatai deployment is live and ready at $app_url"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Deploy accepted but production readiness did not pass"
+          exit 1
