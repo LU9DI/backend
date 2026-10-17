@@ -59,7 +59,6 @@ const FEATURES: Record<string, { features: string[]; missingFeatures?: string[];
       'Radar estratégico de riscos e tendências',
       'Oportunidades de crescimento identificadas nos dados',
       'Links de avaliação exclusivos por unidade',
-      'Relatório executivo mensal para a diretoria',
       'Suporte Prioritário',
       'Acesso antecipado a novas funções',
     ],
