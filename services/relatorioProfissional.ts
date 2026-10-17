@@ -80,7 +80,6 @@ const PLAN_BENEFITS: Record<string, string[]> = {
     'Análise dos temas operacionais de cada unidade',
     'Prioridades de ação baseadas nas avaliações do período',
     'Links de avaliação exclusivos para cada unidade',
-    'Relatório executivo mensal para a diretoria',
     'Radar estratégico de riscos e tendências',
     'Oportunidades de crescimento identificadas nos dados',
     'Recomendações executivas priorizadas por evidência e urgência',
