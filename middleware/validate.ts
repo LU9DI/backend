@@ -27,6 +27,8 @@ function applyRule(key: string, rule: FieldRule, raw: unknown, body: Record<stri
   const empty = value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
   if (empty) {
     if (rule.required) return { error: rule.message || `${key} é obrigatório.` };
+    // Regras condicionais (ex.: comentário obrigatório para nota baixa) precisam rodar justamente quando o campo está vazio.
+    if (rule.custom) { const err = rule.custom(undefined, body); if (err) return { error: err }; }
     return { value: undefined };
   }
   switch (rule.type) {
