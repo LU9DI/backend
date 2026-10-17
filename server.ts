@@ -30,6 +30,7 @@ import { mountPlanSwitchRoutes } from './routes/planSwitchRoutes.js';
 import { mountWebAuthnRoutes } from './routes/webauthnRoutes.js';
 import { mountPushRoutes } from './routes/pushRoutes.js';
 import { mountJobsRoutes } from './routes/jobsRoutes.js';
+import { mountMonthlyReportJobsRoutes } from './routes/monthlyReportJobsRoutes.js';
 import { mountPayPalRoutes } from './routes/paypalRoutes.js';
 import { mountPixRoutes } from './routes/pixRoutes.js';
 import { mountWechatRoutes } from './routes/wechatRoutes.js';
@@ -394,6 +395,7 @@ export async function startServer() {
   mountWebAuthnRoutes(app);
   mountPushRoutes(app);
   mountJobsRoutes(app);
+  mountMonthlyReportJobsRoutes(app);
   mountPayPalRoutes(app);
   mountPixRoutes(app);
   mountWechatRoutes(app);

@@ -775,6 +775,32 @@ export function mountEmpresaRoutes(app: Express) {
         // A análise respeita a capacidade do plano; a UI recebe apenas os feedbacks recentes.
         const rows = await loadReviewsSafe(db, empresa.id, getFeedbackLimit(planAtual));
 
+        // Pre-generated monthly snapshots are returned with the existing panel payload.
+        let relatoriosProfissionaisMensais: any[] = [];
+        if (['pro', 'ultra', 'corporativo', 'corporate', 'corp', 'rei'].includes(planAtual)) {
+          try {
+            const savedReports = await db.all(
+              `SELECT periodo, report_json, status, updated_at
+               FROM relatorio_envios_mensais
+               WHERE empresa_id = ? AND report_json IS NOT NULL
+               ORDER BY periodo DESC LIMIT 24`,
+              [empresa.id],
+            ) as any[];
+            relatoriosProfissionaisMensais = savedReports.flatMap((item: any) => {
+              try {
+                const report = JSON.parse(String(item.report_json || ''));
+                if (!report || report.empresa?.id !== String(empresa.id) || report.periodo !== String(item.periodo)) return [];
+                return [{ ...report, status_distribuicao: item.status, gerado_em: item.updated_at }];
+              } catch {
+                return [];
+              }
+            });
+          } catch (e: any) {
+            // Older installations may not have run the monthly job/schema migration yet.
+            console.warn('relatorios profissionais mensais indisponíveis:', e?.message || e);
+          }
+        }
+
         const reviews = (rows || []).map((r: any) => {
           let tags: string[] = [];
           if (r.ai_tags) {
@@ -943,6 +969,7 @@ export function mountEmpresaRoutes(app: Express) {
             locale: empresa.locale || 'pt',
           },
           reviews: reais.slice(0, PAINEL_RECENTES_LIMIT),
+          relatorios_profissionais_mensais: relatoriosProfissionaisMensais,
           reviews_total: total,
           metricas: {
         unidades_ranking: unidadesRanking,

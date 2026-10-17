@@ -20,7 +20,20 @@ export function isTrialPlan(plan: string | null | undefined): boolean {
   return p === 'trial' || p === 'teste' || p === 'test';
 }
 
-/** Relatório profissional: substitui o formato legado de arquivo. */
+/** Relatório profissional mensal: Pro, Ultra, Corporativo e REI. */
+export function planTemRelatorioMensal(plan: string | null | undefined): boolean {
+  const normalized = String(plan || '').toLowerCase().trim();
+  return ['pro', 'ultra', 'corporativo', 'corporate', 'corp', 'rei'].includes(normalized);
+}
+
+export function planTemPdf(plan: string | null | undefined): boolean {
+  const p = String(plan || '').toLowerCase().trim();
+  if (!p) return false;
+  if (isTrialPlan(p)) return true;
+  if (['pro', 'ultra', 'corporativo', 'rei'].includes(p)) return true;
+  return false;
+}
+
 /** Relatório inteligente (texto → n8n). Inicial NÃO tem. Trial e Pro+ sim. */
 export function planTemRelatorio(plan: string | null | undefined): boolean {
   const p = String(plan || '').toLowerCase().trim();
@@ -28,6 +41,16 @@ export function planTemRelatorio(plan: string | null | undefined): boolean {
   if (p === 'inicial') return false;
   if (isTrialPlan(p)) return true;
   if (['pro', 'ultra', 'corporativo', 'rei'].includes(p)) return true;
+  return false;
+}
+
+export function empresaTemPdf(empresa: {
+  plan?: string | null;
+  status?: string | null;
+}): boolean {
+  if (planTemPdf(empresa?.plan)) return true;
+  const st = String(empresa?.status || '').toLowerCase().trim();
+  if (st === 'trial' || st === 'teste' || st === 'test') return true;
   return false;
 }
 
