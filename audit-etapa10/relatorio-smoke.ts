@@ -106,7 +106,7 @@ async function main() {
   check('build: plano.codigo corporativo', rel.plano?.codigo === 'corporativo', `codigo=${rel.plano?.codigo}`);
   check('build: 5 avaliações reais no mês (exclui teste e mês antigo)', rel.kpis?.avaliacoes === 5, `avaliacoes=${rel.kpis?.avaliacoes}`);
   check('build: nota média 3.0', rel.kpis?.nota_media === 3, `media=${rel.kpis?.nota_media}`);
-  check('build: 2 positivas / 2 críticas / 40% positivas', rel.kpis?.positivas === 2 && rel.kpis?.criticas === 2 && rel.kpis?.percentual_positivas === 40, JSON.stringify({ p: rel.kpis?.positivas, c: rel.kpis?.criticas, pp: rel.kpis?.percentual_positivas }));
+  check('build: 2 positivas / 3 críticas (1-3 estrelas) / 40% positivas', rel.kpis?.positivas === 2 && rel.kpis?.criticas === 3 && rel.kpis?.percentual_positivas === 40, JSON.stringify({ p: rel.kpis?.positivas, c: rel.kpis?.criticas, pp: rel.kpis?.percentual_positivas }));
   check('build: 1 crítica tratada', rel.kpis?.tratadas === 1, `tratadas=${rel.kpis?.tratadas}`);
   check('build: sentimento 2/1/2', rel.sentimento?.positivo === 2 && rel.sentimento?.neutro === 1 && rel.sentimento?.negativo === 2, JSON.stringify(rel.sentimento));
   check('build: distribuição de estrelas 1,1,1,1,1', JSON.stringify(rel.distribuicao_estrelas) === '[1,1,1,1,1]', JSON.stringify(rel.distribuicao_estrelas));
@@ -114,12 +114,12 @@ async function main() {
   check('build: tema de atenção "demora" com 2 ocorrências', rel.temas?.atencao?.[0]?.tema === 'demora' && rel.temas?.atencao?.[0]?.volume === 2, JSON.stringify(rel.temas?.atencao));
   check('build: canais prontos (email/whatsapp/sms/wechat)', typeof rel.canais?.email?.subject === 'string' && typeof rel.canais?.whatsapp === 'string' && typeof rel.canais?.sms === 'string' && typeof rel.canais?.wechat === 'string');
   check('build: isolamento — nada da Empresa B no relatório de A', !JSON.stringify(rel).includes('Empresa B') && !JSON.stringify(rel).includes('dono-b'));
-  check('build: recomendação prioriza as 2 críticas', String(rel.recomendacoes?.[0] || '').includes('2 avaliações críticas'), String(rel.recomendacoes?.[0] || ''));
+  check('build: recomendação prioriza as 3 críticas (1-3 estrelas)', String(rel.recomendacoes?.[0] || '').includes('3 avaliações críticas'), String(rel.recomendacoes?.[0] || ''));
 
   // 2. Build REI: oportunidade executiva
   const relB = await buildRelatorioProfissional(db, { id: empresaB, nome_empresa: 'Empresa B Rei', plan: 'rei', slug: 'slug-b' }, mes);
   check('rei: 3 avaliações de B (não vaza de A)', relB.kpis?.avaliacoes === 3, `avaliacoes=${relB.kpis?.avaliacoes}`);
-  check('rei: oportunidade executiva presente', (relB.oportunidades || []).some((o: any) => String(o.titulo).includes('gestão')));
+  check('rei: oportunidade executiva presente (ação de melhoria para tema de atenção)', (relB.oportunidades || []).some((o: any) => String(o.titulo).includes('Testar uma melhoria')), JSON.stringify(relB.oportunidades || []));
   check('rei: sem unidades cadastradas → sem risco de unidade', (relB.unidades || []).length === 0 && !(relB.riscos || []).some((r: any) => String(r.titulo).includes('Unidade com menor nota')));
 
   // 3. Gates de plano (funções usadas pelas rotas)
