@@ -16,6 +16,8 @@ import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { requestIdMiddleware, securityHeaders } from './middleware/security.js';
 import { latencyMiddleware, getHttpMetrics } from './lib/metrics.js';
 import { mountTrialRoutes } from './routes/trialRoutes.js';
+import { mountLeadRoutes } from './routes/leadRoutes.js';
+import { mountLegalAcceptRoutes } from './routes/legalAcceptRoutes.js';
 import { mountAuthRoutes } from './routes/authRoutes.js';
 import { mountEmpresaRoutes } from './routes/empresaRoutes.js';
 import { mountReviewRoutes } from './routes/reviewRoutes.js';
@@ -381,6 +383,8 @@ export async function startServer() {
   await runLgpdSweepOnBoot();
 
   mountTrialRoutes(app);
+  mountLeadRoutes(app);
+  mountLegalAcceptRoutes(app);
   mountAuthRoutes(app);
   mountEmpresaRoutes(app);
   mountReviewRoutes(app);
