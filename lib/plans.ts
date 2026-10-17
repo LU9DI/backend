@@ -7,12 +7,16 @@ export function isPlanoOficial(p: string): p is PlanoOficial {
   return (PLANOS_OFICIAIS as readonly string[]).includes(String(p || '').toLowerCase());
 }
 
-/** Só liga com ALLOW_PLAN_SWITCH=1. Em produção o default é OFF. */
+/**
+ * Troca de planos por teste (sem Stripe).
+ * Produção: SEMPRE desligado — a env ALLOW_PLAN_SWITCH é ignorada.
+ * Fora de produção: ligado por padrão; ALLOW_PLAN_SWITCH=0/false desliga.
+ */
 export function allowPlanSwitch(): boolean {
-  const v = String(process.env.ALLOW_PLAN_SWITCH || '').trim();
-  if (v === '1' || v.toLowerCase() === 'true') return true;
-  if (v === '0' || v.toLowerCase() === 'false') return false;
-  return process.env.NODE_ENV !== 'production';
+  if (String(process.env.NODE_ENV || '') === 'production') return false;
+  const v = String(process.env.ALLOW_PLAN_SWITCH || '').trim().toLowerCase();
+  if (v === '0' || v === 'false') return false;
+  return true;
 }
 
 export function isTrialPlan(plan: string | null | undefined): boolean {

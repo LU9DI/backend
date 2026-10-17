@@ -59,6 +59,7 @@ import { ensureDotAccessSchema } from './services/dotAccessControl.js';
 import { ensureDotAgentSchema } from './services/dotAgent.js';
 import { ensureMissionTables } from './services/dotAgentMissions.js';
 import { startDotMonitorScheduler } from './services/dotScheduler.js';
+import { startMonthlyReportScheduler, getMonthlyReportSchedulerStatus } from './services/monthlyReportScheduler.js';
 import { startDotAgentWorker } from './services/dotAgentWorker.js';
 import { mcpApp } from './filtraMcp.js';
 import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
@@ -187,6 +188,7 @@ app.get('/api/health', async (_req, res) => {
     n8n: n8nConfigured(),
     fiscal: fiscalConfigured(),
     report_engine: 'structured-json',
+    monthly_reports_scheduler: getMonthlyReportSchedulerStatus(),
     ai_latency: {
       groq: ai.stats.groq.latency,
       gemini: ai.stats.gemini.latency,
@@ -426,6 +428,9 @@ export async function startServer() {
     console.log('[dot] Filtra Dot desativado (defina FILTRA_DOT_ENABLED=1 para habilitar).');
   }
 
+  // Agendador in-process do relatório mensal (sem cron externo e sem credenciais).
+  startMonthlyReportScheduler();
+
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
   mountMfaRoutes(app, getDb, { JWT_SECRET, setAuthCookie, autenticarToken });
@@ -443,6 +448,9 @@ export async function startServer() {
   console.log(`🔗 n8n: ${n8nConfigured() ? 'webhook ON' : 'OFF'}`);
   console.log(`🧾 NFS-e: ${fiscalConfigured() ? 'configurado' : 'OFF'}`);
   console.log('📄 Relatórios: structured-json / canais');
+  if (String(process.env.NODE_ENV || '') === 'production' && String(process.env.ALLOW_PLAN_SWITCH || '').trim()) {
+    console.warn('[seguranca] ALLOW_PLAN_SWITCH definido em produção é IGNORADO — troca de planos de teste permanece desativada.');
+  }
   if (!wechatConfigured()) {
     console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
   }

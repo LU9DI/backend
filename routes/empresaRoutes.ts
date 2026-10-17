@@ -651,7 +651,7 @@ export function mountEmpresaRoutes(app: Express) {
       if (!allowPlanSwitch()) {
         return res.status(403).json({
           error:
-            'Troca de plano de teste desativada em produção. Use Stripe/checkout ou defina ALLOW_PLAN_SWITCH=1.',
+            'Troca de plano de teste desativada em produção. Use o checkout ou uma ação administrativa.',
           code: 'PLAN_SWITCH_DISABLED',
         });
       }

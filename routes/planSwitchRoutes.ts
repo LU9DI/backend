@@ -1,7 +1,7 @@
 /**
  * Alternar plano no painel para testes (sem Stripe).
- * Ativo quando NODE_ENV !== production OU ALLOW_PLAN_SWITCH=1
- * Desliga com ALLOW_PLAN_SWITCH=0
+ * Produção: sempre desativado (use checkout ou ação administrativa).
+ * Fora de produção: ativo por padrão; ALLOW_PLAN_SWITCH=0/false desliga.
  */
 import type { Express, Response } from 'express';
 import { getDb, findEmpresa } from '../lib/db.js';
@@ -39,7 +39,7 @@ export function mountPlanSwitchRoutes(app: Express) {
       if (!allowPlanSwitch()) {
         return res.status(403).json({
           error:
-            'Troca de plano por teste desativada em produção. Defina ALLOW_PLAN_SWITCH=1 no .env para liberar.',
+            'Troca de plano por teste desativada em produção. Use o checkout (Stripe/Mercado Pago/PayPal) ou uma ação administrativa.',
         });
       }
 

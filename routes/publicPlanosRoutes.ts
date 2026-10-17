@@ -19,21 +19,21 @@ const LABELS: Record<string, string> = {
 const FEATURES: Record<string, { features: string[]; missingFeatures?: string[]; highlight?: boolean }> = {
   inicial: {
     features: ['100 feedbacks/mês', 'WhatsApp integrado', 'Dashboard'],
-    missingFeatures: ['Análises com inteligência artificial', 'Relatório profissional mensal'],
+    missingFeatures: ['Análises com inteligência artificial', '1 relatório profissional por mês'],
   },
   pro: {
-    features: ['300 feedbacks/mês', 'WPP Integrado', 'Dashboard', '1 relatório profissional por mês'],
-    missingFeatures: ['Integrado com IA'],
+    features: ['300 feedbacks/mês', 'WhatsApp integrado', 'Dashboard', '1 relatório profissional por mês'],
+    missingFeatures: ['Análises com inteligência artificial'],
   },
   ultra: {
-    features: ['800 feedbacks/mês', 'WPP Integrado', 'Análises com inteligência artificial', '1 relatório profissional por mês', 'Dashboard com análises'],
+    features: ['800 feedbacks/mês', 'WhatsApp integrado', 'Análises com inteligência artificial', '1 relatório profissional por mês', 'Dashboard com análises'],
     highlight: true,
   },
   corporativo: {
     features: [
       '2.500 feedbacks/mês',
-      'WPP Integrado',
-      'IA Ativa',
+      'WhatsApp integrado',
+      'Análises com inteligência artificial',
       '1 relatório profissional por mês',
       'Dashboard com análises',
       'Gestão consolidada de múltiplas unidades',
@@ -41,15 +41,15 @@ const FEATURES: Record<string, { features: string[]; missingFeatures?: string[];
       'Análise de resultados e temas por unidade',
       'Prioridades de ação baseadas nas avaliações',
       'Links de avaliação exclusivos para cada unidade',
-      'Suporte Prioritário',
+      'Suporte prioritário',
       'Acesso antecipado a novas funções',
     ],
   },
   rei: {
     features: [
       '8.000 feedbacks/mês',
-      'WPP Integrado',
-      'IA Ativa',
+      'WhatsApp integrado',
+      'Análises com inteligência artificial',
       '1 relatório profissional por mês',
       'Dashboard com análises',
       'Gestão consolidada de múltiplas unidades',
@@ -58,8 +58,8 @@ const FEATURES: Record<string, { features: string[]; missingFeatures?: string[];
       'Prioridades de ação baseadas nas avaliações',
       'Radar estratégico de riscos e tendências',
       'Oportunidades de crescimento identificadas nos dados',
-      'Links de avaliação exclusivos por unidade',
-      'Suporte Prioritário',
+      'Links de avaliação exclusivos para cada unidade',
+      'Suporte prioritário',
       'Acesso antecipado a novas funções',
     ],
   },
