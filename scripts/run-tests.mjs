@@ -35,7 +35,9 @@ if (files.length === 0) {
 
 console.log('Executando ' + files.length + ' arquivo(s) de teste em ' + process.version + '.\n');
 
-const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', ...files], {
+// Concorrencia 1: varios testes usam arquivos sqlite fixos em /tmp e nao
+// podem rodar em paralelo no mesmo host (flakes de corrida).
+const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', '--test-concurrency=1', ...files], {
   cwd: root,
   stdio: 'inherit',
   env: process.env,
