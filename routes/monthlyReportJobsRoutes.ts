@@ -27,7 +27,11 @@ function isMonth(value: unknown): value is string {
 }
 function parseDestinations(raw: unknown) {
   if (typeof raw !== 'string' || !raw.trim()) return [];
-  try { return normalizeDestinatarios({ destinatarios: JSON.parse(raw) }); } catch { return []; }
+  try {
+    // Cinto de seguranca do job mensal: a rota manual rejeita >20 destinatarios
+    // (400 TOO_MANY_RECIPIENTS); aqui a lista vem do banco e e limitada antes do envio.
+    return normalizeDestinatarios({ destinatarios: JSON.parse(raw) }).slice(0, 20);
+  } catch { return []; }
 }
 
 /** Resolve destinatários sem mascarar falhas de banco como ausência de e-mail. */
