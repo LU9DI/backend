@@ -16,6 +16,18 @@ const trialLimiter = rateLimit({
 });
 
 export function mountTrialRoutes(app: Express) {
+  // Tombstone: o fluxo canônico ativa o trial na hora (e-mail validado por MX + controles de IP).
+  // Links antigos de confirmação por e-mail não são mais emitidos; respondemos 410 explicitamente.
+  app.get(
+    '/api/trial/verificar',
+    asyncHandler(async (_req: Request, res: Response) => {
+      return res.status(410).json({
+        error:
+          'A confirmação por e-mail não é mais necessária. Seu teste de 7 dias é ativado na hora — acesse o painel com o e-mail e a senha cadastrados.',
+        code: 'TRIAL_EMAIL_CONFIRMATION_RETIRED',
+      });
+    })
+  );
   app.post(
     '/api/trial/ativar',
     trialLimiter,

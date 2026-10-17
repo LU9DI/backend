@@ -182,3 +182,13 @@ describe('POST /api/reviews', () => {
     assert.equal(data.success, true);
   });
 });
+
+describe('GET /api/trial/verificar (tombstone)', () => {
+  it('responde 410 com código explícito (confirmação por e-mail aposentada)', async () => {
+    const res = await fetch(`${baseUrl}/api/trial/verificar?token=abc`);
+    assert.equal(res.status, 410);
+    const data = await res.json();
+    assert.equal(data.code, 'TRIAL_EMAIL_CONFIRMATION_RETIRED');
+    assert.ok(data.error);
+  });
+});
