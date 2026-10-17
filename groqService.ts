@@ -33,7 +33,36 @@ export type AiCallResult = {
   provider: AiProvider;
   latency_ms: number;
   tokens: number;
+  /** Modelo realmente utilizado na chamada (nunca um valor presumido). */
+  model: string;
 };
+
+/** Modelo padrão configurado para o provedor. */
+export function defaultModelFor(provider: AiProvider): string {
+  return provider === 'groq'
+    ? process.env.GROQ_MODEL || 'llama-3.3-70b-versatile'
+    : process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+}
+
+const GROQ_MODEL_HINTS = ['llama', 'mixtral', 'gemma', 'qwen', 'deepseek', 'kimi', 'gpt-oss', 'whisper'];
+
+/**
+ * Um nome de modelo só é aceito pelo provedor ao qual ele pertence.
+ * Nomes desconhecidos ou de outro provedor são recusados, para que a chamada
+ * use o padrão do provedor em vez de enviar um modelo inválido à API.
+ */
+export function modelSupportsProvider(provider: AiProvider, model: string): boolean {
+  const m = String(model || '').trim().toLowerCase();
+  if (!m) return false;
+  if (provider === 'gemini') return m.startsWith('gemini');
+  return GROQ_MODEL_HINTS.some((hint) => m.includes(hint));
+}
+
+function resolveModel(provider: AiProvider, requested?: string | null): string {
+  const candidate = String(requested || '').trim();
+  if (candidate && modelSupportsProvider(provider, candidate)) return candidate;
+  return defaultModelFor(provider);
+}
 
 let rrIndex = 0;
 
@@ -248,13 +277,14 @@ async function callGroq(
   system: string,
   user: string,
   maxTokens: number,
-  temperature: number
+  temperature: number,
+  requestedModel?: string
 ): Promise<ProviderRaw> {
   const key = groqKey();
   if (!key) throw new Error('GROQ_API_KEY não configurada');
 
   const body = {
-    model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+    model: resolveModel('groq', requestedModel),
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
@@ -295,12 +325,13 @@ async function callGemini(
   system: string,
   user: string,
   maxTokens: number,
-  temperature: number
+  temperature: number,
+  requestedModel?: string
 ): Promise<ProviderRaw> {
   const key = geminiKey();
   if (!key) throw new Error('GEMINI_API_KEY não configurada');
 
-  const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+  const model = resolveModel('gemini', requestedModel);
   const url = `${GEMINI_BASE}/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
 
   const body = {
@@ -344,11 +375,12 @@ async function invokeProvider(
   system: string,
   user: string,
   maxTokens: number,
-  temperature: number
+  temperature: number,
+  requestedModel?: string
 ): Promise<ProviderRaw> {
   return provider === 'groq'
-    ? callGroq(system, user, maxTokens, temperature)
-    : callGemini(system, user, maxTokens, temperature);
+    ? callGroq(system, user, maxTokens, temperature, requestedModel)
+    : callGemini(system, user, maxTokens, temperature, requestedModel);
 }
 
 export async function callAI(
@@ -356,7 +388,7 @@ export async function callAI(
   user: string,
   maxTokens = 180,
   temperature = 0.6,
-  opts?: { empresaId?: string | null; tipo?: string }
+  opts?: { empresaId?: string | null; tipo?: string; feature?: string; model?: string }
 ): Promise<AiCallResult> {
   const order = buildAttemptOrder();
   if (!order.length) {
@@ -371,25 +403,27 @@ export async function callAI(
     const provider = order[i];
     const t0 = process.hrtime.bigint();
     try {
-      const raw = await invokeProvider(provider, system, user, maxTokens, temperature);
+      const usedModel = resolveModel(provider, opts?.model);
+      const raw = await invokeProvider(provider, system, user, maxTokens, temperature, usedModel);
       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
       markSuccess(provider, ms);
       if (i > 0) console.warn(`[IA] Fallback: ${provider} (${ms}ms)`);
 
-      if (opts?.empresaId || opts?.tipo) {
+      if (opts?.empresaId || opts?.tipo || opts?.feature) {
         try {
           await recordAiUsage(getDb(), {
             empresaId: opts.empresaId,
             tipo: opts.tipo || `ai_${provider}`,
             tokens: raw.tokens,
             provider,
+            feature: opts.feature || null,
           });
         } catch {
           /* */
         }
       }
 
-      return { text: raw.text, provider, latency_ms: ms, tokens: raw.tokens };
+      return { text: raw.text, provider, latency_ms: ms, tokens: raw.tokens, model: usedModel };
     } catch (e: any) {
       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
       markFail(provider, e, ms);

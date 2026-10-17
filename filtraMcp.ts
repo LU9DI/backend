@@ -76,7 +76,6 @@ function buildServer() {
         actions: z.array(z.string()),
         confidence: z.number().min(0).max(1),
       }),
-      securitySchemes: [{ type: 'noauth' }],
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -139,7 +138,6 @@ function buildServer() {
         locale: z.string().max(10).optional(),
       }),
       outputSchema: z.object({ response: z.string() }),
-      securitySchemes: [{ type: 'noauth' }],
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -179,7 +177,6 @@ function buildServer() {
         trial_days: z.number(),
         card_required: z.boolean(),
       }),
-      securitySchemes: [{ type: 'noauth' }],
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -209,7 +206,6 @@ function buildServer() {
         website: z.string(),
         trial_url: z.string(),
       }),
-      securitySchemes: [{ type: 'noauth' }],
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     async () => {

@@ -1,3 +1,4 @@
+import type { Database } from 'sqlite';
 import { getDb } from '../lib/db.js';
 
 export type DotOption = {
@@ -72,19 +73,31 @@ function classify(event: any): DotDecision {
   };
 }
 
-export async function createDecisionsForEvents(empresaId: string, events: any[]) {
+/**
+ * Cria decisões para eventos recém-criados.
+ *
+ * O parâmetro `dbOverride` permite rodar dentro da mesma transação que criou
+ * os eventos (ver `dotMonitor`), tornando o check-then-insert atômico. O id da
+ * decisão é relido pelo par `(empresa_id, event_id)` — `run` não devolve o id
+ * em Postgres (o adapter descarta `RETURNING`).
+ */
+export async function createDecisionsForEvents(empresaId: string, events: any[], dbOverride?: Database) {
   await ensureSchema();
-  const db = getDb();
+  const db = dbOverride || getDb();
   const created = [];
   for (const event of events || []) {
     const exists = await db.get('SELECT id FROM dot_decisions WHERE empresa_id = ? AND event_id = ? LIMIT 1', [empresaId, event.id]);
     if (exists) continue;
     const d = classify(event);
-    const r = await db.run(
-      'INSERT INTO dot_decisions (empresa_id,event_id,type,priority,severity,reason,evidence_json,recommendation,options_json,requires_approval,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id',
+    await db.run(
+      'INSERT INTO dot_decisions (empresa_id,event_id,type,priority,severity,reason,evidence_json,recommendation,options_json,requires_approval,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
       [empresaId,d.eventId,d.type,d.priority,d.severity,d.reason,JSON.stringify(d.evidence),d.recommendation,JSON.stringify(d.options),d.requiresApproval ? 1 : 0,d.status,new Date().toISOString()]
     );
-    created.push({ ...d, id: r.lastID });
+    const inserted = await db.get(
+      'SELECT id FROM dot_decisions WHERE empresa_id = ? AND event_id = ? ORDER BY id DESC LIMIT 1',
+      [empresaId, d.eventId]
+    );
+    created.push({ ...d, id: Number(inserted?.id) || 0 });
   }
   return created;
 }

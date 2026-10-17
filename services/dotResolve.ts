@@ -1,5 +1,13 @@
 import { getDb, findEmpresa } from '../lib/db.js';
 
+/**
+ * Resolução de um relato/complaint pelo Dot.
+ *
+ * A função procura evidência textual nas avaliações reais da empresa e devolve
+ * um resultado verificado: o que foi encontrado, o que não foi, e duas opções
+ * objetivas. O Dot nunca decide sozinho — a decisão continua com o dono.
+ */
+
 export type DotResolveResult = {
   problem_summary: string;
   verification_status: 'confirmed' | 'unverified' | 'not_found';
@@ -10,12 +18,31 @@ export type DotResolveResult = {
   requires_owner_decision: true;
 };
 
+type ReviewRow = {
+  id?: number | string | null;
+  rating?: number | string | null;
+  comment?: string | null;
+  createdAt?: string | null;
+  is_test?: number | string | null;
+};
+
+type ScoredReview = {
+  row: ReviewRow;
+  score: number;
+  matched: string[];
+};
+
+function num(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
 function normalize(value: unknown): string {
   return String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function terms(message: string): string[] {
-  const stop = new Set(['a','o','as','os','um','uma','de','da','do','das','dos','que','e','em','no','na','nos','nas','para','por','com','sem','me','minha','meu','minhas','meus','foi','era','estava','estao','está','isso','isto','esse','essa','cliente','empresa']);
+  const stop = new Set(['a','o','as','os','um','uma','de','da','do','das','dos','que','e','em','no','na','nos','nas','para','por','com','sem','me','minha','meu','minhas','meus','foi','era','estava','estao','esta','isso','isto','esse','essa','cliente','empresa']);
   return normalize(message).split(' ').filter(t => t.length >= 4 && !stop.has(t)).slice(0, 12);
 }
 
@@ -23,21 +50,29 @@ export async function resolveDotComplaint(empresaId: string, complaint: string):
   const cleanComplaint = String(complaint ?? '').trim().slice(0, 1000);
   if (!cleanComplaint) throw new Error('Relato do cliente é obrigatório.');
   const db = getDb();
-  const empresa = await findEmpresa(empresaId);
+  const empresa: { nome_empresa?: string | null; status?: string | null } | null = await findEmpresa(empresaId);
   if (!empresa) throw new Error('Empresa não encontrada.');
-  const rows = await db.all('SELECT id, rating, comment, createdAt, is_test FROM reviews WHERE empresa_id = ? ORDER BY createdAt DESC LIMIT 500', [empresaId]);
-  const real = (rows || []).filter((r: any) => Number(r.is_test) !== 1);
+  const rows: ReviewRow[] = await db.all('SELECT id, rating, comment, createdAt, is_test FROM reviews WHERE empresa_id = ? ORDER BY createdAt DESC LIMIT 500', [empresaId]);
+  const real = (rows || []).filter((r) => num(r.is_test) !== 1);
   const wanted = terms(cleanComplaint);
-  const scored = real.map((r: any) => { const text = normalize(r.comment); const matched = wanted.filter(t => text.includes(t)); return { row: r, score: matched.length, matched }; }).filter((x: any) => x.score > 0).sort((a: any, b: any) => b.score - a.score || Number(a.row.rating) - Number(b.row.rating)).slice(0, 5);
-  const evidence = scored.map((x: any) => ({ id: Number(x.row.id), rating: Number(x.row.rating), comment: String(x.row.comment || '').slice(0, 500), createdAt: x.row.createdAt ? String(x.row.createdAt) : undefined }));
-  const strong = scored.filter((x: any) => x.score >= Math.max(1, Math.ceil(wanted.length * 0.25)));
-  const hasCritical = strong.some((x: any) => Number(x.row.rating) <= 3);
+  const scored: ScoredReview[] = real
+    .map((r) => {
+      const text = normalize(r.comment);
+      const matched = wanted.filter(t => text.includes(t));
+      return { row: r, score: matched.length, matched };
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score || num(a.row.rating) - num(b.row.rating))
+    .slice(0, 5);
+  const evidence = scored.map((x) => ({ id: num(x.row.id), rating: num(x.row.rating), comment: String(x.row.comment || '').slice(0, 500), createdAt: x.row.createdAt ? String(x.row.createdAt) : undefined }));
+  const strong = scored.filter((x) => x.score >= Math.max(1, Math.ceil(wanted.length * 0.25)));
+  const hasCritical = strong.some((x) => num(x.row.rating) <= 3);
   const hasAny = strong.length > 0;
   const verification_status: DotResolveResult['verification_status'] = hasCritical ? 'confirmed' : hasAny ? 'unverified' : 'not_found';
   const confidence: DotResolveResult['confidence'] = hasCritical && strong.length >= 2 ? 'alta' : hasAny ? 'media' : 'baixa';
   const topic = wanted.slice(0, 4).join(', ') || 'o problema relatado';
-  const companyName = String((empresa as any).nome_empresa || 'a empresa');
-  const companyStatus = String((empresa as any).status || 'desconhecido');
+  const companyName = String(empresa.nome_empresa || 'a empresa');
+  const companyStatus = String(empresa.status || 'desconhecido');
   const facts: DotResolveResult['facts'] = [
     { source: 'cadastro da empresa', fact: 'Caso verificado no contexto da empresa ' + companyName + ', status ' + companyStatus + '.' },
     { source: 'relatos armazenados no Filtra.AI', fact: 'Foram encontradas ' + evidence.length + ' avaliações relacionadas aos termos: ' + topic + '.' },

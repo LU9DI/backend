@@ -28,20 +28,42 @@ export function dbEngine(): 'sqlite' | 'postgres' {
   return _engine;
 }
 
+/**
+ * Fila global de transações (SQLite).
+ *
+ * No SQLite o processo usa um único handle de banco. Duas transações
+ * intercaladas por `await` no mesmo processo geram "cannot start a transaction
+ * within a transaction" e permitem efeitos duplicados. Serializar elimina a
+ * colisão: cada transação começa somente depois que a anterior terminou. Não
+ * existe chamada aninhada de `withDbTransaction` no código atual — se passar a
+ * existir, o aninhamento precisa de SAVEPOINT em vez desta fila.
+ *
+ * No Postgres o shim expõe `transaction()` com client fixado e a transação é
+ * real (BEGIN/COMMIT/ROLLBACK na mesma conexão) — a fila não é necessária.
+ */
+let transactionQueue: Promise<unknown> = Promise.resolve();
+
 export async function withDbTransaction<T>(fn: (tx: Database) => Promise<T>): Promise<T> {
   const db: any = getDb();
   if (typeof db.transaction === 'function') {
     return db.transaction(async (tx: any) => fn(tx as Database));
   }
-  await db.exec('BEGIN');
-  try {
-    const result = await fn(db as Database);
-    await db.exec('COMMIT');
-    return result;
-  } catch (error) {
-    try { await db.exec('ROLLBACK'); } catch {}
-    throw error;
-  }
+  const run = transactionQueue.then(async () => {
+    await db.exec('BEGIN');
+    try {
+      const result = await fn(db as Database);
+      await db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      try { await db.exec('ROLLBACK'); } catch {}
+      throw error;
+    }
+  });
+  transactionQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
 }
 
 export async function closeDB(): Promise<void> {
@@ -157,6 +179,7 @@ export async function initDB(): Promise<Database> {
       comment TEXT,
       ai_reply TEXT,
       ai_tags TEXT,
+      is_test INTEGER DEFAULT 0,
       createdAt TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -167,6 +190,22 @@ export async function initDB(): Promise<Database> {
     await _db.exec('ALTER TABLE reviews ADD COLUMN "createdAt" TIMESTAMPTZ');
   } catch {
     /* coluna já existe */
+  }
+  // A2 — avaliações de teste: [is_test] marca avaliações não-produto (seed de
+  // validação e testes de staging). Todo o pipeline (contagem de cota, fraud,
+  // relatórios PDF, Dot monitor) as ignora via COALESCE(is_test, 0). A migração
+  // é idempotente e roda em SQLite e Postgres.
+  try {
+    const columns = await _db.all('PRAGMA table_info(reviews)');
+    if (!(columns || []).some((column: { name?: string }) => column.name === 'is_test')) {
+      await _db.exec('ALTER TABLE reviews ADD COLUMN is_test INTEGER DEFAULT 0');
+    }
+  } catch {
+    try {
+      await _db.exec('ALTER TABLE reviews ADD COLUMN IF NOT EXISTS is_test INTEGER DEFAULT 0');
+    } catch {
+      /* coluna já existe (corrida de duas instâncias) — nada a fazer */
+    }
   }
   try {
     await _db.run(

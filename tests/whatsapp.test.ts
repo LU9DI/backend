@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizarWhatsapp, linkWhatsapp, mensagemPosCritica } from '../lib/whatsapp.js';
+import { normalizarWhatsapp, linkWhatsapp, mensagemPosCritica, mensagemEmpresaParaCliente } from '../lib/whatsapp.js';
 
 describe('normalizarWhatsapp', () => {
   it('aceita número BR com DDD e prefixa 55', () => {
@@ -45,9 +45,9 @@ describe('linkWhatsapp', () => {
   });
 });
 
-describe('mensagemPosCritica', () => {
-  it('monta mensagem com rating e comentário', () => {
-    const m = mensagemPosCritica({
+describe('mensagemEmpresaParaCliente (empresa → cliente)', () => {
+  it('inclui referência de nota, empresa, comentário e cliente', () => {
+    const m = mensagemEmpresaParaCliente({
       nomeEmpresa: 'Padaria',
       nomeCliente: 'Ana',
       rating: 2,
@@ -59,10 +59,30 @@ describe('mensagemPosCritica', () => {
     assert.ok(m.includes('Ana'));
   });
 
-  it('usa fallbacks quando nome/comentário ausentes', () => {
-    const m = mensagemPosCritica({ rating: 1 });
+  it('usa fallbacks quando dados ausentes', () => {
+    const m = mensagemEmpresaParaCliente({ rating: 1 });
     assert.ok(m.includes('1★'));
-    assert.ok(m.includes('a empresa'));
-    assert.ok(m.includes('Cliente'));
+    assert.ok(m.includes('nossa equipe'));
+    assert.ok(m.startsWith('Olá!'));
+  });
+});
+
+describe('mensagemPosCritica (cliente → empresa, alias legado)', () => {
+  it('inclui empresa, comentário e assinatura do cliente', () => {
+    const m = mensagemPosCritica({
+      nomeEmpresa: 'Padaria',
+      nomeCliente: 'Ana',
+      rating: 2,
+      comment: 'Demora',
+    });
+    assert.ok(m.includes('Padaria'));
+    assert.ok(m.includes('Demora'));
+    assert.ok(m.includes('Ana'));
+  });
+
+  it('usa fallback "vocês" e omite assinatura sem cliente', () => {
+    const m = mensagemPosCritica({ rating: 1 });
+    assert.ok(m.includes('vocês'));
+    assert.ok(!m.includes('—'));
   });
 });

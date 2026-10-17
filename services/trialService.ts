@@ -46,6 +46,27 @@ function isEmailFormat(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email);
 }
 
+type EmailDnsResolver = {
+  resolveMx: (domain: string) => Promise<Array<{ exchange: string; priority: number }>>;
+  resolve4: (domain: string) => Promise<string[]>;
+};
+
+const defaultEmailDnsResolver: EmailDnsResolver = {
+  resolveMx: (domain) => dns.resolveMx(domain),
+  resolve4: (domain) => dns.resolve4(domain),
+};
+
+let emailDnsResolver: EmailDnsResolver = defaultEmailDnsResolver;
+
+/**
+ * Fronteira de teste: substitui apenas o resolvedor usado por assertEmailUsable,
+ * sem alterar o DNS global do processo. Em produção o resolvedor padrão (DNS do
+ * sistema) permanece ativo; passe `null` para restaurá-lo.
+ */
+export function setEmailDnsResolverForTests(resolver: EmailDnsResolver | null): void {
+  emailDnsResolver = resolver ?? defaultEmailDnsResolver;
+}
+
 async function assertEmailUsable(email: string): Promise<void> {
   if (!isEmailFormat(email)) throw new TrialValidationError('E-mail inválido.');
   const domain = email.split('@')[1].toLowerCase();
@@ -53,11 +74,11 @@ async function assertEmailUsable(email: string): Promise<void> {
     throw new TrialValidationError('Use um e-mail permanente para ativar o teste de 7 dias.');
   }
   try {
-    const mx = await dns.resolveMx(domain);
+    const mx = await emailDnsResolver.resolveMx(domain);
     if (!mx?.length) throw new Error('no mx');
   } catch {
     try {
-      const addresses = await dns.resolve4(domain);
+      const addresses = await emailDnsResolver.resolve4(domain);
       if (!addresses?.length) throw new Error('no dns');
     } catch {
       throw new TrialValidationError('Não foi possível validar o domínio deste e-mail.');

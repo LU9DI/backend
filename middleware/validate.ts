@@ -27,6 +27,12 @@ function applyRule(key: string, rule: FieldRule, raw: unknown, body: Record<stri
   const empty = value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
   if (empty) {
     if (rule.required) return { error: rule.message || `${key} é obrigatório.` };
+    // Campos opcionais vazios ainda passam por validações cruzadas (`custom`),
+    // que decidem pela obrigatoriedade condicional (ex.: comentário quando rating ≤ 3).
+    if (rule.custom) {
+      const err = rule.custom(value, body);
+      if (err) return { error: err };
+    }
     return { value: undefined };
   }
   switch (rule.type) {

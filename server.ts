@@ -49,7 +49,14 @@ import { mountMfaRoutes } from './mfa.js';
 import { mountStripeRoutes } from './stripeRoutes.js';
 import { mountFiscalRoutes } from './routes/fiscalRoutes.js';
 import { mountDotRoutes } from './routes/dotRoutes.js';
+import { mountDotAccessRoutes } from './routes/dotAccessRoutes.js';
+import { mountDotAgentRoutes } from './routes/dotAgentRoutes.js';
+import { mountDotAgentMissionRoutes } from './routes/dotAgentMissionRoutes.js';
+import { ensureDotAccessSchema } from './services/dotAccessControl.js';
+import { ensureDotAgentSchema } from './services/dotAgent.js';
+import { ensureMissionTables } from './services/dotAgentMissions.js';
 import { startDotMonitorScheduler } from './services/dotScheduler.js';
+import { startDotAgentWorker } from './services/dotAgentWorker.js';
 import { mcpApp } from './filtraMcp.js';
 import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
 import { paypalConfigured } from './lib/paypal.js';
@@ -87,6 +94,18 @@ const BUILD = {
   marker: 'professional-report-v2',
   started_at: new Date().toISOString(),
 };
+
+/**
+ * O Filtra Dot só é montado quando explicitamente habilitado.
+ * O DOT continua desativado por padrão em produção: enquanto a validação de
+ * segurança e os testes de produção não estiverem completos, as rotas do Dot
+ * nem existem no processo — o que impede acesso por engano ou por variável de
+ * ambiente presa a staging.
+ *
+ * Para habilitar (somente após validação local): FILTRA_DOT_ENABLED=1.
+ * O monitor em background exige adicionalmente FILTRA_DOT_FORCE_ON=1.
+ */
+function dotRuntimeEnabled() { return process.env.FILTRA_DOT_ENABLED === '1'; }
 
 const app = express();
 app.set('trust proxy', 1);
@@ -349,6 +368,13 @@ export async function startServer() {
   } catch (e) {
     console.warn('treatment columns:', e);
   }
+  try {
+    await ensureDotAccessSchema();
+    await ensureDotAgentSchema();
+    await ensureMissionTables();
+  } catch (e) {
+    console.warn('dot schema:', e);
+  }
 
   await runSentimentBackfillOnBoot();
   await runLgpdSweepOnBoot();
@@ -381,8 +407,18 @@ export async function startServer() {
   mountAcquisitionRoutes(app);
   mountTelegramRoutes(app);
   mountFiscalRoutes(app);
-  mountDotRoutes(app);
-  console.log('🤖 Filtra Dot routes montadas');
+  if (dotRuntimeEnabled()) {
+    mountDotRoutes(app);
+    mountDotAccessRoutes(app);
+    mountDotAgentRoutes(app);
+    mountDotAgentMissionRoutes(app);
+    startDotMonitorScheduler();
+    startDotAgentWorker();
+    console.log('[dot] Filtra Dot habilitado: rotas + monitor + agente em background.');
+  } else {
+    app.get('/api/dot/status', (_req, res) => res.status(403).json({ ok: false, enabled: false, access: false, error: 'Filtra Dot desativado. Defina FILTRA_DOT_ENABLED=1 para habilitar.' }));
+    console.log('[dot] Filtra Dot desativado (defina FILTRA_DOT_ENABLED=1 para habilitar).');
+  }
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);
@@ -392,8 +428,6 @@ export async function startServer() {
 
   app.use(notFoundHandler);
   app.use(errorHandler);
-
-  startDotMonitorScheduler();
 
   console.log(`📦 build ${BUILD.version} marker=${BUILD.marker}`);
   console.log(

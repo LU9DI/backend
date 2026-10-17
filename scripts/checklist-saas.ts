@@ -206,3 +206,7 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+
+// Export vazio torna o arquivo um módulo ES, evitando colisão de escopo
+// global (ex.: `main`) com outros scripts não-modulares durante o tsc.
+export {};

@@ -5,6 +5,7 @@
  * alimenta painel, e-mail, WhatsApp, SMS/WeChat e futuras camadas de IA.
  */
 import type { Database } from 'sqlite';
+import { slugify } from '../lib/db.js';
 import { planLabel, PLANOS_OFICIAIS } from '../lib/plans.js';
 
 export type ReportChannel = 'email' | 'whatsapp' | 'sms' | 'wechat';
@@ -155,8 +156,8 @@ function buildSummary(plan: string, kpi: any): string {
     kpi.nota_media >= 4 ? 'desempenho positivo' :
     kpi.nota_media >= 3 ? 'desempenho estável, com pontos de atenção' :
     'cenário que merece atenção prioritária';
-  const plan = planLabel(plan);
-  return `No período analisado, o ${plan} registrou ${kpi.avaliacoes} avaliações, nota média de ${kpi.nota_media.toFixed(1)} e ${kpi.percentual_positivas}% de avaliações positivas. O cenário indica ${quality}.`;
+  const planName = planLabel(plan);
+  return `No período analisado, o ${planName} registrou ${kpi.avaliacoes} avaliações, nota média de ${kpi.nota_media.toFixed(1)} e ${kpi.percentual_positivas}% de avaliações positivas. O cenário indica ${quality}.`;
 }
 
 function buildRecommendations(kpi: any, themes: any): string[] {
@@ -256,12 +257,17 @@ export async function buildRelatorioProfissional(
   let unidades: any[] = [];
   if (['corporativo', 'rei'].includes(plan)) {
     try {
+      // A tabela `unidades` do banco não tem coluna `slug` (a query original
+      // com `slug` falhava em silêncio e derrubava a seção de unidades). O slug
+      // é derivado do nome e usado apenas como fallback para casar avaliações
+      // cujo `origin` foi gravado sem `unidade_id`.
       const raw = await db.all(
-        'SELECT id, nome, slug FROM unidades WHERE empresa_id = ? AND (ativo IS NULL OR ativo = 1 OR ativo = true) ORDER BY nome',
+        'SELECT id, nome FROM unidades WHERE empresa_id = ? AND (ativo IS NULL OR ativo = 1 OR ativo = true) ORDER BY nome',
         [empresa.id],
       ) as any[];
       unidades = raw.map((u) => {
-        const reviews = reais.filter((r) => String(r.unidade_id || '') === String(u.id) || (u.slug && String(r.origin || '').trim().toLowerCase() === String(u.slug).trim().toLowerCase()));
+        const slug = slugify(String(u.nome || '')).trim().toLowerCase();
+        const reviews = reais.filter((r) => String(r.unidade_id || '') === String(u.id) || (slug && String(r.origin || '').trim().toLowerCase() === slug));
         const total = reviews.length;
         const avg = total ? Math.round((reviews.reduce((s, r) => s + Number(r.rating || 0), 0) / total) * 10) / 10 : 0;
         return { id: u.id, nome: u.nome, avaliacoes: total, nota_media: avg, criticas: reviews.filter((r) => Number(r.rating) <= 2).length };

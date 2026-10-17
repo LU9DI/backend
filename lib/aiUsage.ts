@@ -15,6 +15,11 @@ export async function ensureAiUsageSchema(db: Database) {
   if (!cols.includes('provider')) {
     await db.exec(`ALTER TABLE ai_usage ADD COLUMN provider TEXT`);
   }
+  // Namespace de consumo por capacidade (ex.: 'dot'). Sem feature, a linha
+  // pertence ao orçamento de feedback/reviews e continua contando na cota geral.
+  if (!cols.includes('feature')) {
+    await db.exec(`ALTER TABLE ai_usage ADD COLUMN feature TEXT`);
+  }
 }
 
 export async function recordAiUsage(
@@ -24,6 +29,7 @@ export async function recordAiUsage(
     tipo: string;
     tokens: number;
     provider?: string;
+    feature?: string | null;
   }
 ) {
   const tokens = Math.max(0, Math.round(Number(opts.tokens) || 0));
@@ -31,13 +37,14 @@ export async function recordAiUsage(
   try {
     await ensureAiUsageSchema(db);
     await db.run(
-      `INSERT INTO ai_usage (empresa_id, tipo, tokens, provider, criado_em)
-       VALUES (?, ?, ?, ?, datetime('now'))`,
+      `INSERT INTO ai_usage (empresa_id, tipo, tokens, provider, feature, criado_em)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))`,
       [
         opts.empresaId || null,
         String(opts.tipo).slice(0, 40),
         tokens,
         opts.provider ? String(opts.provider).slice(0, 20) : null,
+        opts.feature ? String(opts.feature).toLowerCase().slice(0, 40) : null,
       ]
     );
   } catch (e: any) {

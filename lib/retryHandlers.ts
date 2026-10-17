@@ -289,7 +289,12 @@ export function registerAllRetryHandlers() {
     return { ok: true, mode: 'telegram', messageId: data?.result?.message_id ? String(data.result.message_id) : undefined };
   }
 
-  async function sendChannel(channel: string, row: any, message: string, idempotencyKey: string) {
+  async function sendChannel(
+    channel: string,
+    row: any,
+    message: string,
+    idempotencyKey: string,
+  ): Promise<{ ok: boolean; mode?: string; messageId?: string; error?: string }> {
     if (channel === 'email') {
       const email = String(row.email || '').trim().toLowerCase();
       if (!email || !email.includes('@')) throw new Error('lead sem e-mail válido');

@@ -147,7 +147,7 @@ async function main() {
   });
 
   const sessionId = init.sessionId;
-  const sessionHeaders = sessionId ? { 'mcp-session-id': sessionId } : {};
+  const sessionHeaders: Record<string, string> = sessionId ? { 'mcp-session-id': sessionId } : {};
 
   console.log(`✓ initialize${sessionId ? ' + session' : ''}`);
 
@@ -236,3 +236,8 @@ main().catch((error) => {
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);
 });
+
+// Arquivo executado como script (sem imports/exports, portanto não-módulo).
+// O export vazio o torna um módulo ES, evitando colisão de escopo global
+// (ex.: `main`) com outros scripts não-modulares durante o tsc.
+export {};

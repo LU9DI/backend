@@ -4,13 +4,23 @@ import readline from 'node:readline';
 const API_URL = String(process.env.FILTRA_API_URL || 'https://api.filtraai.com').replace(/\/$/, '');
 const SECRET = String(process.env.FILTRA_MCP_SECRET || '').trim();
 
-function jsonrpc(id, result) {
+type JsonRpcMessage = {
+  id?: unknown;
+  method?: string;
+  params?: { name?: string; arguments?: Record<string, unknown> } & Record<string, unknown>;
+};
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+function jsonrpc(id: unknown, result: unknown) {
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
 }
-function error(id, code, message) {
+function error(id: unknown, code: number, message: string) {
   jsonrpc(id, { error: { code, message } });
 }
-async function callApi(path, method = 'GET', body) {
+async function callApi(path: string, method = 'GET', body?: unknown) {
   if (!SECRET) throw new Error('FILTRA_MCP_SECRET não configurado.');
   const res = await fetch(API_URL + path, {
     method,
@@ -95,7 +105,7 @@ const tools = [
   }
 ];
 
-async function handle(msg) {
+async function handle(msg: JsonRpcMessage) {
   const { id, method, params = {} } = msg;
   if (method === 'initialize') {
     return jsonrpc(id, {
@@ -127,7 +137,7 @@ async function handle(msg) {
     }
     return jsonrpc(id, { content: [{ type: 'text', text: JSON.stringify(data) }] });
   } catch (e) {
-    return error(id, -32000, String(e?.message || e));
+    return error(id, -32000, errorMessage(e));
   }
 }
 
@@ -135,5 +145,5 @@ const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity 
 rl.on('line', async (line) => {
   if (!line.trim()) return;
   try { await handle(JSON.parse(line)); }
-  catch (e) { process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: String(e?.message || e) } }) + '\n'); }
+  catch (e) { process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: errorMessage(e) } }) + '\n'); }
 });

@@ -81,7 +81,7 @@ export async function main() {
   const source = new Client({ connectionString: sourceUrl, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 15000 });
   const target = new Client({
     host: targetHost, port: targetPort, database: targetDb, user: targetUser, password: targetPassword,
-    ssl: { rejectUnauthorized: false, serverName: targetHost }, connectionTimeoutMillis: 15000,
+    ssl: { rejectUnauthorized: false, servername: targetHost }, connectionTimeoutMillis: 15000,
   });
 
   try {

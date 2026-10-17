@@ -47,6 +47,64 @@ export function getFeedbackLimit(plan: string): number {
 export function getTokenLimit(plan: string): number {
   return PLAN_TOKEN_LIMITS[String(plan || 'trial').toLowerCase()] ?? PLAN_TOKEN_LIMITS.trial;
 }
+
+/**
+ * Orçamento mensal de tokens por capacidade, separado do orçamento de feedback.
+ *
+ * O consumo de uma feature é registrado em `ai_usage.feature` e NUNCA é somado
+ * ao orçamento de feedback/reviews (`tokensUsadosMes`), nem o contrário. Isso
+ * garante que uma conversa pesada do Dot não bloqueie análise de avaliações e
+ * que o uso de reviews não consuma a cota do Dot.
+ *
+ * Valores explícitos por plano: o Dot só é liberado para Rei e Corporativo
+ * (ver `resolveDotGate`), então os demais planos ficam com 0 (sem orçamento).
+ */
+export const FEATURE_TOKEN_LIMITS: Record<string, Record<string, number>> = {
+  dot: {
+    corporativo: 200_000,
+    corp: 200_000,
+    rei: 600_000,
+  },
+};
+
+function normalizePlanKey(plan: string | null | undefined): string {
+  const p = String(plan || '').toLowerCase();
+  return p === 'corp' ? 'corporativo' : p;
+}
+
+export function getFeatureTokenLimit(plan: string | null | undefined, feature: string): number {
+  const table = FEATURE_TOKEN_LIMITS[String(feature || '').toLowerCase()];
+  if (!table) return 0;
+  return table[normalizePlanKey(plan)] ?? 0;
+}
+
+export async function tokensUsadosFeatureMes(empresaId: string, feature: string): Promise<number> {
+  const f = String(feature || '').toLowerCase();
+  if (!empresaId || !f) return 0;
+  const db = getDb();
+  const mes = getCurrentMonth();
+  try {
+    if (dbEngine() === 'postgres') {
+      const row = await db.get(
+        `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
+         WHERE empresa_id = ? AND feature = ? AND criado_em >= ? AND criado_em < ?`,
+        [empresaId, f, monthStartIso(mes), nextMonthStartIso(mes)]
+      );
+      return Number(row?.t || 0);
+    }
+    const row = await db.get(
+      `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
+       WHERE empresa_id = ? AND feature = ? AND substr(criado_em, 1, 7) = ?`,
+      [empresaId, f, mes]
+    );
+    return Number(row?.t || 0);
+  } catch (error) {
+    // Cota isolada por recurso falha fechada: um erro de leitura não pode
+    // liberar tokens ilimitados justamente quando o controle está indisponível.
+    // O chamador decide como negar (o DOT responde sem consumir a cota geral).
+    throw error;
+  }
+}
 function monthStartIso(mes?: string): string {
   const m = mes || getCurrentMonth();
   return `${m}-01T00:00:00.000Z`;
@@ -60,23 +118,45 @@ function nextMonthStartIso(mes?: string): string {
 export async function tokensUsadosMes(empresaId: string): Promise<number> {
   const db = getDb();
   const mes = getCurrentMonth();
+  // Apenas o orçamento de feedback: linhas com feature (ex.: 'dot') são de
+  // outro namespace e não podem consumir a cota de reviews.
   try {
     if (dbEngine() === 'postgres') {
       const row = await db.get(
         `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
-         WHERE empresa_id = ? AND criado_em >= ? AND criado_em < ?`,
+         WHERE empresa_id = ? AND (feature IS NULL OR feature = '')
+           AND criado_em >= ? AND criado_em < ?`,
         [empresaId, monthStartIso(mes), nextMonthStartIso(mes)]
       );
       return Number(row?.t || 0);
     }
     const row = await db.get(
       `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
-       WHERE empresa_id = ? AND substr(criado_em, 1, 7) = ?`,
+       WHERE empresa_id = ? AND (feature IS NULL OR feature = '')
+         AND substr(criado_em, 1, 7) = ?`,
       [empresaId, mes]
     );
     return Number(row?.t || 0);
   } catch {
-    return 0;
+    // Esquema anterior à coluna `feature`: preserva o comportamento original.
+    try {
+      if (dbEngine() === 'postgres') {
+        const row = await db.get(
+          `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
+           WHERE empresa_id = ? AND criado_em >= ? AND criado_em < ?`,
+          [empresaId, monthStartIso(mes), nextMonthStartIso(mes)]
+        );
+        return Number(row?.t || 0);
+      }
+      const row = await db.get(
+        `SELECT COALESCE(SUM(tokens),0) as t FROM ai_usage
+         WHERE empresa_id = ? AND substr(criado_em, 1, 7) = ?`,
+        [empresaId, mes]
+      );
+      return Number(row?.t || 0);
+    } catch {
+      return 0;
+    }
   }
 }
 

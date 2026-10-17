@@ -164,7 +164,16 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
             await c.query(st);
           } catch (e: any) {
             const msg = String(e?.message || e);
-            if (/already exists/i.test(msg) || e?.code === '42P07' || e?.code === '42701') {
+            if (
+              /already exists/i.test(msg) ||
+              e?.code === '42P07' ||
+              e?.code === '42701' ||
+              // Corrida de DDL entre instâncias: dois CREATE TABLE/INDEX
+              // IF NOT EXISTS simultâneos podem colidir nos índices únicos do
+              // catálogo (pg_type, pg_class, pg_attribute...). O objeto foi
+              // criado pela outra instância; seguir é idempotente.
+              (e?.code === '23505' && /unique constraint "pg_(type|class|attribute|index|constraint|proc)/i.test(msg))
+            ) {
               continue;
             }
             console.error('pg.exec falhou:', msg);
@@ -241,12 +250,12 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
           return { changes: r.rowCount || 0, lastID: returnedId };
         },
         async get<T2 = any>(sql: string, params: any[] = []) {
-          if (/PRAGMA\\s+table_info/i.test(sql)) return (await handlePragma(c, sql))[0] as T2;
+          if (/PRAGMA\s+table_info/i.test(sql)) return (await handlePragma(c, sql))[0] as T2;
           const r = await c.query(convertPlaceholders(adaptSql(sql)), params);
           return r.rows[0] as T2 | undefined;
         },
         async all<T2 = any>(sql: string, params: any[] = []) {
-          if (/PRAGMA\\s+table_info/i.test(sql)) return (await handlePragma(c, sql)) as T2[];
+          if (/PRAGMA\s+table_info/i.test(sql)) return (await handlePragma(c, sql)) as T2[];
           const r = await c.query(convertPlaceholders(adaptSql(sql)), params);
           return r.rows as T2[];
         },

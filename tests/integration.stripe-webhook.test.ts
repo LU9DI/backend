@@ -26,8 +26,12 @@ process.env.APP_URL = 'http://localhost:3000';
 process.env.FRONTEND_URL = 'http://localhost:3000';
 process.env.ADMIN_EMAIL = 'admin-stripe-e2e@example.com';
 process.env.ADMIN_PASSWORD = 'AdminTest@123';
-// Sem STRIPE_WEBHOOK_SECRET → constructStripeEvent aceita JSON cru em non-prod
-delete process.env.STRIPE_WEBHOOK_SECRET;
+// O webhook exige STRIPE_ENABLED + assinatura HMAC válida. Usamos um segredo
+// efêmero gerado em runtime (fixture de teste, nunca uma credencial) e
+// calculamos a assinatura localmente — sem chamadas externas nem chaves reais.
+process.env.STRIPE_ENABLED = 'true';
+const webhookSecret = crypto.randomBytes(24).toString('hex');
+process.env.STRIPE_WEBHOOK_SECRET = webhookSecret;
 delete process.env.DATABASE_URL;
 
 let server: any;
@@ -121,11 +125,13 @@ describe('E2E Stripe webhook → ativação de plano', () => {
     };
 
     const body = JSON.stringify(event);
+    const t = Math.floor(Date.now() / 1000);
+    const signature = crypto.createHmac('sha256', webhookSecret).update(`${t}.${body}`, 'utf8').digest('hex');
     const res = await fetch(`${baseUrl}/api/webhook/stripe`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        // sem stripe-signature: ok em NODE_ENV=test sem STRIPE_WEBHOOK_SECRET
+        'stripe-signature': `t=${t},v1=${signature}`,
       },
       body,
     });

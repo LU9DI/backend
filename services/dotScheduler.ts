@@ -2,6 +2,7 @@ import { getDb } from '../lib/db.js';
 import { getDotPreferences } from './dotPreferences.js';
 import { runDotMonitor } from './dotMonitor.js';
 import { monitorDueDotFollowUps } from './dotFollowUp.js';
+import { withDotLock } from './dotCoordination.js';
 
 type DotSchedulerStatus = {
   running: boolean;
@@ -40,9 +41,13 @@ const schedulerStatus: DotSchedulerStatus = {
 let timer: NodeJS.Timeout | null = null;
 let running = false;
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function ensureSchedulerColumn() {
   const db = getDb();
-  const cols = (await db.all('PRAGMA table_info(empresas)')).map((c: any) => c.name);
+  const cols = (await db.all('PRAGMA table_info(empresas)')).map((c: { name?: string }) => String(c.name || ''));
   if (!cols.includes('dot_monitor_last_at')) await db.exec('ALTER TABLE empresas ADD COLUMN dot_monitor_last_at TEXT');
 }
 
@@ -55,7 +60,22 @@ export function getDotSchedulerStatus() {
 }
 
 export async function runDueDotMonitors() {
-  if (running) return { ok: true, skipped: true, reason: 'already_running' };
+  // Rodada já em andamento NESTA instância (memória). Devolve o mesmo shape da
+  // rodada concluída para os consumidores acessarem os campos sem checagens.
+  if (running) return { ok: true, skipped: true, reason: 'already_running', processed: 0, results: [], followups: [] };
+  // Coordenação durável: a rodada do agendador (follow-ups + monitor de todas
+  // as empresas) roda em uma única instância por vez. A instância que não
+  // obtiver o lock devolve `skipped` e o próximo tick tenta de novo — os
+  // monitors por empresa têm lock próprio como segunda linha de defesa.
+  const lock = await withDotLock('dot:scheduler', 10 * 60_000, () => runDueDotMonitorsUnlocked(), { waitMs: 0 });
+  if (!lock.acquired) {
+    return { ok: true, skipped: true, reason: 'outra instância está executando a rodada do agendador', processed: 0, results: [], followups: [] };
+  }
+  return lock.result;
+}
+
+async function runDueDotMonitorsUnlocked() {
+  if (running) return { ok: true, skipped: true, reason: 'already_running', processed: 0, results: [], followups: [] };
 
   running = true;
   const startedAt = new Date();
@@ -112,9 +132,14 @@ export async function runDueDotMonitors() {
         decisionsCreated += Array.isArray(result.decisions) ? result.decisions.length : 0;
         actionsPrepared += Array.isArray(result.prepared_actions) ? result.prepared_actions.length : 0;
         results.push({ empresa_id: company.id, ...result });
-      } catch (error: any) {
+      } catch (error) {
         companyErrors++;
-        results.push({ empresa_id: company.id, ok: false, error: String(error?.message || error) });
+        const message = errorMessage(error).slice(0, 300);
+        // Erros por empresa precisam ficar observáveis mesmo quando a rodada
+        // segue para as demais; o log carrega apenas id da empresa e a
+        // mensagem técnica — nunca conteúdo de avaliação ou credenciais.
+        console.warn('[dot-scheduler] empresa falhou', { empresa_id: company.id, error: message });
+        results.push({ empresa_id: company.id, ok: false, error: message });
       }
     }
 
@@ -144,9 +169,9 @@ export async function runDueDotMonitors() {
     });
 
     return { ok: true, processed, skipped, results, followups: followUpResults };
-  } catch (error: any) {
+  } catch (error) {
     schedulerStatus.last_error_at = new Date().toISOString();
-    schedulerStatus.last_error = String(error?.message || error).slice(0, 500);
+    schedulerStatus.last_error = errorMessage(error).slice(0, 500);
     schedulerStatus.duration_ms = Date.now() - startedMs;
     console.warn('[dot-scheduler] rodada falhou', {
       error: schedulerStatus.last_error,
@@ -169,9 +194,9 @@ export function startDotMonitorScheduler() {
     return;
   }
   const interval = Math.max(60_000, Number(process.env.FILTRA_DOT_MONITOR_TICK_MS || 300_000));
-  void runDueDotMonitors().catch((error) => console.warn('Dot scheduler startup:', error?.message || error));
+  void runDueDotMonitors().catch((error) => console.warn('Dot scheduler startup:', errorMessage(error)));
   timer = setInterval(() => {
-    void runDueDotMonitors().catch((error) => console.warn('Dot scheduler:', error?.message || error));
+    void runDueDotMonitors().catch((error) => console.warn('Dot scheduler:', errorMessage(error)));
   }, interval);
   timer.unref();
   console.log(`Filtra Dot monitor ativo — tick ${Math.round(interval / 1000)}s`);

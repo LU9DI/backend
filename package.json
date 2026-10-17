@@ -11,7 +11,7 @@
     "start:prod": "tsx node-entrypoint.ts",
     "smtp:test": "tsx scripts/smtp-connectivity-test.ts",
     "checklist": "tsx scripts/checklist-saas.ts",
-    "test": "tsx --test tests/**/*.test.ts",
+    "test": "node scripts/run-tests.mjs",
     "audit": "npm audit --omit=dev",
     "mcp:smoke": "tsx scripts/mcp-smoke-test.ts"
   },

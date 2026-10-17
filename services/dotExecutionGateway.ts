@@ -4,6 +4,8 @@ import { evaluateDotPolicy, type DotRisk } from './dotPolicy.js';
 import { getDotPreferences } from './dotPreferences.js';
 import { recordDotActionAudit } from './dotActionAudit.js';
 import { createDotFollowUp } from './dotFollowUp.js';
+import { requireDotAccess, type DotAccessResource } from './dotAccessControl.js';
+import { executeDotInternalAction } from './dotInternalExecutors.js';
 
 export type DotExecutionResult = {
   ok: boolean;
@@ -32,6 +34,7 @@ function riskForAction(risk: string): DotRisk {
 export async function executeDotActionThroughGateway(
   empresaId: string,
   actionId: number,
+  actorUserId?: string | null,
 ): Promise<DotExecutionResult> {
   const db = getDb();
   const row = await db.get(
@@ -53,6 +56,25 @@ export async function executeDotActionThroughGateway(
   const definition = getDotActionDefinition(String(row.action));
   if (!definition) {
     return { ok: false, id: actionId, status: String(row.status), simulated: true, executor: '', startedAt: '', reason: 'Executor não registrado para esta ação.' };
+  }
+
+  const permissionResource: DotAccessResource = definition.channels.includes('crm') ? 'crm'
+    : definition.channels.includes('email') ? 'email'
+      : definition.channels.includes('whatsapp') ? 'whatsapp'
+        : definition.channels.includes('google_reviews') ? 'marketing'
+          : 'operations';
+  try {
+    await requireDotAccess(empresaId, permissionResource, 'execute', actorUserId || null, { actionId, action: definition.action, executor: definition.executorKey });
+  } catch (error: any) {
+    return {
+      ok: false,
+      id: actionId,
+      status: String(row.status),
+      simulated: true,
+      executor: definition.executorKey,
+      startedAt: '',
+      reason: error?.message || 'Permissão de execução do DOT não concedida.',
+    };
   }
 
   if (!dotActionRequiresApproval(definition.action)) {
@@ -83,83 +105,27 @@ export async function executeDotActionThroughGateway(
     actionId,
     decisionId: Number(row.decision_id),
     event: 'execution_started',
-    actorType: 'system',
+    actorType: 'user',
+    actorId: actorUserId || null,
     metadata: { executor: definition.executorKey, policy },
   });
 
   try {
-    // Execução interna real: o Dot não envia nada para fora, mas transforma a
-    // aprovação em um caso operacional persistido e auditável.
-    await db.exec(`CREATE TABLE IF NOT EXISTS dot_internal_cases (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      empresa_id TEXT NOT NULL,
-      decision_id INTEGER NOT NULL,
-      action_id INTEGER NOT NULL,
-      event_id INTEGER,
-      action TEXT NOT NULL,
-      status TEXT NOT NULL,
-      priority TEXT NOT NULL,
-      summary TEXT NOT NULL,
-      next_step TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )`);
-    await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_internal_cases_action ON dot_internal_cases(empresa_id, action_id)');
-
-    const existingCase = await db.get(
-      'SELECT * FROM dot_internal_cases WHERE empresa_id = ? AND action_id = ? LIMIT 1',
-      [empresaId, actionId],
+    const decision = await db.get(
+      'SELECT event_id, priority, reason FROM dot_decisions WHERE id = ? AND empresa_id = ? LIMIT 1',
+      [Number(row.decision_id), empresaId],
     );
+    if (!decision) throw new Error('Decisão vinculada não encontrada durante a execução.');
 
-    let internalCase = existingCase;
-    if (!internalCase) {
-      const decision = await db.get(
-        'SELECT event_id, priority, reason FROM dot_decisions WHERE id = ? AND empresa_id = ? LIMIT 1',
-        [Number(row.decision_id), empresaId],
-      );
-      if (!decision) throw new Error('Decisão vinculada não encontrada durante a execução.');
-
-      const mapping: Record<string, { status: string; nextStep: string }> = {
-        priorizar_e_resolver: {
-          status: 'prioritized',
-          nextStep: 'Validar a evidência e registrar a resolução antes de qualquer contato externo.',
-        },
-        escalar_responsavel: {
-          status: 'escalated',
-          nextStep: 'Responsável deve revisar o caso e definir a tratativa.',
-        },
-        corrigir_e_acompanhar: {
-          status: 'monitoring',
-          nextStep: 'Aplicar a correção interna e aguardar o acompanhamento do Dot.',
-        },
-      };
-      const outcome = mapping[String(row.action)] || {
-        status: 'open',
-        nextStep: 'Revisar o caso no painel do Dot.',
-      };
-
-      const result = await db.run(
-        'INSERT INTO dot_internal_cases (empresa_id,decision_id,action_id,event_id,action,status,priority,summary,next_step,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING id',
-        [
-          empresaId,
-          Number(row.decision_id),
-          actionId,
-          decision.event_id ?? null,
-          String(row.action),
-          outcome.status,
-          String(decision.priority || 'media'),
-          String(decision.reason || 'Caso criado pelo Dot.').slice(0, 4000),
-          outcome.nextStep,
-          startedAt,
-          startedAt,
-        ],
-      );
-      internalCase = await db.get(
-        'SELECT * FROM dot_internal_cases WHERE id = ? AND empresa_id = ? LIMIT 1',
-        [result.lastID, empresaId],
-      );
-    }
-
+    const internal = await executeDotInternalAction({
+      empresaId,
+      actionId,
+      decisionId: Number(row.decision_id),
+      action: String(row.action),
+      eventId: decision.event_id ?? null,
+      priority: decision.priority ?? null,
+      reason: decision.reason ?? null,
+    });
     const executedAt = new Date().toISOString();
     const finished = await db.run(
       "UPDATE dot_action_queue SET status = 'executed', executed_at = ? WHERE id = ? AND empresa_id = ? AND status = 'executing'",
@@ -174,14 +140,16 @@ export async function executeDotActionThroughGateway(
       actionId,
       decisionId: Number(row.decision_id),
       event: 'executed',
-      actorType: 'system',
+      actorType: 'user',
+      actorId: actorUserId || null,
       metadata: {
         executor: definition.executorKey,
         simulated: false,
         externalSideEffect: false,
-        internalCaseId: internalCase?.id ?? null,
-        internalStatus: internalCase?.status ?? null,
-        nextStep: internalCase?.next_step ?? null,
+        internalCaseId: internal.caseId,
+        internalStatus: internal.status,
+        nextStep: internal.nextStep,
+        created: internal.created,
       },
     });
 
@@ -195,9 +163,7 @@ export async function executeDotActionThroughGateway(
       executor: definition.executorKey,
       startedAt,
       executedAt,
-      reason: internalCase
-        ? `Caso interno criado/atualizado (#${internalCase.id}) para acompanhamento.`
-        : 'Caso interno criado para acompanhamento.',
+      reason: `Caso interno ${internal.created ? 'criado' : 'atualizado'} (#${internal.caseId}) para acompanhamento.`
     };
 
   } catch (error: any) {
@@ -211,7 +177,8 @@ export async function executeDotActionThroughGateway(
       actionId,
       decisionId: Number(row.decision_id),
       event: 'failed',
-      actorType: 'system',
+      actorType: 'user',
+      actorId: actorUserId || null,
       metadata: { executor: definition.executorKey, error: reason },
     });
     return { ok: false, id: actionId, status: 'failed', simulated: true, executor: definition.executorKey, startedAt, reason };

@@ -32,6 +32,24 @@ before(async () => {
   const { mountTrialRoutes } = await import('../routes/trialRoutes.js');
   const { mountReviewRoutes } = await import('../routes/reviewRoutes.js');
   const { notFoundHandler, errorHandler } = await import('../middleware/errorHandler.js');
+  const { setEmailDnsResolverForTests } = await import('../services/trialService.js');
+
+  // Fronteira de teste: zona DNS controlada e determinística, sem acesso à
+  // Internet e sem tocar no resolvedor global. Apenas o domínio de teste abaixo
+  // possui registros de e-mail; qualquer outro domínio é considerado não
+  // resolvível, reproduzindo de forma estável o contrato de validação.
+  const TEST_MAIL_DOMAIN = 'teste.com';
+  const dnsNotFound = () => Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' });
+  setEmailDnsResolverForTests({
+    resolveMx: async (domain) => {
+      if (domain === TEST_MAIL_DOMAIN) return [{ exchange: 'mx.teste.com', priority: 10 }];
+      throw dnsNotFound();
+    },
+    resolve4: async (domain) => {
+      if (domain === TEST_MAIL_DOMAIN) return ['127.0.0.1'];
+      throw dnsNotFound();
+    },
+  });
 
   await initDB();
 
@@ -57,6 +75,8 @@ before(async () => {
 
 after(async () => {
   if (server) await new Promise<void>((r) => server.close(() => r()));
+  const { setEmailDnsResolverForTests } = await import('../services/trialService.js');
+  setEmailDnsResolverForTests(null);
   try {
     fs.unlinkSync(tmpDb);
   } catch {

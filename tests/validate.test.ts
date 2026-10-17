@@ -7,6 +7,7 @@ import {
   schemaReview,
   schemaLoginEmpresa,
   schemaCheckout,
+  ensureLoginIdentifier,
 } from '../middleware/validate.js';
 
 function mockRes() {
@@ -82,10 +83,29 @@ describe('schemaReview', () => {
 });
 
 describe('schemaLoginEmpresa', () => {
-  it('exige CNPJ com 14 dígitos', () => {
-    const { res, nextCalled } = run(schemaLoginEmpresa, { cnpj: '123', senha: 'x' });
+  // O schema de login aceita um identificador textual (CNPJ/Tax ID/e-mail) e
+  // exige apenas a senha. O tamanho mínimo do identificador é aplicado por
+  // `ensureLoginIdentifier` (usado em routes/authRoutes.ts), não pelo schema.
+  it('aceita identificador textual e exige senha', () => {
+    const { nextCalled } = run(schemaLoginEmpresa, { cnpj: '11222333000181', senha: 'x' });
+    assert.equal(nextCalled, true);
+  });
+
+  it('ensureLoginIdentifier rejeita identificador curto', () => {
+    const req: any = { body: { cnpj: '123', senha: 'x' } };
+    const res = mockRes();
+    let nextCalled = false;
+    ensureLoginIdentifier(req, res, () => { nextCalled = true; });
     assert.equal(nextCalled, false);
     assert.equal(res.statusCode, 400);
+  });
+
+  it('ensureLoginIdentifier aceita e-mail válido', () => {
+    const req: any = { body: { email: 'dono@empresa.com', senha: 'x' } };
+    const res = mockRes();
+    let nextCalled = false;
+    ensureLoginIdentifier(req, res, () => { nextCalled = true; });
+    assert.equal(nextCalled, true);
   });
 });
 

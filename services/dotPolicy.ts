@@ -21,12 +21,9 @@ export function evaluateDotPolicy(
     preferences.prepareActionsAutomatically &&
     preferences.autonomy !== 'observador';
 
-  // Autonomia nunca remove a aprovação de ações externas. Até existir
-  // executor externo registrado, o Dot também não executa efeitos externos.
-  const executeAutomatically =
-    preferences.autonomy === 'autonomo_controlado' &&
-    risk === 'low' &&
-    !preferences.requireApprovalForExternalActions;
+  // A autonomia do agente nunca transforma uma ação preparada em execução
+  // implícita. Aprovação explícita continua sendo obrigatória no gateway.
+  const executeAutomatically = false;
 
   return {
     autonomy: preferences.autonomy,
@@ -34,6 +31,6 @@ export function evaluateDotPolicy(
     createDecision,
     prepareAction: canPrepare,
     executeAutomatically,
-    requiresApproval: preferences.requireApprovalForExternalActions || risk !== 'low',
+    requiresApproval: true,
   };
 }
