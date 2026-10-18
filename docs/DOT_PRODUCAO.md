@@ -21,10 +21,10 @@ para **todas** as rotas de empresa (`/api/dot/*` e `/api/dot/agent/*`). Aliases
 de plano são normalizados por `normalizePlanAlias` (`lib/plans.ts`) antes da
 checagem, de forma consistente com cobrança, relatórios e cotas.
 
-Além do plano, o gate exige: token de acesso válido, empresa existente com
-assinatura/trial válidos (`empresaTemAcesso`) e conta que não seja admin da
-plataforma. Permissões granulares (por recurso/ação) continuam sendo exigidas
-por operação em `services/dotAccessControl.ts`.
+Além do plano, o gate exige token válido, assinatura/trial ativos e que o
+usuário seja o proprietário verificado da empresa (`empresa_owners`). Funcionários
+são bloqueados em todas as rotas do Dot, inclusive leitura, chat e listagens.
+Permissões granulares continuam aplicáveis às operações do proprietário.
 
 ## 2. Variáveis de ambiente
 
@@ -157,7 +157,9 @@ Matriz de proteção (todas as rotas continuam passando pelo gate de plano):
 | `PUT /api/dot/agent/permissions` | proprietário | **sim** |
 | `POST /api/dot/actions/:id/run` | `filtra.execute` | **sim** |
 | `POST /api/dot/agent/tools/:id/invoke` | granular da ferramenta | **sim** para ferramentas de execução/envio externo/risco médio-alto (hoje todas são leitura) |
-| Leitura, chat, monitor, decisões, followups, goals e missions | como antes | não |
+| Leitura, chat, monitor, decisões, followups, goals e missions | proprietário verificado | não |
+
+Funcionários não têm acesso ao Dot mesmo quando possuem acesso ao painel da empresa. A autorização é aplicada no backend em todas as rotas; ocultar a interface não é considerado controle de segurança.
 
 No painel (`/dot`), o cartão **Administração do Dot (PIN)** aparece apenas
 para o proprietário e o cabeçalho `X-Dot-Admin` é enviado automaticamente.
