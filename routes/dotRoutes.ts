@@ -331,7 +331,15 @@ function deny(res: Response, access: DotAccess) {
 export function mountDotRoutes(app: Express) {
   app.get('/api/dot/status', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
-    res.json({
+    if (!access.allowed) {
+      return res.status(403).json({
+        ok: false,
+        enabled: false,
+        access: false,
+        error: access.reason || 'Acesso ao Filtra Dot não liberado.',
+      });
+    }
+    return res.json({
       ok: true,
       enabled:
         access.allowed &&
