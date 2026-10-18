@@ -19,9 +19,11 @@ import { isEmpresaOwner } from '../lib/empresaOwnership.js';
  *     (aliases `corp`/`corporate` são normalizados). Trial de 7 dias NÃO concede
  *     um benefício do trial, e conceder acesso por engano seria criar um
  *     benefício que a matriz de planos não declara.
+ *  5. O usuário precisa ser o proprietário verificado da empresa; funcionários
+ *     são negados em todas as rotas, inclusive leitura, chat e listagens.
  *
  * O gate responde apenas "pode entrar no Dot?"; permissões granulares
- * (ler/analisar/criar/executar) continuam em `dotAccessControl` e a
+ * continuam em `dotAccessControl` e a
  * administração (permissões/PIN/execução) exige a sessão administrativa
  * (`dotAdminSecurity`).
  *
@@ -114,6 +116,29 @@ export async function resolveDotGate(req: Request): Promise<DotGateResult> {
       };
     }
 
+    // O Filtra Dot é exclusivo do proprietário verificado, não de qualquer
+    // funcionário com acesso à conta da empresa. Falhas de consulta negam acesso.
+    let isOwner = false;
+    try {
+      isOwner = await isEmpresaOwner(empresa.id, userId);
+    } catch (error: any) {
+      console.error('[dot] falha ao verificar a propriedade da empresa:', error?.message || error);
+      isOwner = false;
+    }
+    if (!isOwner) {
+      return {
+        allowed: false,
+        demo: false,
+        empresaId: empresa.id,
+        plan,
+        userId,
+        isOwner: false,
+        canManagePermissions: false,
+        reason: 'O Filtra Dot está disponível apenas para o proprietário verificado da empresa.',
+      };
+    }
+
+    // Inicializa permissões somente depois da verificação de propriedade.
     try {
       await ensureDotInternalPermissionBaseline(empresa.id);
     } catch (error: any) {
@@ -124,20 +149,10 @@ export async function resolveDotGate(req: Request): Promise<DotGateResult> {
         empresaId: empresa.id,
         plan,
         userId,
-        isOwner: false,
+        isOwner: true,
         canManagePermissions: false,
         reason: 'Não foi possível inicializar as permissões internas do DOT.',
       };
-    }
-
-    // Propriedade resolvida no servidor (tabela empresa_owners). Falha na
-    // verificação NUNCA promove: o bit administrativo fica falso (fail-closed).
-    let isOwner = false;
-    try {
-      isOwner = await isEmpresaOwner(empresa.id, userId);
-    } catch (error: any) {
-      console.error('[dot] falha ao verificar a propriedade da empresa:', error?.message || error);
-      isOwner = false;
     }
 
     return {
@@ -146,8 +161,8 @@ export async function resolveDotGate(req: Request): Promise<DotGateResult> {
       empresaId: empresa.id,
       plan,
       userId,
-      isOwner,
-      canManagePermissions: isOwner,
+      isOwner: true,
+      canManagePermissions: true,
     };
   } catch {
     return {
