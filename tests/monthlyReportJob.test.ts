@@ -91,7 +91,7 @@ jobTest('job mensal gera+persiste snapshot e não distribui quando a entrega ext
   const empresa = await seedEmpresa(db, { plan: 'rei', withEmail: true });
   await seedReview(db, empresa, mes);
 
-  const stats = await runMonthlyReportJob(db, mes);
+  const stats = await runMonthlyReportJob(db, mes, true);
   assert.equal(stats.falhas, 0);
   assert.equal(stats.encaminhados, 0);
   assert.ok(stats.snapshots_gerados >= 1, 'snapshot do período precisa ser gerado');
@@ -107,7 +107,7 @@ jobTest('job mensal gera+persiste snapshot e não distribui quando a entrega ext
   assert.equal(destinatarios[0]?.destino, `dono-${empresa.slice(0, 8)}@example.com`);
 
   // Reexecução idempotente: snapshot existente não é regerado nem redistribuído.
-  const again = await runMonthlyReportJob(db, mes);
+  const again = await runMonthlyReportJob(db, mes, true);
   assert.equal(again.falhas, 0);
   assert.equal(again.snapshots_gerados, 0);
   assert.equal(again.distribuicao_desativada, 0);
@@ -124,7 +124,7 @@ jobTest('entrega externa ligada sem n8n: marca distribuição indisponível sem 
     const empresa = await seedEmpresa(db, { plan: 'pro', withEmail: true });
     await seedReview(db, empresa, mes);
 
-    const stats = await runMonthlyReportJob(db, mes);
+    const stats = await runMonthlyReportJob(db, mes, true);
     assert.equal(stats.falhas, 0);
     assert.equal(stats.encaminhados, 0);
     assert.equal(stats.distribuicao_desativada, 0);
@@ -146,11 +146,77 @@ jobTest('empresa sem destinatário configurado e sem usuário com e-mail fica ge
   const empresa = await seedEmpresa(db, { plan: 'ultra', withEmail: false });
   await seedReview(db, empresa, mes);
 
-  const stats = await runMonthlyReportJob(db, mes);
+  const stats = await runMonthlyReportJob(db, mes, true);
   assert.equal(stats.falhas, 0);
   assert.ok(stats.sem_destinatario >= 1);
   const row = await db.get('SELECT status, report_json, destinatarios_json FROM relatorio_envios_mensais WHERE empresa_id = ? AND periodo = ?', [empresa, mes]) as any;
   assert.equal(row.status, 'generated');
   assert.ok(row.report_json);
   assert.deepEqual(JSON.parse(String(row.destinatarios_json)), []);
+});
+
+jobTest('modo automático só roda no dia do aniversário da assinatura', async () => {
+  await setup();
+  const db = getDb();
+  await resetData(db);
+  const mes = '2026-08';
+  const empresa = await seedEmpresa(db, { plan: 'rei', withEmail: true });
+  await seedReview(db, empresa, mes);
+
+  // Primeira passada garante o schema (ainda sem âncora: nada é gerado).
+  await runMonthlyReportJob(db, mes);
+  const hoje = new Date().getUTCDate();
+  const outroDia = hoje === 1 ? 2 : 1;
+  await db.run('UPDATE empresas SET relatorio_dia_assinatura = ? WHERE id = ?', [outroDia, empresa]);
+
+  const fora = await runMonthlyReportJob(db, mes);
+  assert.equal(fora.falhas, 0);
+  assert.equal(fora.snapshots_gerados, 0);
+  assert.ok(fora.pulados >= 1, 'fora do aniversário a empresa é pulada');
+  const semRow = await db.get('SELECT 1 AS n FROM relatorio_envios_mensais WHERE empresa_id = ?', [empresa]);
+  assert.ok(!semRow, 'fora do aniversário nenhuma reserva é criada');
+
+  await db.run('UPDATE empresas SET relatorio_dia_assinatura = ? WHERE id = ?', [hoje, empresa]);
+  const noDia = await runMonthlyReportJob(db, mes);
+  assert.equal(noDia.falhas, 0);
+  assert.ok(noDia.snapshots_gerados >= 1, 'no aniversário o snapshot é gerado');
+  const row = await db.get('SELECT status FROM relatorio_envios_mensais WHERE empresa_id = ? AND periodo = ?', [empresa, mes]) as any;
+  assert.equal(row.status, 'generated');
+});
+
+jobTest('pendência antiga é retomada automaticamente mesmo sem âncora de assinatura', async () => {
+  await setup();
+  const db = getDb();
+  await resetData(db);
+  const mes = '2026-07';
+  const empresa = await seedEmpresa(db, { plan: 'ultra', withEmail: true });
+  await seedReview(db, empresa, mes);
+  await runMonthlyReportJob(db, mes); // garante schema
+
+  const agora = new Date().toISOString();
+  await db.run(
+    `INSERT INTO relatorio_envios_mensais (id, empresa_id, periodo, status, destinatarios_json, created_at, updated_at, tentativas)
+     VALUES (?, ?, ?, 'failed', '[]', ?, ?, 1)`,
+    [crypto.randomUUID(), empresa, mes, agora, agora]
+  );
+
+  const stats = await runMonthlyReportJob(db, '2026-08');
+  assert.equal(stats.falhas, 0);
+  assert.ok(stats.snapshots_gerados >= 1, 'pendência recuperada gera snapshot');
+  const row = await db.get('SELECT status, report_json FROM relatorio_envios_mensais WHERE empresa_id = ? AND periodo = ?', [empresa, mes]) as any;
+  assert.equal(row.status, 'generated');
+  assert.ok(row.report_json, 'snapshot persistido na retomada');
+  const alvo = await db.get('SELECT 1 AS n FROM relatorio_envios_mensais WHERE empresa_id = ? AND periodo = ?', [empresa, '2026-08']);
+  assert.ok(!alvo, 'sem âncora o período-alvo não é gerado sem pendência');
+});
+
+jobTest('empresa legada sem âncora e sem pendência entra em sem_dia_assinatura', async () => {
+  await setup();
+  const db = getDb();
+  await resetData(db);
+  await seedEmpresa(db, { plan: 'ultra', withEmail: true });
+  const stats = await runMonthlyReportJob(db, '2026-08');
+  assert.equal(stats.falhas, 0);
+  assert.equal(stats.snapshots_gerados, 0);
+  assert.ok(stats.sem_dia_assinatura >= 1, 'legado fica visível para acompanhamento/backfill');
 });

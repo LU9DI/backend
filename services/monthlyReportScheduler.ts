@@ -48,6 +48,7 @@ let firstTimer: ReturnType<typeof setTimeout> | null = null;
 let started = false;
 let ticking = false;
 let lastPeriod: string | null = null;
+let lastRunDay: string | null = null;
 let lastRunAt: string | null = null;
 let lastError: string | null = null;
 
@@ -58,6 +59,8 @@ export function getMonthlyReportSchedulerStatus() {
     ticking,
     tick_ms: monthlyReportTickMs(),
     last_period: lastPeriod,
+    last_run_day: lastRunDay,
+    ran_today: lastRunDay === new Date().toISOString().slice(0, 10),
     last_run_at: lastRunAt,
     last_error: lastError,
   };
@@ -65,20 +68,24 @@ export function getMonthlyReportSchedulerStatus() {
 
 /**
  * Um tick do agendador: roda o job mensal para o período alvo no máximo uma vez
- * por processo. Erros não marcam o período como concluído (o próximo tick tenta
- * de novo); sucesso marca, e a próxima execução só ocorre na virada do mês.
+ * por dia UTC. Erros não marcam o dia como concluído (o próximo tick tenta de
+ * novo); sucesso marca, e o job volta a rodar no dia seguinte (ou na virada do
+ * mês, quando o período-alvo muda).
  */
 export async function runMonthlyReportSchedulerTick(deps: SchedulerDeps = {}): Promise<MonthlyReportTickResult> {
   if (!monthlyReportSchedulerEnabled()) return { ran: false, reason: 'disabled' };
   if (ticking) return { ran: false, reason: 'in_progress' };
-  const periodo = monthlyReportPeriodFor(deps.now || new Date());
-  if (lastPeriod === periodo) return { ran: false, reason: 'already_ran', periodo };
+  const now = deps.now || new Date();
+  const periodo = monthlyReportPeriodFor(now);
+  const today = now.toISOString().slice(0, 10);
+  if (lastRunDay === today) return { ran: false, reason: 'already_ran', periodo };
   ticking = true;
   try {
     const db = deps.db || getDb();
     const run = deps.run || runMonthlyReportJob;
     const stats = await run(db, periodo);
     lastPeriod = periodo;
+    lastRunDay = now.toISOString().slice(0, 10);
     lastRunAt = new Date().toISOString();
     lastError = null;
     console.log(

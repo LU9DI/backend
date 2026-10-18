@@ -38,12 +38,27 @@ export async function activatePlan(
   periodEndIso?: string | null
 ) {
   const normalized = normalizePlanDb(planDb);
+  const now = new Date();
   const expira =
     periodEndIso || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
+  // Guarda o dia original da assinatura para a cadência mensal individual.
+  // O COALESCE preserva o aniversário nas renovações subsequentes.
+  try {
+    await db.exec('ALTER TABLE empresas ADD COLUMN IF NOT EXISTS relatorio_dia_assinatura INTEGER');
+  } catch {
+    try {
+      const cols = (await db.all('PRAGMA table_info(empresas)')).map((c: any) => c.name);
+      if (!cols.includes('relatorio_dia_assinatura')) {
+        await db.exec('ALTER TABLE empresas ADD COLUMN relatorio_dia_assinatura INTEGER');
+      }
+    } catch { /* a gravação abaixo reportará a falha se o schema não estiver disponível */ }
+  }
   await db.run(
-    `UPDATE empresas SET status = 'ativo', plan = ?, expira_em = ?, cancel_at_period_end = 0 WHERE id = ?`,
-    [normalized, expira, empresaId]
+    `UPDATE empresas SET status = 'ativo', plan = ?, expira_em = ?, cancel_at_period_end = 0,
+       relatorio_dia_assinatura = COALESCE(relatorio_dia_assinatura, ?)
+     WHERE id = ?`,
+    [normalized, expira, now.getUTCDate(), empresaId]
   );
   if (customerId) {
     await db.run(`UPDATE empresas SET stripe_customer_id = ? WHERE id = ?`, [customerId, empresaId]);

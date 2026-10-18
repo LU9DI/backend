@@ -98,8 +98,8 @@ import {
 } from './services/sentimentBackfill.js';
 
 const BUILD = {
-  version: '1.3.0',
-  marker: 'professional-report-v2',
+  version: '1.4.0',
+  marker: 'monthly-anniversary-v1',
   started_at: new Date().toISOString(),
 };
 

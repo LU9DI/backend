@@ -1,6 +1,6 @@
 /**
  * Agendador in-process do relatório mensal: período alvo (mês UTC anterior),
- * gate de env e idempotência por período com retry em erro.
+ * gate de env e idempotência por dia UTC com retry em erro.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -28,6 +28,7 @@ function fakeStats(periodo: string): MonthlyReportStats {
     sem_destinatario: 0,
     distribuicao_indisponivel: 0,
     distribuicao_desativada: 0,
+    sem_dia_assinatura: 0,
     snapshots_gerados: 0,
     snapshots_recuperados: 0,
   };
@@ -54,7 +55,7 @@ test('agendador ligado por padrão e desligável por MONTHLY_REPORT_SCHEDULER', 
   }
 });
 
-test('tick roda uma vez por período, reporta erro e tenta de novo no próximo tick', async () => {
+test('tick roda no máximo uma vez por dia UTC e propaga erro para retry', async () => {
   delete process.env.MONTHLY_REPORT_SCHEDULER;
   try {
     const calls: string[] = [];
@@ -65,22 +66,27 @@ test('tick roda uma vez por período, reporta erro e tenta de novo no próximo t
     if (first.ran) assert.equal(first.periodo, '2031-04');
     assert.deepEqual(calls, ['2031-04']);
 
-    const second = await runMonthlyReportSchedulerTick({ db: {}, run, now: new Date('2031-05-20T12:00:00Z') });
-    assert.equal(second.ran, false);
-    if (!second.ran) assert.equal(second.reason, 'already_ran');
-    assert.deepEqual(calls, ['2031-04'], 'mesmo período não roda duas vezes no processo');
+    const sameDay = await runMonthlyReportSchedulerTick({ db: {}, run, now: new Date('2031-05-10T22:00:00Z') });
+    assert.equal(sameDay.ran, false);
+    if (!sameDay.ran) assert.equal(sameDay.reason, 'already_ran');
+    assert.deepEqual(calls, ['2031-04'], 'o mesmo dia não roda duas vezes no processo');
+
+    const nextDay = await runMonthlyReportSchedulerTick({ db: {}, run, now: new Date('2031-05-11T12:00:00Z') });
+    assert.equal(nextDay.ran, true);
+    if (nextDay.ran) assert.equal(nextDay.periodo, '2031-04');
+    assert.deepEqual(calls, ['2031-04', '2031-04']);
 
     const failing = await runMonthlyReportSchedulerTick({
       db: {},
       run: async () => { throw new Error('banco fora'); },
-      now: new Date('2031-06-02T12:00:00Z'),
+      now: new Date('2031-05-12T12:00:00Z'),
     });
     assert.equal(failing.ran, false);
     if (!failing.ran) assert.equal(failing.reason, 'error');
 
-    const retry = await runMonthlyReportSchedulerTick({ db: {}, run, now: new Date('2031-06-03T12:00:00Z') });
-    assert.equal(retry.ran, true);
-    if (retry.ran) assert.equal(retry.periodo, '2031-05');
+    const retrySameDay = await runMonthlyReportSchedulerTick({ db: {}, run, now: new Date('2031-05-12T18:00:00Z') });
+    assert.equal(retrySameDay.ran, true, 'erro não marca o dia como concluído');
+    if (retrySameDay.ran) assert.equal(retrySameDay.periodo, '2031-04');
   } finally {
     restoreEnv();
   }

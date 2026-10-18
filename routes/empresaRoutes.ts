@@ -25,6 +25,7 @@ import {
 import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
 import { ensureReviewTreatmentColumns } from '../lib/lgpd.js';
 import { ensureUnidadesSchema } from '../lib/unidades.js';
+import { loadCompanyReviewsCached } from '../services/companyReviewsCache.js';
 
 const APP_URL = process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000';
 
@@ -492,21 +493,14 @@ const PAINEL_RECENTES_LIMIT = 500;
 
 async function loadReviewsSafe(db: any, empresaId: string, limit: number): Promise<any[]> {
   const safeLimit = Math.max(1, Math.min(8000, Math.floor(Number(limit) || 500)));
-  const queries = [
-    `SELECT * FROM reviews WHERE empresa_id = ? ORDER BY createdAt DESC NULLS LAST LIMIT ${safeLimit}`,
-    `SELECT * FROM reviews WHERE empresa_id = ? ORDER BY "createdAt" DESC LIMIT ${safeLimit}`,
-    `SELECT * FROM reviews WHERE empresa_id = ? ORDER BY id DESC LIMIT ${safeLimit}`,
-    `SELECT * FROM reviews WHERE empresa_id = ? LIMIT ${safeLimit}`,
-  ];
-  for (const q of queries) {
-    try {
-      const rows = await db.all(q, [empresaId]);
-      return Array.isArray(rows) ? rows : [];
-    } catch (e: any) {
-      console.warn('painel reviews query fail:', e?.message || e, q.slice(0, 80));
-    }
+  try {
+    // Painel e relatório compartilham o mesmo cache; o limite do plano é aplicado
+    // apenas na visualização.
+    return (await loadCompanyReviewsCached(db, empresaId)).slice(0, safeLimit);
+  } catch (e: any) {
+    console.warn('painel reviews cache/query fail:', e?.message || e);
+    return [];
   }
-  return [];
 }
 
 function emptyPainelPayload(empresa: any, reason?: string) {

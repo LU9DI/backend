@@ -1,13 +1,15 @@
 /**
  * Relatório profissional — JSON-first, determinístico e pronto para canais.
  *
- * O relatório mensal é um entregável independente do painel. A estrutura
- * alimenta e-mail, WhatsApp, SMS/WeChat e a narrativa executiva baseada em evidências.
+ * Painel e relatório mensal compartilham a mesma fonte/cache de avaliações.
+ * O relatório aplica o recorte do período sobre o histórico completo, sem herdar
+ * o limite visual de avaliações recentes do painel.
  */
 import type { Database } from 'sqlite';
 import { planLabel, PLANOS_OFICIAIS } from '../lib/plans.js';
 import { planTemIA, assertEmpresaTokenQuota } from '../lib/quota.js';
 import { aiConfigured, gerarNarrativaRelatorio } from '../groqService.js';
+import { loadCompanyReviewsCached } from './companyReviewsCache.js';
 import { slugify } from '../lib/db.js';
 
 export type ReportChannel = 'email' | 'whatsapp' | 'sms' | 'wechat';
@@ -81,7 +83,6 @@ const PLAN_BENEFITS: Record<string, string[]> = {
     'Prioridades de ação baseadas nas avaliações do período',
     'Links de avaliação exclusivos para cada unidade',
     'Radar estratégico de riscos e tendências',
-    'Oportunidades de crescimento identificadas nos dados',
     'Recomendações executivas priorizadas por evidência e urgência',
     'Suporte prioritário e acesso antecipado a novas funções',
   ],
@@ -241,25 +242,10 @@ export async function buildRelatorioProfissional(
   periodoDate.setUTCMonth(periodoDate.getUTCMonth() - 1);
   const periodoAnterior = periodoDate.toISOString().slice(0, 7);
   async function loadMonthRows(month: string): Promise<Review[]> {
-    const start = month + '-01T00:00:00.000Z';
-    const endDate = new Date(start);
-    endDate.setUTCMonth(endDate.getUTCMonth() + 1);
-    const end = endDate.toISOString();
-    try {
-      return await db.all(
-        'SELECT * FROM reviews WHERE empresa_id = ? AND createdAt >= ? AND createdAt < ? ORDER BY createdAt DESC LIMIT 20000',
-        [empresa.id, start, end],
-      ) as Review[];
-    } catch {
-      try {
-        return await db.all(
-          'SELECT * FROM reviews WHERE empresa_id = ? AND created_at >= ? AND created_at < ? ORDER BY created_at DESC LIMIT 20000',
-          [empresa.id, start, end],
-        ) as Review[];
-      } catch (fallbackError) {
-        throw new Error('Falha ao consultar avaliações usando createdAt e created_at.', { cause: fallbackError });
-      }
-    }
+    // Usa a mesma fonte compartilhada pelo painel. O recorte mensal é aplicado
+    // sobre o cache completo, não sobre as avaliações recentes limitadas na UI.
+    const rows = await loadCompanyReviewsCached(db, empresa.id) as Review[];
+    return rows.filter((row) => dateOf(row).startsWith(month));
   }
   // Limite por mês, não pela soma dos dois meses: um mês movimentado não pode expulsar
   // todo o histórico anterior e produzir uma comparação enganosa.

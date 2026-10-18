@@ -10,6 +10,7 @@ import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
 import { getDb, findEmpresa } from '../lib/db.js';
 import { qualifyLead } from '../services/leadAutomation.js';
+import { invalidateCompanyReviewsCache } from '../services/companyReviewsCache.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import {
   n8nConfigured,
@@ -381,6 +382,7 @@ export function mountN8nRoutes(app: Express) {
          VALUES (?, ?, ?, ?, ?)`,
         [empresa.id, name, rating, comment || null, now]
       );
+      invalidateCompanyReviewsCache(String(empresa.id));
 
       if (rating <= 3) {
         await queueN8nEvent('review.critica', {
