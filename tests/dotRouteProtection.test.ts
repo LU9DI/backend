@@ -9,8 +9,7 @@
  *  - sessão é cookie opaco selado no servidor, vinculado a empresa+usuário,
  *    com expiração, revogação e invalidação na redefinição do PIN;
  *  - mutações administrativas exigem o cabeçalho X-Dot-Admin (anti-CSRF);
- *  - execução de ações exige a sessão; ferramentas de leitura continuam
- *    acessíveis com permissão granular (produto preservado);
+ *  - funcionários são bloqueados em todas as rotas do Dot, inclusive leitura;
  *  - provisionamento de proprietário é exclusivo do admin da plataforma,
  *    validado contra o banco e auditado.
  */
@@ -179,24 +178,28 @@ after(() => {
   }
 });
 
-describe('Propriedade: administração é exclusiva do proprietário', () => {
-  it('funcionário com papel padrão não administra; proprietário exige cabeçalho e sessão', async () => {
+describe('Propriedade: todo o Filtra Dot é exclusivo do proprietário', () => {
+  it('funcionário não acessa leituras nem mutações; proprietário exige cabeçalho e sessão', async () => {
     const ownerTok = tokenFor(ownerA, empresaA);
     const empTok = tokenFor(employeeA, empresaA, 'empresa');
 
-    // Regressão do furo original: qualquer usuário tinha canManagePermissions.
+    // Funcionários não podem ler nem alterar dados do Dot, mesmo com token válido.
+    const employeeStatus = await request('GET', '/api/dot/status', { token: empTok });
+    assert.equal(employeeStatus.status, 403);
+    assert.match(employeeStatus.data.error, /proprietário/i);
+    const employeeDecisions = await request('GET', '/api/dot/decisions', { token: empTok });
+    assert.equal(employeeDecisions.status, 403);
     const employeePut = await request('PUT', '/api/dot/agent/permissions', {
       token: empTok,
       body: PERMISSION_BODY,
       headers: { 'X-Dot-Admin': '1' },
     });
     assert.equal(employeePut.status, 403);
-    assert.equal(employeePut.data.code, 'DOT_PERMISSION_ADMIN_REQUIRED');
+    assert.match(employeePut.data.error, /proprietário/i);
 
-    // Listagem continua disponível para o funcionário (can_manage=false).
-    const employeeGet = await request('GET', '/api/dot/agent/permissions', { token: empTok });
-    assert.equal(employeeGet.status, 200);
-    assert.equal(employeeGet.data.can_manage, false);
+    const ownerStatus = await request('GET', '/api/dot/status', { token: ownerTok });
+    assert.equal(ownerStatus.status, 200);
+    assert.equal(ownerStatus.data.access, true);
 
     // Proprietário sem cabeçalho → recusado.
     const noHeader = await request('PUT', '/api/dot/agent/permissions', {
@@ -215,12 +218,10 @@ describe('Propriedade: administração é exclusiva do proprietário', () => {
     assert.equal(noSession.status, 403);
     assert.equal(noSession.data.code, 'DOT_ADMIN_SESSION_REQUIRED');
 
-    // Estado visto pelo funcionário não expõe dados administrativos.
+    // O endpoint administrativo também bloqueia completamente funcionários.
     const stateEmp = await request('GET', '/api/dot/admin/state', { token: empTok });
-    assert.equal(stateEmp.status, 200);
-    assert.equal(stateEmp.data.is_owner, false);
-    assert.equal(stateEmp.data.pin_configured, null);
-    assert.equal(stateEmp.data.session_active, false);
+    assert.equal(stateEmp.status, 403);
+    assert.match(stateEmp.data.error, /proprietário/i);
   });
 });
 
@@ -240,10 +241,10 @@ describe('PIN administrativo: cadastro somente pelo proprietário', () => {
       headers: { 'X-Dot-Admin': '1' },
     });
     assert.equal(empSet.status, 403);
-    assert.equal(empSet.data.code, 'DOT_OWNER_REQUIRED');
+    assert.match(empSet.data.error, /proprietário/i);
     const empUnlock = await unlock(empTok, PIN_INICIAL);
     assert.equal(empUnlock.status, 403);
-    assert.equal(empUnlock.data.code, 'DOT_OWNER_REQUIRED');
+    assert.match(empUnlock.data.error, /proprietário/i);
 
     // Cabeçalho obrigatório.
     const noHeader = await request('POST', '/api/dot/admin/pin', {
