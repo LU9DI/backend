@@ -10,6 +10,7 @@ import { createDecisionsForEvents, listDotDecisions, updateDotDecision } from '.
 import { prepareDotActionFromDecision, approveDotAction, executeDotAction, listDotActions } from '../services/dotActionQueue.js';
 import { listDotFollowUps, completeDotFollowUp } from '../services/dotFollowUp.js';
 import { resumeMissionAfterApprovedExecution } from '../services/dotAgentMissionRunner.js';
+import { DotAdminError, requireDotAdminSession } from '../services/dotAdminSecurity.js';
 import { planLabel, normalizePlanAlias } from '../lib/plans.js';
 import { resolveDotGate } from '../services/dotAccessGate.js';
 import { getDotSchedulerStatus } from '../services/dotScheduler.js';
@@ -440,6 +441,18 @@ export function mountDotRoutes(app: Express) {
     const access = await resolveDotAccess(req);
     if (!access.allowed || !access.empresaId) return deny(res, access);
     if (!(await requireMutationPermission(res, access, 'filtra', 'execute', { route: '/api/dot/actions/:id/run' }))) return;
+    // Execução é a operação mais sensível do Dot: além da permissão granular,
+    // exige a sessão administrativa obtida com o PIN da empresa.
+    try {
+      await requireDotAdminSession(req, access.empresaId, access.userId);
+    } catch (error) {
+      const status = error instanceof DotAdminError ? error.status : 500;
+      return res.status(status).json({
+        ok: false,
+        error: error instanceof Error ? error.message : 'Sessão administrativa do Dot necessária.',
+        code: error instanceof DotAdminError ? error.code : 'DOT_ADMIN_FAILURE',
+      });
+    }
     const actionId = Number(req.params.id);
     const result = await executeDotAction(access.empresaId, actionId, access.userId || null);
     if (!result.ok) return res.status(409).json(result);

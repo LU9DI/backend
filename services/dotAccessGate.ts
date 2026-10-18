@@ -4,6 +4,7 @@ import { findEmpresa } from '../lib/db.js';
 import { empresaTemAcesso } from './billingService.js';
 import { normalizePlanAlias } from '../lib/plans.js';
 import { ensureDotInternalPermissionBaseline } from './dotAccessControl.js';
+import { isEmpresaOwner } from '../lib/empresaOwnership.js';
 
 /**
  * Gate único de acesso ao Filtra Dot.
@@ -20,7 +21,13 @@ import { ensureDotInternalPermissionBaseline } from './dotAccessControl.js';
  *     benefício que a matriz de planos não declara.
  *
  * O gate responde apenas "pode entrar no Dot?"; permissões granulares
- * (ler/analisar/criar/executar) continuam em `dotAccessControl`.
+ * (ler/analisar/criar/executar) continuam em `dotAccessControl` e a
+ * administração (permissões/PIN/execução) exige a sessão administrativa
+ * (`dotAdminSecurity`).
+ *
+ * A PROPRIEDADE da empresa vem da tabela `empresa_owners` (provisionada no
+ * cadastro ou por admin da plataforma) — jamais do `role` do token. O papel
+ * padrão `empresa` não concede administração a funcionários.
  */
 
 export type DotGateResult = {
@@ -29,6 +36,7 @@ export type DotGateResult = {
   empresaId?: string;
   plan?: string;
   userId: string | null;
+  isOwner: boolean;
   canManagePermissions: boolean;
   reason?: string;
 };
@@ -36,7 +44,6 @@ export type DotGateResult = {
 // Aliases ('corp', 'corporate') são normalizados para 'corporativo' antes da
 // checagem (`normalizePlanAlias`), mantendo a matriz canônica Rei + Corporativo.
 const DOT_ALLOWED_PLANS = ['rei', 'corporativo'];
-const DOT_MANAGER_ROLES = ['empresa', 'owner', 'empresa_admin', 'admin_empresa'];
 
 export function dotDemoEnabled(): boolean {
   return process.env.DOT_DEMO_MODE === '1' && process.env.NODE_ENV !== 'production';
@@ -47,9 +54,23 @@ export async function resolveDotGate(req: Request): Promise<DotGateResult> {
 
   if (!token) {
     if (dotDemoEnabled()) {
-      return { allowed: true, demo: true, plan: 'rei', userId: null, canManagePermissions: false };
+      return {
+        allowed: true,
+        demo: true,
+        plan: 'rei',
+        userId: null,
+        isOwner: false,
+        canManagePermissions: false,
+      };
     }
-    return { allowed: false, demo: false, userId: null, canManagePermissions: false, reason: 'Autenticação necessária.' };
+    return {
+      allowed: false,
+      demo: false,
+      userId: null,
+      isOwner: false,
+      canManagePermissions: false,
+      reason: 'Autenticação necessária.',
+    };
   }
 
   try {
@@ -61,6 +82,7 @@ export async function resolveDotGate(req: Request): Promise<DotGateResult> {
         allowed: false,
         demo: false,
         userId,
+        isOwner: false,
         canManagePermissions: false,
         reason: 'Conta admin não possui acesso ao Dot de empresa.',
       };
@@ -68,7 +90,14 @@ export async function resolveDotGate(req: Request): Promise<DotGateResult> {
 
     const empresa = await findEmpresa(payload.empresa_id);
     if (!empresa || !empresaTemAcesso(empresa)) {
-      return { allowed: false, demo: false, userId, canManagePermissions: false, reason: 'Assinatura/trial inativo.' };
+      return {
+        allowed: false,
+        demo: false,
+        userId,
+        isOwner: false,
+        canManagePermissions: false,
+        reason: 'Assinatura/trial inativo.',
+      };
     }
 
     const plan = normalizePlanAlias(empresa.plan);
@@ -79,6 +108,7 @@ export async function resolveDotGate(req: Request): Promise<DotGateResult> {
         empresaId: empresa.id,
         plan,
         userId,
+        isOwner: false,
         canManagePermissions: false,
         reason: 'O Filtra Dot está em acesso antecipado para os planos Rei e Corporativo.',
       };
@@ -94,21 +124,39 @@ export async function resolveDotGate(req: Request): Promise<DotGateResult> {
         empresaId: empresa.id,
         plan,
         userId,
+        isOwner: false,
         canManagePermissions: false,
         reason: 'Não foi possível inicializar as permissões internas do DOT.',
       };
     }
 
-    const role = String(payload.role || '').toLowerCase();
+    // Propriedade resolvida no servidor (tabela empresa_owners). Falha na
+    // verificação NUNCA promove: o bit administrativo fica falso (fail-closed).
+    let isOwner = false;
+    try {
+      isOwner = await isEmpresaOwner(empresa.id, userId);
+    } catch (error: any) {
+      console.error('[dot] falha ao verificar a propriedade da empresa:', error?.message || error);
+      isOwner = false;
+    }
+
     return {
       allowed: true,
       demo: false,
       empresaId: empresa.id,
       plan,
       userId,
-      canManagePermissions: DOT_MANAGER_ROLES.includes(role),
+      isOwner,
+      canManagePermissions: isOwner,
     };
   } catch {
-    return { allowed: false, demo: false, userId: null, canManagePermissions: false, reason: 'Token inválido ou expirado.' };
+    return {
+      allowed: false,
+      demo: false,
+      userId: null,
+      isOwner: false,
+      canManagePermissions: false,
+      reason: 'Token inválido ou expirado.',
+    };
   }
 }

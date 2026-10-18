@@ -107,6 +107,30 @@ export function listDotTools(): Array<Omit<DotToolDefinition, 'execute'>> {
   return Object.values(tools).map(({ execute, ...definition }) => definition);
 }
 
+export function getDotToolDefinition(toolId: string): Omit<DotToolDefinition, 'execute'> | null {
+  const definition = tools[String(toolId || '')];
+  if (!definition) return null;
+  const { execute, ...rest } = definition;
+  return rest;
+}
+
+/**
+ * Ferramentas com efeito potencialmente relevante (execução, envio externo ou
+ * risco médio/alto) exigem, além da permissão granular, a sessão administrativa
+ * do Dot obtida com o PIN da empresa. Hoje todas as ferramentas registradas são
+ * de leitura/baixa criticidade — a classificação existe para o registro futuro.
+ */
+export function dotToolRequiresAdminSession(
+  definition: Pick<DotToolDefinition, 'operation' | 'risk'>,
+): boolean {
+  return (
+    definition.operation === 'execute' ||
+    definition.operation === 'external_send' ||
+    definition.risk === 'medium' ||
+    definition.risk === 'high'
+  );
+}
+
 export async function invokeDotTool(input: {
   empresaId: string;
   toolId: string;

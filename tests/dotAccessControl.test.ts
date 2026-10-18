@@ -142,7 +142,7 @@ accessTest('Controle de acesso DOT: revogação individual vence a concessão da
   assert.equal(await dotAccessAllowed(empresa, 'operations', 'execute', null), false);
 });
 
-accessTest('Controle de acesso DOT: baseline interno libera o núcleo, preserva revogações e não abre conectores externos', async () => {
+accessTest('Controle de acesso DOT: baseline interno é mínimo, preserva revogações e não abre conectores externos', async () => {
   await reset();
   const empresa = crypto.randomUUID();
 
@@ -151,11 +151,17 @@ accessTest('Controle de acesso DOT: baseline interno libera o núcleo, preserva 
 
   await ensureDotInternalPermissionBaseline(empresa);
 
-  // Núcleo interno (filtra/operations) liberado sem configuração manual.
+  // Núcleo de leitura/análise liberado sem configuração manual.
   assert.equal(await dotAccessAllowed(empresa, 'filtra', 'analyze', null), true);
-  assert.equal(await dotAccessAllowed(empresa, 'filtra', 'update', null), true);
   assert.equal(await dotAccessAllowed(empresa, 'operations', 'read', null), true);
-  assert.equal(await dotAccessAllowed(empresa, 'operations', 'execute', null), true);
+
+  // Operações com consequência NÃO são baseline: exigem concessão explícita
+  // (ou a autoridade plena do proprietário verificado da empresa).
+  assert.equal(await dotAccessAllowed(empresa, 'filtra', 'create', null), false);
+  assert.equal(await dotAccessAllowed(empresa, 'filtra', 'update', null), false);
+  assert.equal(await dotAccessAllowed(empresa, 'filtra', 'execute', null), false);
+  assert.equal(await dotAccessAllowed(empresa, 'operations', 'update', null), false);
+  assert.equal(await dotAccessAllowed(empresa, 'operations', 'execute', null), false);
 
   // Revogação preservada (ON CONFLICT DO NOTHING).
   assert.equal(await dotAccessAllowed(empresa, 'filtra', 'read', null), false, 'baseline não pode reativar permissão revogada pelo cliente');
@@ -168,4 +174,40 @@ accessTest('Controle de acesso DOT: baseline interno libera o núcleo, preserva 
   // Reexecução é idempotente e não reabre a revogação.
   await ensureDotInternalPermissionBaseline(empresa);
   assert.equal(await dotAccessAllowed(empresa, 'filtra', 'read', null), false);
+});
+
+accessTest('Controle de acesso DOT: baseline legado do sistema é revogado e concessões explícitas permanecem', async () => {
+  await reset();
+  const empresa = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  // Linhas do baseline ANTIGO (criadas pelo sistema, granted_by NULL).
+  for (const [resource, action] of [
+    ['filtra', 'update'],
+    ['filtra', 'execute'],
+    ['operations', 'execute'],
+  ] as const) {
+    await getDb().run(
+      `INSERT INTO dot_agent_permissions
+        (empresa_id,user_id,resource,action,granted,granted_by,granted_at,revoked_at,created_at,updated_at)
+        VALUES (?,NULL,?,?,1,NULL,?,NULL,?,?)`,
+      [empresa, resource, action, now, now, now],
+    );
+  }
+  // Concessão explícita de um responsável (deve permanecer intacta).
+  await setDotPermission(empresa, { resource: 'operations', action: 'update', granted: true, grantedBy: 'admin-explicito' });
+
+  await ensureDotInternalPermissionBaseline(empresa);
+
+  assert.equal(await dotAccessAllowed(empresa, 'filtra', 'update', null), false, 'operação legada do sistema é revogada');
+  assert.equal(await dotAccessAllowed(empresa, 'filtra', 'execute', null), false);
+  assert.equal(await dotAccessAllowed(empresa, 'operations', 'execute', null), false);
+  assert.equal(await dotAccessAllowed(empresa, 'operations', 'update', null), true, 'concessão explícita permanece');
+
+  // A revogação fica registrada na auditoria do Dot.
+  const audit = await getDb().all(
+    'SELECT reason FROM dot_access_audit WHERE empresa_id = ? AND reason = ? ORDER BY id DESC LIMIT 5',
+    [empresa, 'permission_revoked'],
+  );
+  assert.ok(audit.length >= 3, 'cada revogação de baseline legado é auditada');
 });

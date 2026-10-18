@@ -55,6 +55,10 @@ import { mountDotRoutes } from './routes/dotRoutes.js';
 import { mountDotAccessRoutes } from './routes/dotAccessRoutes.js';
 import { mountDotAgentRoutes } from './routes/dotAgentRoutes.js';
 import { mountDotAgentMissionRoutes } from './routes/dotAgentMissionRoutes.js';
+import { mountDotAdminRoutes } from './routes/dotAdminRoutes.js';
+import { mountAdminOwnerRoutes } from './routes/adminOwnerRoutes.js';
+import { ensureEmpresaOwnerSchema } from './lib/empresaOwnership.js';
+import { ensureDotAdminSecuritySchema } from './services/dotAdminSecurity.js';
 import { ensureDotAccessSchema } from './services/dotAccessControl.js';
 import { ensureDotAgentSchema } from './services/dotAgent.js';
 import { ensureMissionTables } from './services/dotAgentMissions.js';
@@ -380,6 +384,12 @@ export async function startServer() {
   } catch (e) {
     console.warn('dot schema:', e);
   }
+  try {
+    await ensureEmpresaOwnerSchema(getDb());
+    await ensureDotAdminSecuritySchema();
+  } catch (e) {
+    console.warn('dot admin schema:', e);
+  }
 
   await runSentimentBackfillOnBoot();
   await runLgpdSweepOnBoot();
@@ -392,6 +402,7 @@ export async function startServer() {
   mountReviewRoutes(app);
   mountDiagnosticRoutes(app);
   mountAdminDashboardRoutes(app);
+  mountAdminOwnerRoutes(app);
   mountAdminFollowupRoutes(app);
   mountAdminTecnicoRoutes(app);
   mountAdminNegocioRoutes(app);
@@ -420,6 +431,7 @@ export async function startServer() {
     mountDotAccessRoutes(app);
     mountDotAgentRoutes(app);
     mountDotAgentMissionRoutes(app);
+    mountDotAdminRoutes(app);
     startDotMonitorScheduler();
     startDotAgentWorker();
     console.log('[dot] Filtra Dot habilitado: rotas + monitor + agente em background.');

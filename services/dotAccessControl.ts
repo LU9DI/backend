@@ -1,4 +1,5 @@
 import { getDb } from '../lib/db.js';
+import { isEmpresaOwner } from '../lib/empresaOwnership.js';
 
 export type DotAccessAction = 'read' | 'analyze' | 'create' | 'update' | 'execute' | 'external_send';
 export type DotAccessResource = 'filtra' | 'customers' | 'sales' | 'marketing' | 'operations' | 'finance' | 'hr' | 'crm' | 'documents' | 'calendar' | 'email' | 'whatsapp' | 'erp' | 'other';
@@ -20,13 +21,27 @@ export async function ensureDotAccessSchema() {
   await db.exec('CREATE INDEX IF NOT EXISTS idx_dot_access_audit_empresa ON dot_access_audit(empresa_id, created_at)');
 }
 
+/**
+ * Baseline interno (mínimo): conversar/consultar/analisar. Operações com
+ * consequência (criar, atualizar, executar) NÃO são concedidas por padrão —
+ * exigem concessão explícita de um responsável (ou são cobertas pela
+ * autoridade plena do proprietário verificado da empresa).
+ *
+ * O endurecimento é aplicado também em empresas já existentes: as linhas
+ * antigas criadas pelo sistema (granted_by IS NULL) das operações removidas
+ * são revogadas de forma idempotente, preservando concessões explícitas.
+ */
 const internalBaseline: Array<{ resource: DotAccessResource; action: DotAccessAction }> = [
   { resource: 'filtra', action: 'read' },
   { resource: 'filtra', action: 'analyze' },
+  { resource: 'operations', action: 'read' },
+];
+
+/** Operações que deixaram de ser baseline (migração idempotente abaixo). */
+const revokedBaseline: Array<{ resource: DotAccessResource; action: DotAccessAction }> = [
   { resource: 'filtra', action: 'create' },
   { resource: 'filtra', action: 'update' },
   { resource: 'filtra', action: 'execute' },
-  { resource: 'operations', action: 'read' },
   { resource: 'operations', action: 'update' },
   { resource: 'operations', action: 'execute' },
 ];
@@ -50,6 +65,23 @@ export async function ensureDotInternalPermissionBaseline(empresaId: string) {
         ON CONFLICT DO NOTHING`,
       [empresaId, permission.resource, permission.action, now, now, now],
     );
+  }
+  // Migração idempotente de endurecimento: revoga as operações que o baseline
+  // antigo concedia para toda a empresa (linhas do sistema, granted_by IS NULL).
+  // Concessões explícitas (granted_by preenchido) permanecem intactas.
+  for (const permission of revokedBaseline) {
+    const current = await db.get(
+      `SELECT id FROM dot_agent_permissions
+        WHERE empresa_id=? AND user_id IS NULL AND resource=? AND action=? AND granted=1 AND granted_by IS NULL
+        LIMIT 1`,
+      [empresaId, permission.resource, permission.action],
+    );
+    if (!current) continue;
+    await db.run(
+      'UPDATE dot_agent_permissions SET granted=0, revoked_at=?, updated_at=? WHERE id=?',
+      [now, now, current.id],
+    );
+    await auditChange(empresaId, 'system:baseline', null, permission.resource, permission.action, false);
   }
   internalBaselineReady.add(empresaId);
 }
@@ -142,6 +174,22 @@ export function isDotPermissionActive(row: { granted?: unknown; revoked_at?: unk
 
 export async function dotAccessAllowed(empresaId: string, resource: DotAccessResource, action: DotAccessAction, userId?: string | null, context?: unknown) {
   await ensureDotAccessSchema();
+  // O proprietário verificado da empresa tem autoridade plena sobre o Dot da
+  // própria empresa: a propriedade é o vínculo autoritativo (tabela
+  // empresa_owners), não uma permissão concedível/revogável. Falha na consulta
+  // segue para a checagem normal (que também falha fechada).
+  if (userId) {
+    let isOwner = false;
+    try {
+      isOwner = await isEmpresaOwner(empresaId, userId);
+    } catch {
+      isOwner = false;
+    }
+    if (isOwner) {
+      await recordAccess(empresaId, userId, resource, action, true, 'empresa_owner', context);
+      return true;
+    }
+  }
   const db = getDb();
   // Resolve a linha MAIS ESPECÍFICA primeiro — inclusive negativas explícitas.
   // Filtrar granted=1 antes da ordenação deixaria uma concessão da empresa

@@ -40,10 +40,20 @@ function tokenFor(empresa: string) {
   });
 }
 
-async function api(method: string, pathName: string, body?: unknown, empresa = empresaId) {
+async function api(
+  method: string,
+  pathName: string,
+  body?: unknown,
+  empresa = empresaId,
+  extraHeaders: Record<string, string> = {},
+) {
   const res = await fetch(`${baseUrl}${pathName}`, {
     method,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenFor(empresa)}` },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${tokenFor(empresa)}`,
+      ...extraHeaders,
+    },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const data = await res.json().catch(() => ({}));
@@ -86,6 +96,7 @@ before(async () => {
   const { initDB, getDb: db } = await import('../lib/db.js');
   const { signAccessToken: sign } = await import('../lib/auth.js');
   const { mountDotRoutes } = await import('../routes/dotRoutes.js');
+  const { mountDotAdminRoutes } = await import('../routes/dotAdminRoutes.js');
   const { mountDotAgentRoutes } = await import('../routes/dotAgentRoutes.js');
   const { mountDotAgentMissionRoutes } = await import('../routes/dotAgentMissionRoutes.js');
   const { ensureDotAccessSchema } = await import('../services/dotAccessControl.js');
@@ -93,11 +104,15 @@ before(async () => {
   const { ensureMissionTables, listDotAgentMissions } = await import('../services/dotAgentMissions.js');
   const { listDotDecisions } = await import('../services/dotDecision.js');
   const { listDotActions } = await import('../services/dotActionQueue.js');
+  const { ensureEmpresaOwnerSchema, provisionEmpresaOwner } = await import('../lib/empresaOwnership.js');
+  const { ensureDotAdminSecuritySchema, setDotAdminPinInitial } = await import('../services/dotAdminSecurity.js');
 
   await initDB();
   await ensureDotAccessSchema();
   await ensureDotAgentSchema();
   await ensureMissionTables();
+  await ensureEmpresaOwnerSchema();
+  await ensureDotAdminSecuritySchema();
   signAccessToken = sign;
   getDb = db;
 
@@ -107,6 +122,7 @@ before(async () => {
   mountDotRoutes(e);
   mountDotAgentRoutes(e);
   mountDotAgentMissionRoutes(e);
+  mountDotAdminRoutes(e);
 
   await new Promise<void>((resolve) => {
     server = e.listen(0, () => {
@@ -117,6 +133,16 @@ before(async () => {
 
   await seedEmpresa(empresaId);
   await seedEmpresa(outraEmpresaId);
+
+  // Proprietário provisionado + PIN administrativo: a execução aprovada exige a
+  // sessão real emitida pelo endpoint com o PIN (sem atalhos no teste).
+  const ownerUserId = `user-${empresaId.slice(0, 8)}`;
+  await getDb().run(
+    'INSERT INTO usuarios (id, cnpj, nome_funcionario, empresa_id, senha_hash) VALUES (?,?,?,?,?)',
+    [ownerUserId, '00000000000000', 'Responsável Teste', empresaId, 'hash-de-teste'],
+  );
+  await provisionEmpresaOwner(empresaId, ownerUserId, { source: 'test' });
+  await setDotAdminPinInitial(empresaId, ownerUserId, '482915');
   for (const [resource, action] of [
     ['filtra', 'create'],
     ['filtra', 'update'],
@@ -206,8 +232,32 @@ describe('A1 (HTTP): aprovar → executar → missão retomada e concluída', ()
     const actionId = Number(mission.approval_action?.id);
     assert.ok(actionId > 0);
 
-    // Executar sem aprovar é recusado pela API.
-    const runBeforeApproval = await api('POST', `/api/dot/actions/${actionId}/run`);
+    // Execução sem sessão administrativa é negada ANTES de qualquer efeito.
+    const noHeader = await api('POST', `/api/dot/actions/${actionId}/run`);
+    assert.equal(noHeader.status, 403);
+    assert.equal(noHeader.data.code, 'DOT_ADMIN_HEADER_REQUIRED');
+    const noSession = await api('POST', `/api/dot/actions/${actionId}/run`, {}, empresaId, { 'X-Dot-Admin': '1' });
+    assert.equal(noSession.status, 403);
+    assert.equal(noSession.data.code, 'DOT_ADMIN_SESSION_REQUIRED');
+
+    // Desbloqueio real: PIN administrativo → sessão (cookie selado no servidor).
+    const unlock = await fetch(`${baseUrl}/api/dot/admin/session`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${tokenFor(empresaId)}`,
+        'X-Dot-Admin': '1',
+      },
+      body: JSON.stringify({ pin: '482915' }),
+    });
+    const unlockText = await unlock.text();
+    assert.equal(unlock.status, 200, unlockText);
+    const adminCookie = (unlock.headers.get('set-cookie') || '').split(';')[0];
+    assert.match(adminCookie, /dot_admin_session=/);
+    const adminHeaders = { 'X-Dot-Admin': '1', Cookie: adminCookie };
+
+    // Executar sem aprovar é recusado pela API (com a sessão já ativa).
+    const runBeforeApproval = await api('POST', `/api/dot/actions/${actionId}/run`, {}, empresaId, adminHeaders);
     assert.equal(runBeforeApproval.status, 409);
     assert.equal(runBeforeApproval.data.ok, false);
 
@@ -222,7 +272,7 @@ describe('A1 (HTTP): aprovar → executar → missão retomada e concluída', ()
     assert.equal(String(missionAfterApproval?.status), 'waiting_approval');
 
     // Execução real pelo gateway: a missão vinculada é retomada e concluída.
-    const run = await api('POST', `/api/dot/actions/${actionId}/run`);
+    const run = await api('POST', `/api/dot/actions/${actionId}/run`, {}, empresaId, adminHeaders);
     assert.equal(run.status, 200, JSON.stringify(run.data));
     assert.equal(run.data.ok, true);
     assert.equal(run.data.external_side_effect, false);

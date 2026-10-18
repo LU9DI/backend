@@ -102,3 +102,64 @@ test('DOT mission approval is a server-side execution barrier', () => {
   // Pausada só volta a andar por retomada explícita.
   assert.match(missions, /Missão pausada: retome a missão explicitamente antes de avançar/);
 });
+
+test('DOT ownership comes from empresa_owners, never from role claims', () => {
+  const gate = read('services/dotAccessGate.ts');
+  const access = read('services/dotAccessControl.ts');
+  // A decisão de administração não pode mais citar papéis.
+  assert.doesNotMatch(gate, /DOT_MANAGER_ROLES/);
+  assert.match(gate, /isEmpresaOwner/);
+  assert.match(gate, /canManagePermissions: isOwner/);
+  // A propriedade vale também nas checagens granulares (autoridade plena do dono).
+  assert.match(access, /isEmpresaOwner/);
+  assert.match(access, /empresa_owner/);
+});
+
+test('DOT PIN: scrypt+salt, lockout persistido enquanto a sessão é vinculada e versionada', () => {
+  const pin = read('services/dotAdminSecurity.ts');
+  // Hash forte com salt individual e comparação em tempo constante.
+  assert.match(pin, /scrypt/);
+  assert.match(pin, /crypto\.randomBytes\(16\)/);
+  assert.match(pin, /timingSafeEqual/);
+  // Tentativas em armazenamento persistente (multi-instância), com bloqueio temporário.
+  assert.match(pin, /dot_admin_pin_attempts/);
+  assert.match(pin, /DOT_ADMIN_LOCKED/);
+  assert.match(pin, /PIN_DELAYS_MS/);
+  // Sessão: token opaco com hash persistido, vínculo empresa+usuário e versão do PIN.
+  assert.match(pin, /dot_admin_sessions/);
+  assert.match(pin, /token_hash/);
+  assert.match(pin, /String\(row\.empresa_id\) !== String\(empresaId\)/);
+  assert.match(pin, /String\(row\.user_id\) !== String\(userId\)/);
+  assert.match(pin, /pin_version/);
+  // Redefinir o PIN derruba as sessões anteriores.
+  assert.match(pin, /revokeAllDotAdminSessionsForEmpresa/);
+  // Cabeçalho anti-CSRF exigido nas operações protegidas.
+  assert.match(pin, /DOT_ADMIN_HEADER/);
+});
+
+test('DOT admin routes: only owner manages; header+sessão em toda mutação protegida', () => {
+  const admin = read('routes/dotAdminRoutes.ts');
+  assert.match(admin, /DOT_OWNER_REQUIRED/);
+  assert.match(admin, /DOT_ADMIN_HEADER_REQUIRED/);
+  assert.match(admin, /getEmpresaOwnerUserId/);
+  const accessRoutes = read('routes/dotAccessRoutes.ts');
+  assert.match(accessRoutes, /requireDotAdminSession\(req, a\.empresaId, a\.userId\)/);
+  const routes = read('routes/dotRoutes.ts');
+  assert.match(routes, /requireDotAdminSession\(req, access\.empresaId, access\.userId\)/);
+  // Nenhuma decisão administrativa depende de papel vindo do token.
+  assert.doesNotMatch(admin, /role\s*===/);
+  assert.doesNotMatch(accessRoutes, /role\s*===/);
+});
+
+test('DOT owner provisioning is validated against the DB, audited and admin-only', () => {
+  const owner = read('lib/empresaOwnership.ts');
+  assert.match(owner, /empresa_owners/);
+  assert.match(owner, /provisionEmpresaOwner/);
+  assert.match(owner, /não pertence a esta empresa/);
+  assert.match(owner, /empresa\.owner_set/);
+  const adminRoutes = read('routes/adminOwnerRoutes.ts');
+  assert.match(adminRoutes, /isAdminUser/);
+  assert.match(adminRoutes, /provisionEmpresaOwner/);
+  const trial = read('services/trialService.ts');
+  assert.match(trial, /provisionEmpresaOwner\(id, usuarioId, \{ source: 'signup' \}\)/);
+});

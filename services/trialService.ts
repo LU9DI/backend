@@ -8,6 +8,7 @@ import type { Database } from 'sqlite';
 import type { Response } from 'express';
 import { getDb, slugify, slugUnico } from '../lib/db.js';
 import { createUsuarioForEmpresa } from '../passwordResetRoutes.js';
+import { provisionEmpresaOwner } from '../lib/empresaOwnership.js';
 import { normalizarWhatsapp } from '../lib/whatsapp.js';
 import { notificarTrialAtivado } from '../lib/notifications.js';
 import { setAuthCookie, signAccessToken } from '../lib/auth.js';
@@ -145,6 +146,20 @@ export async function ativarTrial(input: TrialInput, db: Database = getDb(), res
     try { await db.run('DELETE FROM trial_registrations WHERE email = ?', [email]); } catch { /* */ }
     if (/e-mail já está em uso|email already/i.test(String(e?.message || ''))) throw new TrialConflictError('Este e-mail já está cadastrado.');
     throw new TrialValidationError(e?.message || 'Falha ao criar usuário.');
+  }
+
+  // O usuário criado junto com a empresa no próprio cadastro é o proprietário
+  // legítimo: o vínculo nasce desta operação, não de um papel informado pelo
+  // cliente. Sem proprietário provisionado, a administração do Dot nega por
+  // padrão (fail-closed) — por isso a falha aqui desfaz a criação parcial.
+  try {
+    await provisionEmpresaOwner(id, usuarioId, { source: 'signup' });
+  } catch (e: any) {
+    console.error('[trial] owner:', e?.message || e);
+    try { await db.run('DELETE FROM usuarios WHERE id = ?', [usuarioId]); } catch { /* */ }
+    try { await db.run('DELETE FROM empresas WHERE id = ?', [id]); } catch { /* */ }
+    try { await db.run('DELETE FROM trial_registrations WHERE email = ?', [email]); } catch { /* */ }
+    throw new TrialValidationError('Não foi possível provisionar o responsável da conta. Tente novamente.');
   }
 
   const usuario = (await db.get(`SELECT id, nome_funcionario, empresa_id FROM usuarios WHERE email = ? LIMIT 1`, [email])) || (await db.get(`SELECT id, nome_funcionario, empresa_id FROM usuarios WHERE empresa_id = ? LIMIT 1`, [id])) || (await db.get(`SELECT id, nome_funcionario, empresa_id FROM usuarios WHERE id = ?`, [usuarioId]));

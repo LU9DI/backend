@@ -20,7 +20,7 @@ const isProd = isProductionRuntime();
 export { signAccessToken, verifyAccessToken };
 export type { JwtPayload };
 
-function cookieBaseOptions() {
+export function cookieBaseOptions() {
   const domain = process.env.COOKIE_DOMAIN?.trim() || undefined;
   return {
     httpOnly: true,
