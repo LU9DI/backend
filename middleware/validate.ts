@@ -84,7 +84,7 @@ export const schemaReview: Schema = {
   name: { required: false, type: 'string', max: 100 }, rating: { required: true, type: 'number', integer: true, min: 1, max: 5, message: 'Rating deve ser inteiro entre 1 e 5.' },
   comment: { required: false, type: 'string', max: 500, custom: (v, body) => Number(body.rating) <= 3 && !String(v ?? '').trim() ? 'Comentário obrigatório para notas ≤ 3.' : null },
   client_whatsapp: { required: false, type: 'string', max: 20, custom: (v, body) => { if (Number(body.rating) > 3) return null; return String(v ?? body.whatsapp ?? '').replace(/\D/g, '').length < 8 ? 'WhatsApp/telefone do cliente é obrigatório para notas ≤ 3.' : null; } },
-  whatsapp: { required: false, type: 'string', max: 20 }, empresa_id: { required: false, type: 'string', max: 100 }, empresa_ref: { required: false, type: 'string', max: 100 }, website: { required: false, type: 'string', max: 200 }, is_test: { required: false, type: 'boolean' },
+  whatsapp: { required: false, type: 'string', max: 20 }, empresa_id: { required: false, type: 'string', max: 100 }, empresa_ref: { required: false, type: 'string', max: 100 }, website: { required: false, type: 'string', max: 200 }, is_test: { required: false, type: 'boolean' }, unidade_id: { required: false, type: 'string', max: 100 },
   locale: { required: false, type: 'string', max: 8, transform: (v) => String(v ?? '').toLowerCase().slice(0, 2), custom: (v) => !v || ['pt', 'en', 'es', 'zh'].includes(String(v)) ? null : 'locale inválido (pt|en|es|zh).' },
 };
 

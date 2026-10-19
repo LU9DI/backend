@@ -9,13 +9,13 @@ import { normalizarWhatsapp, linkWhatsapp, mensagemClienteParaEmpresa } from '..
 import { notificarCriticaPrivada, notificarAlertaCrise } from '../lib/notifications.js';
 import { normalizeLocale } from '../lib/locale.js';
 import { invalidateCompanyReviewsCache } from './companyReviewsCache.js';
-export type ReviewInput={name?:string;comment?:string;rating:number;empresa_id?:string;empresa_ref?:string;website?:string;is_test?:boolean;company_self?:boolean;ip?:string;client_whatsapp?:string;locale?:string};
+export type ReviewInput={name?:string;comment?:string;rating:number;empresa_id?:string;empresa_ref?:string;website?:string;is_test?:boolean;company_self?:boolean;ip?:string;client_whatsapp?:string;locale?:string;unidade_id?:string};
 export type ReviewResult={success:true;id:number|undefined;ai:boolean;is_test?:boolean;sentiment?:string;ai_skipped_quota?:boolean;locale?:string;whatsapp_empresa_url?:string|null;whatsapp_mensagem?:string|null};
 export class ReviewNotFoundError extends Error{status=404;constructor(message='Empresa não encontrada.'){super(message);this.name='ReviewNotFoundError';}}
 export class ReviewQuotaError extends Error{status=429;constructor(message:string){super(message);this.name='ReviewQuotaError';}}
 export class ReviewValidationError extends Error{status=400;constructor(message:string){super(message);this.name='ReviewValidationError';}}
 export {ReviewFraudError};
-async function ensureSentimentColumns(db:Database){const extras=['sentiment TEXT','sentiment_score DOUBLE PRECISION','sentiment_source TEXT','client_whatsapp TEXT','locale TEXT'];for(const ddl of extras){try{await db.exec(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS ${ddl}`);}catch{try{await db.exec(`ALTER TABLE reviews ADD COLUMN ${ddl}`);}catch{}}}}
+async function ensureSentimentColumns(db:Database){const extras=['sentiment TEXT','sentiment_score DOUBLE PRECISION','sentiment_source TEXT','client_whatsapp TEXT','locale TEXT','unidade_id TEXT'];for(const ddl of extras){try{await db.exec(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS ${ddl}`);}catch{try{await db.exec(`ALTER TABLE reviews ADD COLUMN ${ddl}`);}catch{}}}}
 async function emailDaEmpresa(db:Database,empresaId:string):Promise<string|null>{try{const row=await db.get(`SELECT email FROM usuarios WHERE empresa_id=? AND email IS NOT NULL AND email!='' LIMIT 1`,[empresaId]);return row?.email?String(row.email):null;}catch{return null;}}
 function limitarRespostaIA(texto:string,maxFrases=3,maxTokens=180):string{let text=String(texto||'').replace(/\s+/g,' ').trim();if(!text)return '';const frases=text.match(/[^.!?。！？]+[.!?。！？]+|[^.!?。！？]+$/g)||[text];text=frases.slice(0,maxFrases).join(' ').trim();const words=text.split(/\s+/).filter(Boolean);while(words.length>1&&Math.ceil(words.join(' ').length/4)>maxTokens)words.pop();text=words.join(' ').trim();if(text&&!/[.!?。！？]$/.test(text))text+='.';return text;}
 export async function criarReview(input:ReviewInput,db:Database=getDb()):Promise<ReviewResult>{
@@ -31,6 +31,7 @@ export async function criarReview(input:ReviewInput,db:Database=getDb()):Promise
   const ip=input.ip||'0.0.0.0';
   const ipHash=hashIp(ip);
   const locale=normalizeLocale(input.locale);
+  const unidadeId=input.unidade_id?String(input.unidade_id).trim().slice(0,100):null;
   let clientWpp:string|null=null;
   if(!isTest&&rating<=3){clientWpp=normalizarWhatsapp(input.client_whatsapp);if(!clientWpp)throw new ReviewValidationError('Informe seu WhatsApp/telefone para a empresa poder retornar o contato.');}
   let empresaId:string|null=null;let nomeEmpresa:string|undefined;let plan='trial';let slugOrId:string|undefined;let empresaWpp:string|null=null;
@@ -61,7 +62,7 @@ export async function criarReview(input:ReviewInput,db:Database=getDb()):Promise
   }else if(!isTest&&rating<=3&&comment){aiTags=JSON.stringify(rating<=2?['#NegativeExperience']:['#Neutral']);}
   const baseParams=[empresaId,name||'Anônimo',rating,comment||null,aiReply,aiTags];let result:any;
   const attempts=[
-    {sql:`INSERT INTO reviews (empresa_id,name,rating,comment,ai_reply,ai_tags,is_test,ip_hash,fraud_flags,origin,sentiment,sentiment_score,sentiment_source,client_whatsapp,locale) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,params:[...baseParams,isTest?1:0,isTest?null:ipHash,flags.length?JSON.stringify(flags):null,isTest?'painel_teste':'publico',sentiment.label,sentiment.score,sentiment.source,clientWpp,locale]},
+    {sql:`INSERT INTO reviews (empresa_id,name,rating,comment,ai_reply,ai_tags,is_test,ip_hash,fraud_flags,origin,sentiment,sentiment_score,sentiment_source,client_whatsapp,locale,unidade_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,params:[...baseParams,isTest?1:0,isTest?null:ipHash,flags.length?JSON.stringify(flags):null,isTest?'painel_teste':'publico',sentiment.label,sentiment.score,sentiment.source,clientWpp,locale,unidadeId]},
     {sql:`INSERT INTO reviews (empresa_id,name,rating,comment,ai_reply,ai_tags,is_test,ip_hash,fraud_flags,origin,client_whatsapp) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,params:[...baseParams,isTest?1:0,isTest?null:ipHash,flags.length?JSON.stringify(flags):null,isTest?'painel_teste':'publico',clientWpp]},
     {sql:`INSERT INTO reviews (empresa_id,name,rating,comment,ai_reply,ai_tags) VALUES (?,?,?,?,?,?)`,params:baseParams}
   ];
