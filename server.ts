@@ -99,7 +99,7 @@ import {
 
 const BUILD = {
   version: '1.4.0',
-  marker: 'monthly-anniversary-v1',
+  marker: 'reviews-unidade-v1',
   started_at: new Date().toISOString(),
 };
 
