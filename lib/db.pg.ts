@@ -96,6 +96,23 @@ export type PgDatabase = {
   transaction: <T>(fn: (tx: PgDatabase) => Promise<T>) => Promise<T>;
 };
 
+export function getPgSslConfig(
+  databaseUrl: string,
+  pgssl: string | undefined = process.env.PGSSL,
+): false | { rejectUnauthorized: true } {
+  let hostname = "";
+  try {
+    hostname = new URL(databaseUrl).hostname.toLowerCase();
+  } catch {
+    // Leave malformed URL handling to the PostgreSQL driver with TLS validation enabled.
+  }
+  const isLocal = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  if (pgssl === "0" && !isLocal) {
+    throw new Error("PGSSL=0 is permitted only for localhost PostgreSQL connections");
+  }
+  return isLocal ? false : { rejectUnauthorized: true };
+}
+
 export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
   const connectionTimeoutMs = Math.max(
     3000,
@@ -108,12 +125,7 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
 
   pool = new Pool({
     connectionString: databaseUrl,
-    ssl:
-      process.env.PGSSL === '0'
-        ? false
-        : /localhost|127\.0\.0\.1/.test(databaseUrl)
-          ? false
-          : { rejectUnauthorized: false },
+    ssl: getPgSslConfig(databaseUrl),
     max: Number(process.env.PG_POOL_MAX || 10),
     connectionTimeoutMillis: connectionTimeoutMs,
     idleTimeoutMillis: Math.max(10_000, Number(process.env.PG_IDLE_TIMEOUT_MS || 30_000)),
