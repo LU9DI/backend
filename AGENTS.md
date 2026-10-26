@@ -32,3 +32,10 @@ Família Filtra.AI (relacionado a `dot-local` e `saas-render-check`; reconciliar
 - Sem `README.md` na raiz.
 - Versionados indevidamente: `database.sqlite`, `prisma/dev.db`, `dist/`.
 - `.agents/mcp_config.json` versionado com **placeholder** de segredo — trocar por variável de ambiente.
+
+
+## Agent skill routing
+- New or changed HTTP routes and response contracts: read .agents/skills/api-design-principles/SKILL.md.
+- JWT, MFA/WebAuthn, password reset, cookies, sessions, roles, or tenant access: read .agents/skills/auth-implementation-patterns/SKILL.md.
+- Security-sensitive route review and regression tests, especially payment callbacks or MCP entry points: read .agents/skills/api-auth-test-review/SKILL.md.
+- Preserve the JSON-first report contract, restricted CORS policy, and documented SQLite development-only boundary above.
