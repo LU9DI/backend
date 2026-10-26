@@ -106,7 +106,7 @@ export function getPgSslConfig(
   } catch {
     // Leave malformed URL handling to the PostgreSQL driver with TLS validation enabled.
   }
-  const isLocal = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  const isLocal = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
   if (pgssl === "0" && !isLocal) {
     throw new Error("PGSSL=0 is permitted only for localhost PostgreSQL connections");
   }
