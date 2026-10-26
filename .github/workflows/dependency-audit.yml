@@ -2,7 +2,7 @@ name: Dependency audit
 
 on:
   push:
-    branches: [master]
+    branches: [master, chore/dependency-audit]
   pull_request:
     branches: [master]
   schedule:
