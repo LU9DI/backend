@@ -24,6 +24,15 @@ async function setup() {
   if (ready) return;
   await initDB();
   const db = getDb();
+  // Initialize the service-owned table through its public operation; tests must
+  // not rely on a prior application startup having created this schema.
+  await executeDotInternalAction({
+    empresaId: '__schema_init__',
+    actionId: 0,
+    decisionId: 0,
+    action: '__schema_init__',
+    reason: 'Initialize test schema',
+  });
   await db.run('DELETE FROM dot_internal_cases');
   ready = true;
 }
