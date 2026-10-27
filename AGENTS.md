@@ -16,9 +16,13 @@ API da Filtra.AI: trial → planos (Stripe/Pix/PayPal) → avaliações filtrada
 ```bash
 npm ci
 npm run build     # tsc --noEmit
-npm test          # tsx --test tests/**/*.test.ts
+npm test          # node scripts/run-tests.mjs
 npm run audit
 ```
+
+## Skills obrigatórios por contexto
+- Para autenticação, autorização por tenant, sessões/JWT, MFA/WebAuthn, webhooks, CORS, rate limiting ou testes de segurança: leia `.agents/skills/api-auth-test-review/SKILL.md`.
+- Para toda implementação, correção ou refatoração: siga `.agents/skills/verification-gates/SKILL.md`.
 
 ## Estado atual (Git)
 - Branch: `feat/professional-reports-v2` (0 atrás / 71 à frente de `origin/master`); 111 branches remotas.
