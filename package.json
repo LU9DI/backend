@@ -31,7 +31,7 @@
     "express-rate-limit": "^7.5.0",
     "jsonwebtoken": "^9.0.2",
     "nodemailer": "^10.0.1",
-    "pg": "^8.13.3",
+    "pg": "^8.23.1",
     "tsx": "^4.23.15",
     "web-push": "^3.6.7",
     "zod": "^4.1.0"
