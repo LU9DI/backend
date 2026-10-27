@@ -21,7 +21,7 @@
   "dependencies": {
     "@modelcontextprotocol/express": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
-    "@modelcontextprotocol/server": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.4.0",
     "bcrypt": "npm:bcryptjs@^3.0.2",
     "bcryptjs": "^3.0.2",
     "cookie-parser": "^1.4.7",
