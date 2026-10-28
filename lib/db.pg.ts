@@ -99,7 +99,8 @@ export type PgDatabase = {
 export function getPgSslConfig(
   databaseUrl: string,
   pgssl: string | undefined = process.env.PGSSL,
-): false | { rejectUnauthorized: true } {
+  caPem: string | undefined = process.env.PGSSL_CA,
+): false | { rejectUnauthorized: true; ca?: string } {
   let hostname = "";
   try {
     const parsedHostname = new URL(databaseUrl).hostname.toLowerCase();
@@ -113,7 +114,16 @@ export function getPgSslConfig(
   if (pgssl === "0" && !isLocal) {
     throw new Error("PGSSL=0 is permitted only for localhost PostgreSQL connections");
   }
-  return isLocal ? false : { rejectUnauthorized: true };
+  if (isLocal) return false;
+
+  // Keep certificate validation enabled. Some managed PostgreSQL providers
+  // require their official CA certificate to be supplied explicitly.
+  // Render env vars may store PEM newlines as literal "\\n".
+  const ca = caPem?.trim().replace(/\\n/g, "\n");
+  return {
+    rejectUnauthorized: true,
+    ...(ca ? { ca } : {}),
+  };
 }
 
 export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
