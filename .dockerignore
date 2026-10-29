@@ -9,3 +9,12 @@ coverage
 tests
 *.md
 .git
+docs
+.github
+.agents
+.claude
+.vscode
+*.patch
+*.zip
+*.log
+.gitignore
