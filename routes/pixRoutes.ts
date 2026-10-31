@@ -583,7 +583,7 @@ export function mountPixRoutes(app: Express) {
         });
       }
 
-      return res.json({ id, status, approved: status === 'approved'' });
+      return res.json({ id, status, approved: status === 'approved' });
     })
   );
 
