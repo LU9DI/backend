@@ -225,7 +225,8 @@ export function mountPixRoutes(app: Express) {
         avulso: 'POST /api/pix/avulso',
         agendado: 'POST /api/pix/agendado',
         recorrente: 'POST /api/pix/recorrente',
-        poll: 'GET /api/pix/payment/:id',\n        refresh: 'POST /api/pix/payment/:id/refresh',
+        poll: 'GET /api/pix/payment/:id',
+        refresh: 'POST /api/pix/payment/:id/refresh',
         webhook: 'POST /api/webhook/mercadopago',
       },
       dica:
