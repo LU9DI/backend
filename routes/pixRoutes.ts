@@ -516,22 +516,12 @@ export function mountPixRoutes(app: Express) {
       const db = getDb();
       await ensurePixTables(db);
       const payment = await db.get(
-        `SELECT id, status, amount, qr_code, qr_code_base64, ticket_url, expires_at
-         FROM pix_payments WHERE id = ?`,
+        `SELECT id, status FROM pix_payments WHERE id = ?`,
         [id]
       );
       if (!payment) return res.status(404).json({ error: 'Pagamento não encontrado.' });
       const status = String(payment.status || 'pending');
-      return res.json({
-        id,
-        status,
-        amount: payment.amount ?? null,
-        qr_code: payment.qr_code || null,
-        qr_code_base64: payment.qr_code_base64 || null,
-        ticket_url: payment.ticket_url || null,
-        expires_at: payment.expires_at || null,
-        approved: status === 'approved',
-      });
+      return res.json({ id, status, approved: status === 'approved' });
     })
   );
 
