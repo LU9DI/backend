@@ -24,7 +24,7 @@ import { resolvePlano } from '../stripeBilling.js';
 import { activatePlan, blockEmpresa } from '../services/billingService.js';
 import { logWebhookEvent } from '../lib/opsLog.js';
 import { claimPaymentCaptureOnce, completePaymentCapture, releasePaymentCapture } from '../lib/paymentEvents.js';
-import { empresaInformadaPertenceAoToken } from '../lib/auth.js';
+import { autenticarToken, empresaInformadaPertenceAoToken, type AuthRequest } from '../lib/auth.js';
 import { createFiscalDocumentForPayment } from '../lib/fiscal.js';
 
 async function ensurePixTables(db: Database) {
@@ -225,7 +225,7 @@ export function mountPixRoutes(app: Express) {
         avulso: 'POST /api/pix/avulso',
         agendado: 'POST /api/pix/agendado',
         recorrente: 'POST /api/pix/recorrente',
-        poll: 'GET /api/pix/payment/:id',
+        poll: 'GET /api/pix/payment/:id',\n        refresh: 'POST /api/pix/payment/:id/refresh',
         webhook: 'POST /api/webhook/mercadopago',
       },
       dica:
@@ -506,15 +506,56 @@ export function mountPixRoutes(app: Express) {
     })
   );
 
+  // Consulta de status estritamente somente leitura. A ativação ocorre pelo webhook
+  // assinado ou pelo endpoint explícito de refresh autenticado abaixo.
   app.get(
     '/api/pix/payment/:id',
     asyncHandler(async (req: Request, res: Response) => {
-      if (!mpConfigured()) {
-        return res.status(503).json({ error: 'Pix não configurado.' });
-      }
-      const id = String(req.params.id);
+      const id = String(req.params.id || '').trim();
+      if (!id || id.length > 120) return res.status(400).json({ error: 'ID de pagamento inválido.' });
       const db = getDb();
       await ensurePixTables(db);
+      const payment = await db.get(
+        `SELECT id, status, amount, qr_code, qr_code_base64, ticket_url, expires_at
+         FROM pix_payments WHERE id = ?`,
+        [id]
+      );
+      if (!payment) return res.status(404).json({ error: 'Pagamento não encontrado.' });
+      const status = String(payment.status || 'pending');
+      return res.json({
+        id,
+        status,
+        amount: payment.amount ?? null,
+        qr_code: payment.qr_code || null,
+        qr_code_base64: payment.qr_code_base64 || null,
+        ticket_url: payment.ticket_url || null,
+        expires_at: payment.expires_at || null,
+        approved: status === 'approved',
+      });
+    })
+  );
+
+  // Atualização explícita consulta o provedor e pode ativar o plano. Exige sessão
+  // autenticada e valida o vínculo com a empresa gravada no pagamento.
+  app.post(
+    '/api/pix/payment/:id/refresh',
+    autenticarToken,
+    asyncHandler(async (req: AuthRequest, res: Response) => {
+      if (!mpConfigured()) return res.status(503).json({ error: 'Pix não configurado.' });
+      const id = String(req.params.id || '').trim();
+      if (!id || id.length > 120) return res.status(400).json({ error: 'ID de pagamento inválido.' });
+
+      const db = getDb();
+      await ensurePixTables(db);
+      const payment = await db.get(
+        `SELECT id, empresa_id, plano_key, status FROM pix_payments WHERE id = ?`,
+        [id]
+      );
+      if (!payment) return res.status(404).json({ error: 'Pagamento não encontrado.' });
+      const empresaId = payment.empresa_id ? String(payment.empresa_id) : '';
+      if (!empresaId || !empresaInformadaPertenceAoToken(req, empresaId)) {
+        return res.status(403).json({ error: 'Pagamento não pertence à sessão autenticada.' });
+      }
 
       let remote: any;
       try {
@@ -522,50 +563,27 @@ export function mountPixRoutes(app: Express) {
       } catch {
         try {
           remote = await getPreapproval(id);
-          return res.json({
-            id,
-            kind: 'recorrente',
-            status: remote.status,
-            preapproval: true,
-            init_point: remote.init_point || remote.sandbox_init_point,
-          });
-        } catch (e: any) {
-          return res.status(404).json({ error: e?.message || 'Pagamento não encontrado' });
+          return res.json({ id, kind: 'recorrente', status: String(remote.status || payment.status || 'pending'), preapproval: true });
+        } catch {
+          return res.status(404).json({ error: 'Pagamento não encontrado no provedor.' });
         }
       }
 
-      const status = String(remote.status || '');
-      const parsed = parseExternalRef(remote.external_reference);
-      const empresaId = remote.metadata?.empresa_id || parsed.empresaId || null;
-      const planoKey = remote.metadata?.plano || parsed.planoKey || null;
+      const status = String(remote.status || 'pending');
+      await db.run(
+        `UPDATE pix_payments SET status = ?, updated_at = ? WHERE id = ?`,
+        [status, new Date().toISOString(), id]
+      );
 
-      await db.run(`UPDATE pix_payments SET status = ?, updated_at = ? WHERE id = ?`, [
-        status,
-        new Date().toISOString(),
-        id,
-      ]);
-
-      if ((status === 'approved' || status === 'authorized') && empresaId) {
-        const emp = await db.get(`SELECT id, status, plan FROM empresas WHERE id = ?`, [empresaId]);
-        if (emp && emp.status !== 'ativo') {
-          await activateFromPix(db, {
-            empresaId: String(empresaId),
-            planoKey,
-            paymentId: id,
-          });
-        }
+      if (status === 'approved' && empresaId) {
+        await activateFromPix(db, {
+          empresaId,
+          planoKey: payment.plano_key ? String(payment.plano_key) : null,
+          paymentId: id,
+        });
       }
 
-      const poi = remote.point_of_interaction?.transaction_data || {};
-      res.json({
-        id,
-        status,
-        status_detail: remote.status_detail,
-        amount: remote.transaction_amount,
-        qr_code: poi.qr_code || null,
-        copia_e_cola: poi.qr_code || null,
-        approved: status === 'approved',
-      });
+      return res.json({ id, status, approved: status === 'approved'' });
     })
   );
 
