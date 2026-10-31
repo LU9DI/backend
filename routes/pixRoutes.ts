@@ -515,7 +515,7 @@ export function mountPixRoutes(app: Express) {
       const id = String(req.params.id || '').trim();
       if (!id || id.length > 120) return res.status(400).json({ error: 'ID de pagamento inválido.' });
       const db = getDb();
-      await ensurePixTables(db);
+      // A tabela é provisionada pelos fluxos de criação/webhook; GET não executa DDL.
       const payment = await db.get(
         `SELECT id, status FROM pix_payments WHERE id = ?`,
         [id]
