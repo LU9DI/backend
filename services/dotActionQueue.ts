@@ -1,6 +1,6 @@
 import { getDb, withDbTransaction } from '../lib/db.js';
 import { dotActionRequiresApproval, getDotActionDefinition } from './dotActionRegistry.js';
-import { ensureDotActionAuditSchema, recordDotActionAudit } from './dotActionAudit.js';
+import { ensureDotActionAuditSchema } from './dotActionAudit.js';
 import { executeDotActionThroughGateway } from './dotExecutionGateway.js';
 
 export type DotActionStatus = 'prepared' | 'approved' | 'executing' | 'executed' | 'failed' | 'cancelled';
@@ -53,8 +53,14 @@ async function ensureSchema() {
   await db.exec("CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_action_queue_one_active_decision ON dot_action_queue(empresa_id, decision_id) WHERE status IN ('prepared','approved','executing')");
 }
 
-export async function prepareDotActionFromDecision(empresaId: string, decisionId: number, optionId: string) {
+export async function prepareDotActionFromDecision(
+  empresaId: string,
+  decisionId: number,
+  optionId: string,
+  actorUserId?: string | null,
+) {
   await ensureSchema();
+  await ensureDotActionAuditSchema();
   const prepared = await withActionLock(`prepare:${empresaId}:${decisionId}`, () =>
     withDbTransaction(async (tx) => {
       const decision = await tx.get('SELECT * FROM dot_decisions WHERE id = ? AND empresa_id = ? LIMIT 1', [decisionId, empresaId]);
@@ -106,20 +112,34 @@ export async function prepareDotActionFromDecision(empresaId: string, decisionId
         );
         if (promoted.changes !== 1) throw new Error('Não foi possível preparar a decisão; transação revertida.');
       }
+      // O evento 'prepared' participa da MESMA transação da criação da ação:
+      //  - a ação preparada nunca existe sem a trilha de auditoria (falha na
+      //    auditoria reverte a preparação);
+      //  - um ator autenticado que pediu a preparação é registrado como
+      //    `user`; apenas chamadas do próprio Dot (monitor/scheduler) ficam
+      //    como `dot`, sem ator;
+      //  - o caminho de deduplicação (`existing`, acima) NÃO grava auditoria
+      //    nova: repetir a preparação não inventa uma segunda transição.
+      await tx.run(
+        `INSERT INTO dot_action_audit
+          (empresa_id, action_id, decision_id, event, actor_type, actor_id, metadata, created_at)
+          VALUES (?,?,?,?,?,?,?,?)`,
+        [
+          empresaId,
+          id,
+          decisionId,
+          'prepared',
+          actorUserId ? 'user' : 'dot',
+          actorUserId || null,
+          JSON.stringify({ optionId: option.id }).slice(0, 12000),
+          new Date().toISOString(),
+        ],
+      );
+
       return normalizeActionRow({ id, decision_id: decisionId, option_id: option.id, action: definition.action, status: 'prepared' });
     }),
   );
 
-  if (prepared?.id) {
-    await recordDotActionAudit({
-      empresaId,
-      actionId: Number(prepared.id),
-      decisionId,
-      event: 'prepared',
-      actorType: 'dot',
-      metadata: { optionId: prepared.optionId },
-    });
-  }
   return prepared;
 }
 
