@@ -72,3 +72,57 @@ test('duas instâncias PostgreSQL concorrentes retornam a mesma ação sem audit
     await closeDB();
   }
 });
+
+
+test('duas instâncias PostgreSQL não aprovam duas vezes a mesma ação', async () => {
+  assert.ok(process.env.DATABASE_URL, 'DATABASE_URL de teste é obrigatória');
+  process.env.NODE_ENV = 'test';
+  await initDB();
+  const db = getDb();
+  const empresaId = `pg-approve-concurrency-${crypto.randomUUID()}`;
+  const options = [{ id: 'opcao_aprovacao', title: 'Teste', action: 'priorizar_e_resolver', risk: 'medium' }];
+  const seeded = await db.run(
+    `INSERT INTO dot_decisions
+      (empresa_id,event_id,type,priority,severity,reason,evidence_json,recommendation,options_json,requires_approval,status,created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+    [empresaId, Date.now() % 2_000_000_000, 'crise_reputacional', 'high', 'critical', 'pg approval concurrency', '[]', 'teste', JSON.stringify(options), 1, 'pending', new Date().toISOString()],
+  );
+  const decisionId = Number(seeded.lastID);
+  assert.ok(decisionId > 0);
+  try {
+    const prepared = await (await import('../services/dotActionQueue.js')).prepareDotActionFromDecision(
+      empresaId, decisionId, 'opcao_aprovacao', 'pg-test-owner',
+    );
+    assert.ok(prepared?.id);
+    const args = [empresaId, String(prepared.id), 'pg-approver'];
+    const [a, b] = await Promise.all([
+      runWorker(['approve', ...args]),
+      runWorker(['approve', ...args]),
+    ]);
+    const results = [JSON.parse(a.stdout), JSON.parse(b.stdout)];
+    assert.equal(results.filter((result) => result?.status === 'approved').length, 1,
+      'exatamente uma instância deve concluir a aprovação');
+    assert.equal(results.filter((result) => result === null).length, 1,
+      'a segunda instância deve observar que a ação já foi consumida');
+    const action = await db.get(
+      'SELECT status FROM dot_action_queue WHERE empresa_id = ? AND id = ?',
+      [empresaId, prepared.id],
+    );
+    assert.equal(String(action?.status), 'approved');
+    const decision = await db.get(
+      'SELECT status FROM dot_decisions WHERE empresa_id = ? AND id = ?',
+      [empresaId, decisionId],
+    );
+    assert.equal(String(decision?.status), 'approved');
+    const audits = await db.all(
+      "SELECT id FROM dot_action_audit WHERE empresa_id = ? AND decision_id = ? AND event = 'approved'",
+      [empresaId, decisionId],
+    );
+    assert.equal(audits.length, 1, 'deve existir exatamente um evento approved');
+  } finally {
+    await db.run('DELETE FROM dot_action_audit WHERE empresa_id = ?', [empresaId]);
+    await db.run('DELETE FROM dot_action_queue WHERE empresa_id = ?', [empresaId]);
+    await db.run('DELETE FROM dot_decisions WHERE empresa_id = ?', [empresaId]);
+    await closeDB();
+  }
+});
