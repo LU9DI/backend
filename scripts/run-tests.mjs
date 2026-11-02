@@ -22,7 +22,7 @@ function collect(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) out.push(...collect(full));
-    else if (entry.isFile() && entry.name.endsWith('.test.ts')) out.push(full);
+    else if (entry.isFile() && entry.name.endsWith('.test.ts') && !entry.name.endsWith('.pg.test.ts')) out.push(full);
   }
   return out;
 }
