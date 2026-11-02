@@ -123,7 +123,7 @@ export async function prepareDotActionFromDecision(empresaId: string, decisionId
   return prepared;
 }
 
-export async function approveDotAction(empresaId: string, actionId: number) {
+export async function approveDotAction(empresaId: string, actionId: number, actorUserId?: string | null) {
   await ensureSchema();
   const now = new Date().toISOString();
 
@@ -165,7 +165,7 @@ export async function approveDotAction(empresaId: string, actionId: number) {
   );
 
   if (approved?.id) {
-    await recordDotActionAudit({ empresaId, actionId, decisionId: Number(approved.decisionId), event: 'approved', actorType: 'user' });
+    await recordDotActionAudit({ empresaId, actionId, decisionId: Number(approved.decisionId), event: 'approved', actorType: 'user', actorId: actorUserId || null });
   }
   return approved;
 }
