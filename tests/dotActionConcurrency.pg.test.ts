@@ -11,7 +11,9 @@ import { initDB, getDb, closeDB } from '../lib/db.js';
 
 function runWorker(args: string[]): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./helpers/prepare-dot-action.pg.ts', import.meta.url)), ...args], {
+    const worker = args[0] === 'approve' ? 'approve-dot-action.pg.ts' : 'prepare-dot-action.pg.ts';
+    const workerArgs = args[0] === 'approve' ? args.slice(1) : args;
+    const child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL(`./helpers/${worker}`, import.meta.url)), ...workerArgs], {
       cwd: process.cwd(), env: { ...process.env, NODE_ENV: 'test' }, stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = ''; let stderr = '';
