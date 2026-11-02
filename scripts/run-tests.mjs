@@ -16,24 +16,39 @@ import { spawnSync } from 'node:child_process';
 
 const root = process.cwd();
 const testsDir = join(root, 'tests');
+const args = process.argv.slice(2);
+const postgres = args.includes('--postgres');
+const listOnly = args.includes('--list');
+const unknown = args.filter((arg) => !['--postgres', '--list'].includes(arg));
+if (unknown.length > 0) {
+  console.error('Argumento desconhecido: ' + unknown.join(' '));
+  process.exit(1);
+}
 
 function collect(dir) {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) out.push(...collect(full));
-    else if (entry.isFile() && entry.name.endsWith('.test.ts') && !entry.name.endsWith('.pg.test.ts')) out.push(full);
+    else if (entry.isFile() && entry.name.endsWith('.test.ts')) {
+      const isPostgres = entry.name.endsWith('.pg.test.ts');
+      if (postgres ? isPostgres : !isPostgres) out.push(full);
+    }
   }
   return out;
 }
 
 const files = collect(testsDir).map((file) => relative(root, file)).sort();
+if (listOnly) {
+  process.stdout.write(JSON.stringify(files, null, 2) + '\n');
+  process.exit(0);
+}
 if (files.length === 0) {
   console.error('Nenhum arquivo de teste encontrado em ' + relative(root, testsDir) + '.');
   process.exit(1);
 }
 
-console.log('Executando ' + files.length + ' arquivo(s) de teste em ' + process.version + '.\n');
+console.log('Executando ' + files.length + ' arquivo(s) de teste' + (postgres ? ' PostgreSQL' : '') + ' em ' + process.version + '.\n');
 
 // Concorrencia 1: varios testes usam arquivos sqlite fixos em /tmp e nao
 // podem rodar em paralelo no mesmo host (flakes de corrida).

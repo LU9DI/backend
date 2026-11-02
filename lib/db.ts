@@ -8,9 +8,8 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import type { Database } from 'sqlite';
 import { fileURLToPath } from 'url';
-import { ensureAuthColumns } from '../passwordResetRoutes.js';
-import { ensureMfaColumns } from '../mfa.js';
 import { initPgDatabase, isPostgresUrl, asSqliteDb } from './db.pg.js';
+import { runCentralMigrations } from './migrations.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -117,175 +116,81 @@ async function initPostgres(): Promise<Database> {
 }
 
 export async function initDB(): Promise<Database> {
-  const useSupabase = process.env.USE_SUPABASE_DB === '1';
-  const supabasePassword = (process.env.SUPABASE_DB_PASSWORD || '').trim();
-  const supabaseHost = (process.env.SUPABASE_DB_HOST || '').trim();
-  const supabaseUser = (process.env.SUPABASE_DB_USER || '').trim();
-  const supabaseName = (process.env.SUPABASE_DB_NAME || 'postgres').trim();
-  const supabasePort = Number(process.env.SUPABASE_DB_PORT || 5432);
+  const previousDb = _db;
+  const previousEngine = _engine;
+  let created: Database | null = null;
 
-  if (useSupabase) {
-    if (!supabasePassword || !supabaseHost || !supabaseUser) {
-      throw new Error('USE_SUPABASE_DB=1 exige SUPABASE_DB_PASSWORD, SUPABASE_DB_HOST e SUPABASE_DB_USER.');
-    }
-    const auth = encodeURIComponent(supabaseUser) + ':' + encodeURIComponent(supabasePassword);
-    const url = 'postgresql://' + auth + '@' + supabaseHost + ':' + supabasePort + '/' + encodeURIComponent(supabaseName);
-    _db = await initPostgresWithUrl(url);
-  } else {
-    const url = process.env.DATABASE_URL?.trim();
-    if (isPostgresUrl(url)) {
-      _db = await initPostgres();
-    } else if (isProd) {
-      throw new Error(
-        'DATABASE_URL com uma URL PostgreSQL válida é obrigatória em produção. SQLite não é permitido.'
-      );
+  try {
+    const useSupabase = process.env.USE_SUPABASE_DB === '1';
+    const supabasePassword = (process.env.SUPABASE_DB_PASSWORD || '').trim();
+    const supabaseHost = (process.env.SUPABASE_DB_HOST || '').trim();
+    const supabaseUser = (process.env.SUPABASE_DB_USER || '').trim();
+    const supabaseName = (process.env.SUPABASE_DB_NAME || 'postgres').trim();
+    const supabasePort = Number(process.env.SUPABASE_DB_PORT || 5432);
+
+    if (useSupabase) {
+      if (!supabasePassword || !supabaseHost || !supabaseUser) {
+        throw new Error('USE_SUPABASE_DB=1 exige SUPABASE_DB_PASSWORD, SUPABASE_DB_HOST e SUPABASE_DB_USER.');
+      }
+      const auth = encodeURIComponent(supabaseUser) + ':' + encodeURIComponent(supabasePassword);
+      const url = 'postgresql://' + auth + '@' + supabaseHost + ':' + supabasePort + '/' + encodeURIComponent(supabaseName);
+      created = await initPostgresWithUrl(url);
     } else {
-      _db = await initSqlite();
-    }
-  }
-
-
-  await _db.exec(`
-    CREATE TABLE IF NOT EXISTS empresas (
-      id TEXT PRIMARY KEY,
-      cnpj TEXT UNIQUE NOT NULL,
-      nome_empresa TEXT NOT NULL,
-      slug TEXT UNIQUE,
-      status TEXT DEFAULT 'trial',
-      plan TEXT DEFAULT 'trial',
-      criado_em TIMESTAMPTZ NOT NULL,
-      expira_em TIMESTAMPTZ NOT NULL,
-      google_review_url TEXT,
-      voice_style TEXT,
-      empresa_pai_id TEXT,
-      whatsapp_suporte TEXT
-    )
-  `);
-  await _db.exec(`
-    CREATE TABLE IF NOT EXISTS usuarios (
-      id TEXT PRIMARY KEY,
-      cnpj TEXT NOT NULL,
-      nome_funcionario TEXT NOT NULL,
-      empresa_id TEXT NOT NULL,
-      senha_hash TEXT NOT NULL
-    )
-  `);
-  await _db.exec(`
-    CREATE TABLE IF NOT EXISTS reviews (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      empresa_id TEXT,
-      name TEXT,
-      rating INTEGER,
-      comment TEXT,
-      ai_reply TEXT,
-      ai_tags TEXT,
-      is_test INTEGER DEFAULT 0,
-      createdAt TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  // Migração compatível: bancos Postgres antigos podem ter criado reviews.created_at
-  // antes do schema atual usar o identificador legado "createdAt". O painel e alguns
-  // fluxos dependem desse campo; mantemos ambos durante a transição.
-  try {
-    await _db.exec('ALTER TABLE reviews ADD COLUMN "createdAt" TIMESTAMPTZ');
-  } catch {
-    /* coluna já existe */
-  }
-  // A2 — avaliações de teste: [is_test] marca avaliações não-produto (seed de
-  // validação e testes de staging). Todo o pipeline (contagem de cota, fraud,
-  // relatórios PDF, Dot monitor) as ignora via COALESCE(is_test, 0). A migração
-  // é idempotente e roda em SQLite e Postgres.
-  try {
-    const columns = await _db.all('PRAGMA table_info(reviews)');
-    if (!(columns || []).some((column: { name?: string }) => column.name === 'is_test')) {
-      await _db.exec('ALTER TABLE reviews ADD COLUMN is_test INTEGER DEFAULT 0');
-    }
-  } catch {
-    try {
-      await _db.exec('ALTER TABLE reviews ADD COLUMN IF NOT EXISTS is_test INTEGER DEFAULT 0');
-    } catch {
-      /* coluna já existe (corrida de duas instâncias) — nada a fazer */
-    }
-  }
-  try {
-    await _db.run(
-      'UPDATE reviews SET "createdAt" = created_at WHERE "createdAt" IS NULL AND created_at IS NOT NULL'
-    );
-  } catch {
-    /* banco já usa somente createdAt */
-  }
-  try {
-    await _db.run(
-      'UPDATE reviews SET "createdAt" = createdat WHERE "createdAt" IS NULL AND createdat IS NOT NULL'
-    );
-  } catch {
-    /* variante sem aspas não existe */
-  }
-  try {
-    await _db.exec('ALTER TABLE reviews ALTER COLUMN "createdAt" SET DEFAULT CURRENT_TIMESTAMP');
-  } catch {
-    /* SQLite não suporta ALTER COLUMN; o schema local já cria createdAt com default */
-  }
-
-  await _db.exec(`
-    CREATE TABLE IF NOT EXISTS trial_registrations (
-      id TEXT PRIMARY KEY,
-      email TEXT UNIQUE NOT NULL,
-      ip_hash TEXT UNIQUE NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  await _db.exec(`
-    CREATE TABLE IF NOT EXISTS ai_usage (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      empresa_id TEXT,
-      tipo TEXT NOT NULL,
-      tokens INTEGER NOT NULL DEFAULT 0,
-      criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  await _db.exec(`
-    CREATE TABLE IF NOT EXISTS usage (
-      plan TEXT NOT NULL,
-      month TEXT NOT NULL,
-      tags INTEGER DEFAULT 0,
-      respostas INTEGER DEFAULT 0,
-      PRIMARY KEY (plan, month)
-    )
-  `);
-
-  try {
-    await _db.exec(`CREATE INDEX IF NOT EXISTS idx_reviews_empresa ON reviews(empresa_id)`);
-    await _db.exec(`CREATE INDEX IF NOT EXISTS idx_empresas_cnpj ON empresas(cnpj)`);
-    await _db.exec(`CREATE INDEX IF NOT EXISTS idx_empresas_slug ON empresas(slug)`);
-  } catch {
-    /* ok */
-  }
-
-  await ensureAuthColumns(_db);
-  await ensureMfaColumns(_db);
-
-  const adminMail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
-  const adminPass = process.env.ADMIN_PASSWORD || '';
-  if (adminMail && adminPass.length >= 12) {
-    const adminExiste = await _db.get('SELECT id FROM usuarios WHERE email = ?', [adminMail]);
-    if (!adminExiste) {
-      const hash = await bcrypt.hash(adminPass, 12);
-      try {
-        await _db.run(
-          'INSERT INTO usuarios (id, cnpj, nome_funcionario, empresa_id, senha_hash, email) VALUES (?, ?, ?, ?, ?, ?)',
-          [crypto.randomUUID(), '00000000000000', 'Admin', 'admin', hash, adminMail]
+      const url = process.env.DATABASE_URL?.trim();
+      if (isPostgresUrl(url)) {
+        created = await initPostgres();
+      } else if (isProd) {
+        throw new Error(
+          'DATABASE_URL com uma URL PostgreSQL válida é obrigatória em produção. SQLite não é permitido.'
         );
-        console.log(`🔑 Admin criado: ${adminMail}`);
-      } catch (e: any) {
-        console.warn('Admin seed:', e?.message || e);
+      } else {
+        created = await initSqlite();
       }
     }
-  } else if (isProd && adminMail && adminPass.length > 0 && adminPass.length < 12) {
-    console.warn('⚠️  ADMIN_PASSWORD curta (<12) — admin não será seedado automaticamente.');
-  }
 
-  return _db;
+    // Toda a DDL do núcleo (reviews, auth/MFA, dot_action_queue/audit e
+    // tabelas base) vive em lib/migrations.ts e roda sob advisory lock global
+    // no PostgreSQL. Caminhos de requisição nunca migram schema.
+    await runCentralMigrations(created);
+    console.log('Schema inicializado (migrações centrais idempotentes)');
+
+    const adminMail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    const adminPass = process.env.ADMIN_PASSWORD || '';
+    if (adminMail && adminPass.length >= 12) {
+      const adminExiste = await created.get('SELECT id FROM usuarios WHERE email = ?', [adminMail]);
+      if (!adminExiste) {
+        const hash = await bcrypt.hash(adminPass, 12);
+        try {
+          await created.run(
+            'INSERT INTO usuarios (id, cnpj, nome_funcionario, empresa_id, senha_hash, email) VALUES (?, ?, ?, ?, ?, ?)',
+            [crypto.randomUUID(), '00000000000000', 'Admin', 'admin', hash, adminMail]
+          );
+          console.log(`🔑 Admin criado: ${adminMail}`);
+        } catch (e: any) {
+          console.warn('Admin seed:', e?.message || e);
+        }
+      }
+    } else if (isProd && adminMail && adminPass.length > 0 && adminPass.length < 12) {
+      console.warn('⚠️  ADMIN_PASSWORD curta (<12) — admin não será seedado automaticamente.');
+    }
+
+    _db = created;
+    return created;
+  } catch (error) {
+    // Falha em migração/verificação: fecha SOMENTE a instância criada por
+    // esta chamada, restaura o estado anterior e propaga o erro original.
+    if (created && created !== previousDb) {
+      try {
+        const candidate = created as unknown as { close?: () => Promise<void> };
+        if (typeof candidate.close === 'function') await candidate.close();
+      } catch (closeError: any) {
+        console.error('initDB: falha ao fechar instância após erro de inicialização:', closeError?.message || closeError);
+      }
+    }
+    _db = previousDb;
+    _engine = previousEngine;
+    throw error;
+  }
 }
 
 export async function findEmpresa(ref: string) {

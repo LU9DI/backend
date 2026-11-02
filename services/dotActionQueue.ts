@@ -1,4 +1,5 @@
 import { dbEngine, getDb, withDbTransaction } from '../lib/db.js';
+import { requireSchema } from '../lib/migrations.js';
 import { dotActionRequiresApproval, getDotActionDefinition } from './dotActionRegistry.js';
 import { ensureDotActionAuditSchema } from './dotActionAudit.js';
 import { executeDotActionThroughGateway } from './dotExecutionGateway.js';
@@ -35,22 +36,33 @@ function normalizeActionRow(row: any) {
   };
 }
 
+/**
+ * Verifica o schema da fila de ações — sem DDL em caminho de requisição.
+ * Tabela/índices são criados apenas em `runCentralMigrations`.
+ */
 async function ensureSchema() {
   const db = getDb();
-  await db.exec(`CREATE TABLE IF NOT EXISTS dot_action_queue (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    empresa_id TEXT NOT NULL,
-    decision_id INTEGER NOT NULL,
-    option_id TEXT NOT NULL,
-    action TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'prepared',
-    approved_at TEXT,
-    executed_at TEXT,
-    error TEXT,
-    created_at TEXT NOT NULL
-  )`);
-  await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_action_queue_decision_option ON dot_action_queue(empresa_id, decision_id, option_id)');
-  await db.exec("CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_action_queue_one_active_decision ON dot_action_queue(empresa_id, decision_id) WHERE status IN ('prepared','approved','executing')");
+  await requireSchema(db, {
+    tables: ['dot_action_queue'],
+    columns: {
+      dot_action_queue: [
+        'id',
+        'empresa_id',
+        'decision_id',
+        'option_id',
+        'action',
+        'status',
+        'approved_at',
+        'executed_at',
+        'error',
+        'created_at',
+      ],
+    },
+    indexes: [
+      { table: 'dot_action_queue', name: 'ux_dot_action_queue_decision_option' },
+      { table: 'dot_action_queue', name: 'ux_dot_action_queue_one_active_decision' },
+    ],
+  });
 }
 
 export async function prepareDotActionFromDecision(

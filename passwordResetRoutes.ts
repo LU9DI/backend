@@ -9,6 +9,7 @@ import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
 import { enviarEmail, smtpConfigured } from './lib/mailer.js';
 import { validarSenhaEmpresa } from './passwordPolicy.js';
+import { requireSchema } from './lib/migrations.js';
 
 const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(
   /\/$/,
@@ -43,35 +44,19 @@ export async function invalidatePasswordResetTokens(
   return Number(result.changes || 0);
 }
 
+/**
+ * Garante que o schema de autenticação já existe — sem executar DDL.
+ * A DDL vive em `runCentralMigrations` (lib/migrations.ts), executada no boot.
+ */
 export async function ensureAuthColumns(db: Database) {
-  const cols = (await db.all(`PRAGMA table_info(usuarios)`)).map((c: any) => c.name);
-  if (!cols.includes('email')) {
-    await db.exec(`ALTER TABLE usuarios ADD COLUMN email TEXT`);
-  }
-  try {
-    await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios(email)`);
-  } catch {
-    /* ok */
-  }
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS password_resets (
-      id TEXT PRIMARY KEY,
-      usuario_id TEXT NOT NULL,
-      token_hash TEXT NOT NULL,
-      expira_em TIMESTAMPTZ NOT NULL,
-      usado INTEGER DEFAULT 0,
-      criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  try {
-    await db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_password_resets_usuario ON password_resets(usuario_id, usado)`
-    );
-  } catch {
-    /* ok */
-  }
+  await requireSchema(db, {
+    columns: { usuarios: ['email'] },
+    tables: ['password_resets'],
+    indexes: [
+      { table: 'usuarios', name: 'idx_usuarios_email' },
+      { table: 'password_resets', name: 'idx_password_resets_usuario' },
+    ],
+  });
 }
 
 export async function createUsuarioForEmpresa(

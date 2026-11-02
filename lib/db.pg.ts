@@ -7,7 +7,6 @@ import pg from 'pg';
 import type { Database } from 'sqlite';
 
 const { Pool } = pg;
-let pool: pg.Pool | null = null;
 
 function convertPlaceholders(sql: string): string {
   let n = 0;
@@ -94,6 +93,8 @@ export type PgDatabase = {
   all: <T = any>(sql: string, params?: any[]) => Promise<T[]>;
   close: () => Promise<void>;
   transaction: <T>(fn: (tx: PgDatabase) => Promise<T>) => Promise<T>;
+  /** Executa `work` com um advisory lock PostgreSQL em conexão dedicada. */
+  withMigrationLock: <T>(lockKey: number | bigint, work: (db: PgDatabase) => Promise<T>) => Promise<T>;
 };
 
 export function getPgSslConfig(
@@ -126,6 +127,70 @@ export function getPgSslConfig(
   };
 }
 
+function describePgError(error: any): string {
+  const code = error?.code ? ` [${error.code}]` : '';
+  return `${error?.message || error}:${code}`;
+}
+
+/**
+ * Tolerância ESTREITA a corrida de DDL idempotente: apenas comandos com
+ * `IF NOT EXISTS` podem colidir no catálogo quando duas instâncias criam o
+ * mesmo objeto ao mesmo tempo. Qualquer outro erro (inclusive 42P07/42701 em
+ * DDL sem IF NOT EXISTS) propaga.
+ */
+function isIdempotentDdlRace(statement: string, error: any): boolean {
+  if (!/IF\s+NOT\s+EXISTS/i.test(statement)) return false;
+  const message = String(error?.message || error);
+  if (error?.code === '42P07' || error?.code === '42701') return true;
+  if (/already exists/i.test(message)) return true;
+  return (
+    error?.code === '23505' &&
+    /unique constraint "pg_(type|class|attribute|index|constraint|proc)/i.test(message)
+  );
+}
+
+type ClientMethods = Pick<PgDatabase, 'exec' | 'run' | 'get' | 'all'>;
+
+/** Métodos do adapter ligados a UM PoolClient (transação e lock de migração). */
+function createClientMethods(client: pg.PoolClient): ClientMethods {
+  return {
+    async exec(sql: string) {
+      const adapted = adaptSql(sql);
+      for (const st of adapted.split(';').map((x) => x.trim()).filter(Boolean)) {
+        if (/^PRAGMA/i.test(st)) continue;
+        try {
+          await client.query(st);
+        } catch (error: any) {
+          if (isIdempotentDdlRace(st, error)) {
+            console.warn('pg.exec: corrida de DDL idempotente ignorada:', describePgError(error));
+            continue;
+          }
+          console.error('pg.exec falhou:', describePgError(error));
+          console.error('SQL:', st.slice(0, 500));
+          throw error;
+        }
+      }
+    },
+    async run(sql: string, params: any[] = []) {
+      if (/^PRAGMA/i.test(sql.trim())) return { changes: 0 };
+      const q = convertPlaceholders(adaptSql(sql));
+      const r = await client.query(q, params);
+      const returnedId = (r.rows?.[0] && (r.rows[0].id ?? r.rows[0].ID)) as number | undefined;
+      return { changes: r.rowCount || 0, lastID: returnedId };
+    },
+    async get<T = any>(sql: string, params: any[] = []): Promise<T | undefined> {
+      if (/PRAGMA\s+table_info/i.test(sql)) return (await handlePragma(client, sql))[0] as T;
+      const r = await client.query(convertPlaceholders(adaptSql(sql)), params);
+      return r.rows[0] as T | undefined;
+    },
+    async all<T = any>(sql: string, params: any[] = []): Promise<T[]> {
+      if (/PRAGMA\s+table_info/i.test(sql)) return (await handlePragma(client, sql)) as T[];
+      const r = await client.query(convertPlaceholders(adaptSql(sql)), params);
+      return r.rows as T[];
+    },
+  };
+}
+
 export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
   const connectionTimeoutMs = Math.max(
     3000,
@@ -136,7 +201,7 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
     Number(process.env.PG_CONNECT_ATTEMPTS || 3),
   );
 
-  pool = new Pool({
+  const pool = new Pool({
     connectionString: databaseUrl,
     ssl: getPgSslConfig(databaseUrl),
     max: Number(process.env.PG_POOL_MAX || 10),
@@ -170,7 +235,6 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
 
   if (lastError) {
     await pool.end().catch(() => undefined);
-    pool = null;
     throw lastError;
   }
 
@@ -181,28 +245,20 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
         .split(';')
         .map((x) => x.trim())
         .filter(Boolean);
-      const c = await pool!.connect();
+      const c = await pool.connect();
       try {
         for (const st of statements) {
           if (/^PRAGMA/i.test(st)) continue;
           try {
             await c.query(st);
-          } catch (e: any) {
-            const msg = String(e?.message || e);
-            if (
-              /already exists/i.test(msg) ||
-              e?.code === '42P07' ||
-              e?.code === '42701' ||
-              // Corrida de DDL entre instâncias: dois CREATE TABLE/INDEX
-              // IF NOT EXISTS simultâneos podem colidir nos índices únicos do
-              // catálogo (pg_type, pg_class, pg_attribute...). O objeto foi
-              // criado pela outra instância; seguir é idempotente.
-              (e?.code === '23505' && /unique constraint "pg_(type|class|attribute|index|constraint|proc)/i.test(msg))
-            ) {
+          } catch (error: any) {
+            if (isIdempotentDdlRace(st, error)) {
+              console.warn('pg.exec: corrida de DDL idempotente ignorada:', describePgError(error));
               continue;
             }
-            console.error('pg.exec falhou:', msg);
-            throw e;
+            console.error('pg.exec falhou:', describePgError(error));
+            console.error('SQL:', st.slice(0, 500));
+            throw error;
           }
         }
       } finally {
@@ -211,7 +267,7 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
     },
 
     async run(sql: string, params: any[] = []) {
-      const c = await pool!.connect();
+      const c = await pool.connect();
       try {
         if (/^PRAGMA/i.test(sql.trim())) return { changes: 0 };
         const q = convertPlaceholders(adaptSql(sql));
@@ -224,7 +280,7 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
     },
 
     async get<T = any>(sql: string, params: any[] = []): Promise<T | undefined> {
-      const c = await pool!.connect();
+      const c = await pool.connect();
       try {
         if (/PRAGMA\s+table_info/i.test(sql)) {
           const rows = await handlePragma(c, sql);
@@ -239,7 +295,7 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
     },
 
     async all<T = any>(sql: string, params: any[] = []): Promise<T[]> {
-      const c = await pool!.connect();
+      const c = await pool.connect();
       try {
         if (/PRAGMA\s+table_info/i.test(sql)) {
           return (await handlePragma(c, sql)) as T[];
@@ -253,53 +309,123 @@ export async function initPgDatabase(databaseUrl: string): Promise<PgDatabase> {
     },
 
     async close() {
-      await pool?.end();
-      pool = null;
+      // Encerra somente o pool desta instância.
+      await pool.end();
     },
 
     async transaction<T>(fn: (tx: PgDatabase) => Promise<T>) {
-      const c = await pool!.connect();
+      // Um único PoolClient entre BEGIN, operações, COMMIT e ROLLBACK.
+      const txClient = await pool.connect();
       const tx: PgDatabase = {
-        async exec(sql: string) {
-          const adapted = adaptSql(sql);
-          for (const st of adapted.split(';').map((x) => x.trim()).filter(Boolean)) {
-            if (/^PRAGMA/i.test(st)) continue;
-            await c.query(st);
-          }
-        },
-        async run(sql: string, params: any[] = []) {
-          if (/^PRAGMA/i.test(sql.trim())) return { changes: 0 };
-          const q = convertPlaceholders(adaptSql(sql));
-          const r = await c.query(q, params);
-          const returnedId = (r.rows?.[0] && (r.rows[0].id ?? r.rows[0].ID)) as number | undefined;
-          return { changes: r.rowCount || 0, lastID: returnedId };
-        },
-        async get<T2 = any>(sql: string, params: any[] = []) {
-          if (/PRAGMA\s+table_info/i.test(sql)) return (await handlePragma(c, sql))[0] as T2;
-          const r = await c.query(convertPlaceholders(adaptSql(sql)), params);
-          return r.rows[0] as T2 | undefined;
-        },
-        async all<T2 = any>(sql: string, params: any[] = []) {
-          if (/PRAGMA\s+table_info/i.test(sql)) return (await handlePragma(c, sql)) as T2[];
-          const r = await c.query(convertPlaceholders(adaptSql(sql)), params);
-          return r.rows as T2[];
-        },
+        ...createClientMethods(txClient),
         async close() { /* transaction client owns its connection */ },
         async transaction<T2>(nested: (tx: PgDatabase) => Promise<T2>) {
           return nested(tx);
         },
+        withMigrationLock: async <T2>(_lockKey: number | bigint, nested: (db: PgDatabase) => Promise<T2>) => nested(tx),
       };
       try {
-        await c.query('BEGIN');
+        await txClient.query('BEGIN');
         const result = await fn(tx);
-        await c.query('COMMIT');
+        await txClient.query('COMMIT');
         return result;
       } catch (error) {
-        try { await c.query('ROLLBACK'); } catch {}
+        try {
+          await txClient.query('ROLLBACK');
+        } catch (rollbackError: any) {
+          // Nunca mascarar o erro original da transação.
+          console.error('pg.transaction: ROLLBACK falhou:', describePgError(rollbackError));
+        }
         throw error;
       } finally {
-        c.release();
+        txClient.release();
       }
+    },
+
+    async withMigrationLock<T>(lockKey: number | bigint, work: (db: PgDatabase) => Promise<T>): Promise<T> {
+      const key = typeof lockKey === 'bigint' ? lockKey.toString() : String(Math.trunc(lockKey));
+
+      // Conexão dedicada mantida durante toda a sequência de migrações.
+      const lockClient = await pool.connect().catch((error: any) => {
+        throw new Error(
+          `Falha fatal ao abrir conexão dedicada do advisory lock de migração PostgreSQL (${key}): ${describePgError(error)}`,
+        );
+      });
+
+      // As migrações rodam NESTA conexão (não no pool): funciona com
+      // PG_POOL_MAX=1 e não exige uma segunda conexão.
+      const scoped: PgDatabase = {
+        ...createClientMethods(lockClient),
+        async close() { /* a conexão pertence ao lock */ },
+        async transaction<T2>(nested: (tx: PgDatabase) => Promise<T2>) {
+          await lockClient.query('BEGIN');
+          try {
+            const result = await nested(scoped);
+            await lockClient.query('COMMIT');
+            return result;
+          } catch (error) {
+            try {
+              await lockClient.query('ROLLBACK');
+            } catch (rollbackError: any) {
+              console.error('pg.migrationLock: ROLLBACK falhou:', describePgError(rollbackError));
+            }
+            throw error;
+          }
+        },
+        withMigrationLock: async <T2>(_nestedKey: number | bigint, nested: (db: PgDatabase) => Promise<T2>) => nested(scoped),
+      };
+
+      let lockAcquired = false;
+      let connectionLost = false;
+      let result: T | undefined;
+      let failure: unknown;
+      let unlockFailure: unknown;
+
+      const onConnectionError = (error: Error) => {
+        connectionLost = true;
+        console.error('[migrations] conexão dedicada do lock PostgreSQL perdida:', describePgError(error));
+      };
+      lockClient.on('error', onConnectionError);
+
+      try {
+        try {
+          await lockClient.query('SELECT pg_advisory_lock($1)', [key]);
+          lockAcquired = true;
+        } catch (error: any) {
+          throw new Error(
+            `Falha fatal ao adquirir o advisory lock de migração PostgreSQL (${key}): ${describePgError(error)}`,
+          );
+        }
+
+        try {
+          result = await work(scoped);
+        } catch (error) {
+          failure = error;
+        }
+
+        if (!failure && connectionLost) {
+          failure = new Error(
+            `Conexão dedicada do advisory lock de migração PostgreSQL (${key}) foi perdida durante a inicialização`,
+          );
+        }
+
+        if (lockAcquired && !connectionLost) {
+          try {
+            await lockClient.query('SELECT pg_advisory_unlock($1)', [key]);
+          } catch (error: any) {
+            unlockFailure = new Error(
+              `Falha fatal ao liberar o advisory lock de migração PostgreSQL (${key}): ${describePgError(error)}`,
+            );
+          }
+        }
+      } finally {
+        lockClient.removeListener('error', onConnectionError);
+        lockClient.release(connectionLost);
+      }
+
+      if (failure) throw failure;
+      if (unlockFailure) throw unlockFailure;
+      return result as T;
     },
   };
 

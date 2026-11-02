@@ -1,27 +1,19 @@
 /** LGPD: colunas + anonimização sem funções de data ambíguas no SQL. */
 import type { Database } from 'sqlite';
+import { requireReviewSchema } from './migrations.js';
 
 const DEFAULT_DAYS = Number(process.env.LGPD_WHATSAPP_RETENTION_DAYS || 90);
 
+/** Verifica (sem DDL) as colunas de tratamento LGPD em reviews. */
 export async function ensureReviewTreatmentColumns(db: Database): Promise<void> {
-  for (const name of ['treated_at', 'treated_note', 'client_whatsapp'] as const) {
-    try {
-      await db.exec(`ALTER TABLE reviews ADD COLUMN ${name} TEXT`);
-    } catch {
-      /* exists */
-    }
-  }
+  await requireReviewSchema(db, ['treated_at', 'treated_note', 'client_whatsapp']);
 }
 
 export async function anonymizeOldClientWhatsapp(
   db: Database,
   opts?: { retentionDays?: number; limit?: number }
 ): Promise<{ anonymized: number }> {
-  try {
-    await ensureReviewTreatmentColumns(db);
-  } catch {
-    /* */
-  }
+  await ensureReviewTreatmentColumns(db);
   const limit = Math.max(1, Math.min(500, opts?.limit ?? 200));
   const treatedCut = Date.now() - 7 * 86400000;
   const createdCut = Date.now() - (opts?.retentionDays ?? DEFAULT_DAYS) * 86400000;
