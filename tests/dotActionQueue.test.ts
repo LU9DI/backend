@@ -129,6 +129,51 @@ queueTest('Dot action queue: approval is one-way and execution is replay-safe', 
   assert.equal(replayExecution.ok, false);
 });
 
+queueTest('Dot action queue: audit failure rolls back approval state', async () => {
+  await setup();
+  const empresa = crypto.randomUUID();
+  const decisionId = await seedDecision(empresa);
+  const prepared = await prepareDotActionFromDecision(empresa, decisionId, 'opcao_1');
+  assert.ok(prepared?.id);
+
+  const db = getDb();
+  await db.exec(`
+    CREATE TRIGGER fail_dot_approval_audit
+    BEFORE INSERT ON dot_action_audit
+    WHEN NEW.event = 'approved'
+    BEGIN
+      SELECT RAISE(ABORT, 'simulated audit failure');
+    END
+  `);
+
+  try {
+    await assert.rejects(
+      approveDotAction(empresa, Number(prepared.id), 'approver-rollback'),
+      /simulated audit failure/i,
+    );
+  } finally {
+    await db.exec('DROP TRIGGER IF EXISTS fail_dot_approval_audit');
+  }
+
+  const action = await db.get(
+    'SELECT status, approved_at FROM dot_action_queue WHERE id = ? AND empresa_id = ?',
+    [prepared.id, empresa],
+  );
+  const decision = await db.get(
+    'SELECT status FROM dot_decisions WHERE id = ? AND empresa_id = ?',
+    [decisionId, empresa],
+  );
+  const approvalAudit = await db.get(
+    "SELECT id FROM dot_action_audit WHERE empresa_id = ? AND action_id = ? AND event = 'approved'",
+    [empresa, Number(prepared.id)],
+  );
+
+  assert.equal(action?.status, 'prepared');
+  assert.equal(action?.approved_at, null);
+  assert.equal(decision?.status, 'prepared');
+  assert.equal(approvalAudit, undefined);
+});
+
 queueTest('Dot action queue: concurrent approvals consume the same action only once', async () => {
   await setup();
   const empresa = crypto.randomUUID();
