@@ -27,6 +27,23 @@ test('duas instâncias PostgreSQL concorrentes retornam a mesma ação sem audit
   process.env.NODE_ENV = 'test';
   await initDB();
   const db = getDb();
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS dot_decisions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      empresa_id TEXT NOT NULL,
+      event_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      priority TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      evidence_json TEXT NOT NULL,
+      recommendation TEXT NOT NULL,
+      options_json TEXT NOT NULL,
+      requires_approval INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL
+    )
+  `);
   const empresaId = `pg-concurrency-${crypto.randomUUID()}`;
   const options = [{ id: 'opcao_pg', title: 'Teste', action: 'priorizar_e_resolver', risk: 'medium' }];
   const seeded = await db.run(
