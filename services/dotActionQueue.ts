@@ -1,6 +1,6 @@
 import { getDb, withDbTransaction } from '../lib/db.js';
 import { dotActionRequiresApproval, getDotActionDefinition } from './dotActionRegistry.js';
-import { recordDotActionAudit } from './dotActionAudit.js';
+import { ensureDotActionAuditSchema, recordDotActionAudit } from './dotActionAudit.js';
 import { executeDotActionThroughGateway } from './dotExecutionGateway.js';
 
 export type DotActionStatus = 'prepared' | 'approved' | 'executing' | 'executed' | 'failed' | 'cancelled';
@@ -123,8 +123,9 @@ export async function prepareDotActionFromDecision(empresaId: string, decisionId
   return prepared;
 }
 
-export async function approveDotAction(empresaId: string, actionId: number) {
+export async function approveDotAction(empresaId: string, actionId: number, actorUserId?: string | null) {
   await ensureSchema();
+  await ensureDotActionAuditSchema();
   const now = new Date().toISOString();
 
   const approved = await withActionLock(`approve:${empresaId}:${actionId}`, () =>
@@ -153,6 +154,15 @@ export async function approveDotAction(empresaId: string, actionId: number) {
       );
       if (!updated || updated.changes !== 1) throw new Error('Não foi possível consumir a ação preparada; transação revertida.');
 
+      // O evento de auditoria participa da mesma transação da aprovação.
+      // Se a gravação falhar, a mudança de status também será revertida.
+      await tx.run(
+        `INSERT INTO dot_action_audit
+          (empresa_id, action_id, decision_id, event, actor_type, actor_id, metadata, created_at)
+          VALUES (?,?,?,?,?,?,?,?)`,
+        [empresaId, actionId, Number(action.decision_id), 'approved', 'user', actorUserId || null, null, now],
+      );
+
       return {
         id: Number(action.id),
         decisionId: Number(action.decision_id),
@@ -164,9 +174,6 @@ export async function approveDotAction(empresaId: string, actionId: number) {
     }),
   );
 
-  if (approved?.id) {
-    await recordDotActionAudit({ empresaId, actionId, decisionId: Number(approved.decisionId), event: 'approved', actorType: 'user' });
-  }
   return approved;
 }
 
