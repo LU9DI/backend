@@ -429,7 +429,7 @@ export function mountDotRoutes(app: Express) {
     if (!access.allowed || !access.empresaId) return deny(res, access);
     if (!(await requireMutationPermission(res, access, 'filtra', 'update', { route: '/api/dot/actions/:id/approve' }))) return;
     const actionId = Number(req.params.id);
-    const action = await approveDotAction(access.empresaId, actionId);
+    const action = await approveDotAction(access.empresaId, actionId, access.userId || null);
     if (!action) return res.status(409).json({ error: 'Ação não encontrada ou já processada.' });
 
     // Aprovar não executa. A aprovação apenas libera a ação para a etapa
