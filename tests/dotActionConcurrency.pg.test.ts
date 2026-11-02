@@ -50,7 +50,7 @@ test('duas instâncias PostgreSQL concorrentes retornam a mesma ação sem audit
     `INSERT INTO dot_decisions
       (empresa_id,event_id,type,priority,severity,reason,evidence_json,recommendation,options_json,requires_approval,status,created_at)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
-    [empresaId, Date.now(), 'crise_reputacional', 'high', 'critical', 'pg concurrency', '[]', 'teste', JSON.stringify(options), 1, 'pending', new Date().toISOString()],
+    [empresaId, Date.now() % 2_000_000_000, 'crise_reputacional', 'high', 'critical', 'pg concurrency', '[]', 'teste', JSON.stringify(options), 1, 'pending', new Date().toISOString()],
   );
   const decisionId = Number(seeded.lastID);
   assert.ok(decisionId > 0, 'decisão de teste deve ser criada');
