@@ -42,7 +42,7 @@ export function validateEnv(): EnvReport {
         'DATABASE_URL (PostgreSQL) é obrigatório em produção. ' +
           'Defina USE_SUPABASE_DB=1 para usar o Postgres do Supabase.'
       );
-    } else if (!/^postgres(ql)?:\\/\\//i.test(dbUrl)) {
+    } else if (!/^postgres(ql)?:\/\//i.test(dbUrl)) {
       errors.push('DATABASE_URL deve ser uma URL postgres:// ou postgresql://.');
     }
   }
@@ -56,7 +56,7 @@ export function validateEnv(): EnvReport {
     const webauthnOrigin = process.env.WEBAUTHN_ORIGIN?.trim() || '';
     if (!webauthnRpId || !webauthnOrigin) {
       errors.push('WEBAUTHN_RP_ID e WEBAUTHN_ORIGIN são obrigatórios em produção.');
-    } else if (/^localhost(?:\\.|$)/i.test(webauthnRpId) || /^http:\\/\\/localhost(?::|$)/i.test(webauthnOrigin)) {
+    } else if (/^localhost(?:\\.|$)/i.test(webauthnRpId) || /^http:\/\/localhost(?::|$)/i.test(webauthnOrigin)) {
       errors.push('WebAuthn em produção não pode usar localhost como RP ID/origin.');
     }
   }
