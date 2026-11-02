@@ -1,4 +1,4 @@
-import { getDb, withDbTransaction } from '../lib/db.js';
+import { dbEngine, getDb, withDbTransaction } from '../lib/db.js';
 import { dotActionRequiresApproval, getDotActionDefinition } from './dotActionRegistry.js';
 import { ensureDotActionAuditSchema } from './dotActionAudit.js';
 import { executeDotActionThroughGateway } from './dotExecutionGateway.js';
@@ -63,7 +63,8 @@ export async function prepareDotActionFromDecision(
   await ensureDotActionAuditSchema();
   const prepared = await withActionLock(`prepare:${empresaId}:${decisionId}`, () =>
     withDbTransaction(async (tx) => {
-      const decision = await tx.get('SELECT * FROM dot_decisions WHERE id = ? AND empresa_id = ? LIMIT 1', [decisionId, empresaId]);
+      const decisionLock = dbEngine() === 'postgres' ? ' FOR UPDATE' : '';
+      const decision = await tx.get(`SELECT * FROM dot_decisions WHERE id = ? AND empresa_id = ? LIMIT 1${decisionLock}`, [decisionId, empresaId]);
       if (!decision) return null;
 
       const decisionStatus = String(decision.status || '');
@@ -151,13 +152,13 @@ export async function approveDotAction(empresaId: string, actionId: number, acto
   const approved = await withActionLock(`approve:${empresaId}:${actionId}`, () =>
     withDbTransaction(async (tx) => {
       const action = await tx.get(
-        "SELECT id, decision_id, option_id, action FROM dot_action_queue WHERE id = ? AND empresa_id = ? AND status = 'prepared' LIMIT 1",
+        `SELECT id, decision_id, option_id, action FROM dot_action_queue WHERE id = ? AND empresa_id = ? AND status = 'prepared' LIMIT 1${dbEngine() === 'postgres' ? ' FOR UPDATE' : ''}`,
         [actionId, empresaId],
       );
       if (!action) return null;
 
       const decision = await tx.get(
-        'SELECT id, status, requires_approval FROM dot_decisions WHERE id = ? AND empresa_id = ? LIMIT 1',
+        `SELECT id, status, requires_approval FROM dot_decisions WHERE id = ? AND empresa_id = ? LIMIT 1${dbEngine() === 'postgres' ? ' FOR UPDATE' : ''}`,
         [action.decision_id, empresaId],
       );
       if (!decision || String(decision.status) !== 'prepared' || Number(decision.requires_approval) !== 1) return null;
