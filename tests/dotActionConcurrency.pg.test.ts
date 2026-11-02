@@ -4,24 +4,17 @@
  */
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { spawn } from 'node:child_process';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { parseWorkerJson, runNodeScript } from './helpers/pg-test-utils.js';
 import { initDB, getDb, closeDB } from '../lib/db.js';
 
-function runWorker(args: string[]): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const worker = args[0] === 'approve' ? 'approve-dot-action.pg.ts' : 'prepare-dot-action.pg.ts';
-    const workerArgs = args[0] === 'approve' ? args.slice(1) : args;
-    const child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL(`./helpers/${worker}`, import.meta.url)), ...workerArgs], {
-      cwd: process.cwd(), env: { ...process.env, NODE_ENV: 'test' }, stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = ''; let stderr = '';
-    child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
-    child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
-    child.on('error', reject);
-    child.on('close', (code) => code === 0 ? resolve({ stdout, stderr }) : reject(new Error(`worker exit ${code}: ${stderr}`)));
-  });
+const PREPARE_WORKER = new URL('./helpers/prepare-dot-action.pg.ts', import.meta.url);
+const APPROVE_WORKER = new URL('./helpers/approve-dot-action.pg.ts', import.meta.url);
+const WORKER_TIMEOUT_MS = 60_000;
+
+function workerEnv(): NodeJS.ProcessEnv {
+  assert.ok(process.env.DATABASE_URL, 'DATABASE_URL de teste é obrigatória');
+  return { DATABASE_URL: process.env.DATABASE_URL };
 }
 
 test('duas instâncias PostgreSQL concorrentes retornam a mesma ação sem auditoria duplicada', async () => {
@@ -58,9 +51,12 @@ test('duas instâncias PostgreSQL concorrentes retornam a mesma ação sem audit
   assert.ok(decisionId > 0, 'decisão de teste deve ser criada');
   try {
     const args = [empresaId, String(decisionId), 'opcao_pg'];
-    const [a, b] = await Promise.all([runWorker(args), runWorker(args)]);
-    const resultA = JSON.parse(a.stdout);
-    const resultB = JSON.parse(b.stdout);
+    const results = await Promise.all([
+      runNodeScript(PREPARE_WORKER, args, workerEnv(), WORKER_TIMEOUT_MS),
+      runNodeScript(PREPARE_WORKER, args, workerEnv(), WORKER_TIMEOUT_MS),
+    ]);
+    const resultA = parseWorkerJson<{ id: number; status: string }>(results[0], 'prepare-worker-1');
+    const resultB = parseWorkerJson<{ id: number; status: string }>(results[1], 'prepare-worker-2');
     assert.equal(resultA.id, resultB.id, 'ambas as instâncias devem receber o mesmo ID idempotente');
     const actions = await db.all('SELECT id,status FROM dot_action_queue WHERE empresa_id = ? AND decision_id = ?', [empresaId, decisionId]);
     assert.equal(actions.length, 1, 'deve existir exatamente uma ação');
@@ -97,11 +93,11 @@ test('duas instâncias PostgreSQL não aprovam duas vezes a mesma ação', async
     );
     assert.ok(prepared?.id);
     const args = [empresaId, String(prepared.id), 'pg-approver'];
-    const [a, b] = await Promise.all([
-      runWorker(['approve', ...args]),
-      runWorker(['approve', ...args]),
+    const outputs = await Promise.all([
+      runNodeScript(APPROVE_WORKER, args, workerEnv(), WORKER_TIMEOUT_MS),
+      runNodeScript(APPROVE_WORKER, args, workerEnv(), WORKER_TIMEOUT_MS),
     ]);
-    const results = [JSON.parse(a.stdout), JSON.parse(b.stdout)];
+    const results = outputs.map((output, index) => parseWorkerJson<any>(output, `approve-worker-${index + 1}`));
     assert.equal(results.filter((result) => result?.status === 'approved').length, 1,
       'exatamente uma instância deve concluir a aprovação');
     assert.equal(results.filter((result) => result === null).length, 1,

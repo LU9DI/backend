@@ -85,9 +85,12 @@ test('DOT execution cannot proceed without an authenticated actor permission', (
 test('DOT execution audit preserves the authenticated actor', () => {
   const gateway = read('services/dotExecutionGateway.ts');
   const audit = read('services/dotActionAudit.ts');
+  const migrations = read('lib/migrations.ts');
   assert.match(gateway, /actorType: 'user'/);
   assert.match(gateway, /actorId: actorUserId \|\| null/);
-  assert.match(audit, /actor_id TEXT/);
+  // O schema da trilha vive na migração central; o serviço só registra.
+  assert.match(migrations, /actor_id TEXT/);
+  assert.doesNotMatch(audit, /CREATE TABLE|ALTER TABLE/);
   assert.match(audit, /input\.actorId \|\| null/);
 });
 

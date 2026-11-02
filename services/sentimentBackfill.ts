@@ -6,18 +6,11 @@
 import type { Database } from 'sqlite';
 import { analyzeSentimentHeuristic } from '../lib/sentiment.js';
 import { analisarSentimento } from '../groqService.js';
+import { requireReviewSchema } from '../lib/migrations.js';
 
+/** Verifica (sem DDL) as colunas de sentimento; DDL vive na migração central. */
 export async function ensureSentimentColumns(db: Database): Promise<void> {
-  const cols = (await db.all(`PRAGMA table_info(reviews)`)).map((c: any) => c.name);
-  if (!cols.includes('sentiment')) {
-    await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment TEXT`);
-  }
-  if (!cols.includes('sentiment_score')) {
-    await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_score REAL`);
-  }
-  if (!cols.includes('sentiment_source')) {
-    await db.exec(`ALTER TABLE reviews ADD COLUMN sentiment_source TEXT`);
-  }
+  await requireReviewSchema(db, ['sentiment', 'sentiment_score', 'sentiment_source']);
 }
 
 export type BackfillOptions = {
