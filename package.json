@@ -13,7 +13,8 @@
     "checklist": "tsx scripts/checklist-saas.ts",
     "test": "node scripts/run-tests.mjs",
     "audit": "npm audit --omit=dev",
-    "mcp:smoke": "tsx scripts/mcp-smoke-test.ts"
+    "mcp:smoke": "tsx scripts/mcp-smoke-test.ts",
+    "test:postgres": "node --import tsx --test tests/dotActionConcurrency.pg.test.ts"
   },
   "engines": {
     "node": ">=20"
