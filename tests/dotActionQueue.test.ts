@@ -98,8 +98,15 @@ queueTest('Dot action queue: approval is one-way and execution is replay-safe', 
   const prepared = await prepareDotActionFromDecision(empresa, decisionId, 'opcao_1');
   assert.ok(prepared?.id);
 
-  const approved = await approveDotAction(empresa, Number(prepared.id));
+  const approved = await approveDotAction(empresa, Number(prepared.id), 'approver-1');
   assert.equal(approved?.status, 'approved');
+
+  const approvalAudit = await getDb().get(
+    "SELECT actor_type, actor_id FROM dot_action_audit WHERE empresa_id = ? AND action_id = ? AND event = 'approved' ORDER BY id DESC LIMIT 1",
+    [empresa, Number(prepared.id)],
+  );
+  assert.equal(approvalAudit?.actor_type, 'user');
+  assert.equal(String(approvalAudit?.actor_id), 'approver-1');
 
   const replayApproval = await approveDotAction(empresa, Number(prepared.id));
   assert.equal(replayApproval, null);
