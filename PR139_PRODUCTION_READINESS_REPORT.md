@@ -22,7 +22,7 @@
 | Suíte PostgreSQL | **22/22 aprovados**, 0 falhas, 0 ignorados |
 | Testes direcionados de SoD/atomicidade/CSRF/spoofing | aprovados (incluídos na suíte) |
 | `git diff --check` | **0** |
-| CI GitHub (Backend CI/Dependency audit) | **verde**; único check vermelho é `deploy/lu9di/filtra-ai-api-fallback` por “Organization suspended / billing” (externo) |
+| CI GitHub (Backend CI/Dependency audit) | **verde**; único check vermelho é `deploy/lu9di/filtra-ai-api-fallback` (deploy Render) por “Organization suspended / billing” (externo) |
 | Commit/push | **realizados** no branch da PR (`4c9a781`); sem merge/deploy |
 
 A implementação está tecnicamente pronta para revisão e commit local. A
@@ -111,7 +111,7 @@ Correções no teste:
 Evidência: **Node 20.20.2 → 3 execuções consecutivas, 3/3 aprovados em todas**;
 Node 26 → suíte completa aprovada. O CI GitHub foi executado após o push e os
 jobs Backend CI/test, postgres-concurrency e Dependency audit passaram; resta
-apenas o status externo de deploy Deno bloqueado por billing.
+apenas o status externo de deploy Render bloqueado por billing.
 
 ---
 
@@ -218,7 +218,7 @@ devem ser acompanhados antes de autonomia ampla.
 
 ## 8. Bloqueadores para produção (externos ao código)
 
-1. **Status externo de deploy Deno**: o check
+1. **Status externo de deploy Render**: o check
    `deploy/lu9di/filtra-ai-api-fallback` falha com “Organization suspended —
    resolve billing to deploy”. Não é falha de código; Backend CI e Dependency
    audit estão verdes, mas esse status externo precisa ser resolvido.
@@ -248,7 +248,7 @@ O código está compilando, com auditoria 0/0, CI Backend verde (327/327 SQLite,
 O commit `4a3bf87` foi enviado ao branch da PR (sem merge/deploy). As ressalvas
 são de validação externa (staging/Render/Supabase, owner/flags,
 observabilidade), atualização do frontend para o header CSRF, aprovação da
-retenção, outbox externo e o check externo Deno bloqueado por billing.
+retenção, outbox externo e o check externo Render bloqueado por billing.
 **A produção permanece bloqueada até essas etapas serem concluídas.**
 
 **Nenhum merge ou deploy foi realizado.**
