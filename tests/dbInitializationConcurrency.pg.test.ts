@@ -103,11 +103,15 @@ test('três processos inicializam um banco PostgreSQL vazio simultaneamente sem 
 
   const { name, url } = await createTestDatabase('pg_init_concurrent');
   const previousUrl = process.env.DATABASE_URL;
+  // Declarado fora do try para que o finally sempre feche o pool, mesmo quando
+  // uma asserção falha no meio do cenário (evita mascarar o erro real com a
+  // terminação forçada das conexões no DROP DATABASE).
+  let probe: Awaited<ReturnType<typeof initPgDatabase>> | null = null;
   try {
     process.env.DATABASE_URL = url;
 
     // Banco começa vazio: nenhuma tabela pré-existente.
-    const probe = await initPgDatabase(url);
+    probe = await initPgDatabase(url);
     assert.equal(await tableExists(probe, 'reviews'), false, 'o banco de teste deve começar vazio');
 
     // Três processos independentes, cada um com seu próprio pool, partindo juntos.
@@ -128,7 +132,10 @@ test('três processos inicializam um banco PostgreSQL vazio simultaneamente sem 
     assert.equal(pids.size, 3, 'cada worker deve rodar em um processo Node próprio');
     for (const payload of payloads) {
       assert.equal(payload.engine, 'postgres');
-      assert.ok(payload.serverVersion?.startsWith('16.'), `worker deve falar com PostgreSQL 16, recebeu ${payload.serverVersion}`);
+      assert.ok(
+        Number(String(payload.serverVersion || '').split('.')[0]) >= 16,
+        `worker deve falar com PostgreSQL >= 16 (mesmo piso do teste), recebeu ${payload.serverVersion}`,
+      );
       assert.ok(payload.indexes.idx_dot_action_audit_action, 'worker deve enxergar os índices de auditoria');
       for (const column of REVIEW_COLUMNS) {
         assert.equal(
@@ -162,11 +169,17 @@ test('três processos inicializam um banco PostgreSQL vazio simultaneamente sem 
     // `initDB()` global também deve ser idempotente.
     await initDB();
     await assertRequiredSchema(getDb(), 'initDB() repetido');
-    await probe.close();
-    await closeDB();
   } finally {
     process.env.DATABASE_URL = previousUrl;
-    await dropTestDatabase(name);
+    // Fechar os pools ANTES de derrubar o banco: um pool aberto faria o
+    // `DROP DATABASE ... WITH (FORCE)` encerrar conexões ociosas e mascarar
+    // a asserção real com um erro de terminação.
+    try {
+      if (probe) await probe.close();
+      await closeDB();
+    } finally {
+      await dropTestDatabase(name);
+    }
   }
 });
 
