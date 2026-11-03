@@ -4,12 +4,13 @@
 > **PR:** [#139 — fix(dot): make preparation audit atomic and enforce CSRF](https://github.com/LU9DI/backend/pull/139)
 > **Branch:** `fix/dot-audit-integrity-postgres` → `master`
 > **HEAD funcional revisado:** `ee654f6e115c256ae884afe77994c3ea22f7cadf`
+> **HEAD documental atual:** `107f957cfdb041ef5c48af35076738a88d946531`
 > **Base:** `b8caf4048f557ce6681b1e08fe66475c7f406d66`
 > **Estado:** aberto, não mesclado. Este relatório não autoriza merge nem deploy.
 
 ## 1. Estado atual do PR
 
-O HEAD atual do PR é `ee654f6` (28 commits; 49 arquivos alterados), com base `b8caf404`. Este relatório será atualizado em commit documental separado; os checks do novo HEAD documental precisarão ser confirmados após a atualização.
+O HEAD atual do PR é `107f957` (29 commits; 49 arquivos alterados), com base `b8caf404`. O último HEAD funcional revisado é `ee654f6` (28 commits); `107f957` contém apenas a atualização documental deste relatório.
 
 O documento anterior continha informações de uma etapa antiga da integração — commit local `5769919`, patch apenas local, push bloqueado e base `a74c75d`. Essas informações não descrevem mais o estado atual do PR e ficam substituídas por este registro.
 
@@ -27,17 +28,21 @@ O documento anterior continha informações de uma etapa antiga da integração 
 
 ## 3. Validação no HEAD funcional `ee654f6`
 
-A execução mais recente do GitHub Actions para o HEAD funcional concluiu com sucesso:
+A execução do HEAD funcional `ee654f6` e as execuções do HEAD documental `107f957` concluíram com sucesso:
 
 | Check | Resultado |
 |---|---|
 | Backend CI — test (run 199) | **success** |
 | Backend CI — postgres-concurrency (run 199) | **success** |
 | Dependency audit (run 67) | **success** |
+| Backend CI — test + postgres-concurrency (HEAD documental `107f957`, run 200) | **success** |
+| Dependency audit (HEAD documental `107f957`) | **success** |
 
 Links das execuções:
 - [Backend CI — run 199](https://github.com/LU9DI/backend/actions/runs/41570326775)
 - [Dependency audit — run 67](https://github.com/LU9DI/backend/actions/runs/41570326693)
+- [Backend CI — HEAD documental `107f957`](https://github.com/LU9DI/backend/actions/runs/41570540985)
+- [Dependency audit — HEAD documental `107f957`](https://github.com/LU9DI/backend/actions/runs/41570546117)
 
 A primeira execução após a implementação (`b0bed66`) detectou duas suítes antigas que ainda esperavam o comportamento anterior de devolver a opção já preparada. Os testes foram atualizados para exigir conflito explícito quando a opção solicitada diverge. Na execução seguinte (`ee654f6`), build, suíte unitária/de integração, concorrência PostgreSQL e auditoria de dependências passaram. O status externo Deno continua sendo um status separado e não é um check de CI.
 
