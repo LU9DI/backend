@@ -26,7 +26,7 @@ const auditTest = (name: string, fn: () => Promise<void>) => test(name, { skip: 
 
 import { initDB, getDb } from '../lib/db.js';
 import { ensureDotActionAuditSchema } from '../services/dotActionAudit.js';
-import { listDotActions, prepareDotActionFromDecision } from '../services/dotActionQueue.js';
+import { DotActionOptionConflictError, listDotActions, prepareDotActionFromDecision } from '../services/dotActionQueue.js';
 
 process.env.NODE_ENV = 'test';
 process.env.SQLITE_DB_PATH = '/tmp/filtra-dot-action-audit-integrity-test.sqlite';
@@ -125,26 +125,41 @@ auditTest('prepare automático do Dot continua auditado como ator dot, sem ator 
   assert.equal(events[0].actor_id, null);
 });
 
-auditTest('prepare repetido mantém exatamente uma transição prepared (idempotência da trilha)', async () => {
+auditTest('prepare repetido é idempotente para a mesma opção e rejeita opção divergente', async () => {
   await setup();
   const empresa = crypto.randomUUID();
   const decisionId = await seedDecision(empresa);
 
   const first = await prepareDotActionFromDecision(empresa, decisionId, 'opcao_1', 'user-owner-1');
-  const second = await prepareDotActionFromDecision(empresa, decisionId, 'opcao_2', 'user-owner-1');
-  const third = await prepareDotActionFromDecision(empresa, decisionId, 'opcao_1', 'user-owner-1');
-  assert.ok(first?.id && second?.id && third?.id);
+  const second = await prepareDotActionFromDecision(empresa, decisionId, 'opcao_1', 'user-owner-1');
+  assert.ok(first?.id && second?.id);
   assert.equal(first!.id, second!.id);
-  assert.equal(first!.id, third!.id);
+  assert.equal(first!.optionId, 'opcao_1');
+
+  await assert.rejects(
+    () => prepareDotActionFromDecision(empresa, decisionId, 'opcao_2', 'user-owner-1'),
+    (error: unknown) => {
+      assert.ok(error instanceof DotActionOptionConflictError);
+      assert.equal(error.code, 'DOT_ACTION_OPTION_CONFLICT');
+      assert.equal(error.existingOptionId, 'opcao_1');
+      assert.equal(error.requestedOptionId, 'opcao_2');
+      return true;
+    },
+  );
+
+  const third = await prepareDotActionFromDecision(empresa, decisionId, 'opcao_1', 'user-owner-1');
+  assert.ok(third?.id);
+  assert.equal(third!.id, first!.id);
 
   const events = await preparedEvents(empresa, Number(first!.id));
   assert.equal(events.length, 1, 'repetir a preparação não pode gerar eventos duplicados');
 
   const rows = await getDb().all(
-    'SELECT id FROM dot_action_queue WHERE empresa_id = ? AND decision_id = ?',
+    'SELECT id, option_id FROM dot_action_queue WHERE empresa_id = ? AND decision_id = ?',
     [empresa, decisionId],
   );
   assert.equal(rows.length, 1, 'apenas uma ação ativa por decisão');
+  assert.equal(String(rows[0].option_id), 'opcao_1', 'conflito não pode substituir a opção preparada');
 });
 
 auditTest('falha ao gravar a auditoria reverte a preparação (sem ação órfã)', async () => {
