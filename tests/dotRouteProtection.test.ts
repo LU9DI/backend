@@ -626,5 +626,18 @@ describe('Bloqueio de sessão administrativa: cabeçalho anti-CSRF obrigatório'
     assert.ok(audit, 'a preparação precisa deixar trilha de auditoria');
     assert.equal(String(audit.actor_type), 'user');
     assert.equal(String(audit.actor_id), ownerA);
+
+    const conflictingOption = await request(
+      'POST',
+      `/api/dot/decisions/${Number(inserted.lastID)}/prepare-action`,
+      {
+        token: ownerTok,
+        body: { optionId: 'opcao_2' },
+      },
+    );
+    assert.equal(conflictingOption.status, 409, JSON.stringify(conflictingOption.data));
+    assert.equal(conflictingOption.data.code, 'DOT_ACTION_OPTION_CONFLICT');
+    assert.equal(conflictingOption.data.existingOptionId, 'opcao_1');
+    assert.equal(conflictingOption.data.requestedOptionId, 'opcao_2');
   });
 });
