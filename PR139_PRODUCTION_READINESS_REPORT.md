@@ -23,7 +23,7 @@
 | Testes direcionados de SoD/atomicidade/CSRF/spoofing | aprovados (incluídos na suíte) |
 | `git diff --check` | **0** |
 | CI GitHub (Backend CI/Dependency audit) | **verde**; único check vermelho é `deploy/lu9di/filtra-ai-api-fallback` por “Organization suspended / billing” (externo) |
-| Commit/push | **realizados** no branch da PR (`4a3bf87`); sem merge/deploy |
+| Commit/push | **realizados** no branch da PR (`4c9a781`); sem merge/deploy |
 
 A implementação está tecnicamente pronta para revisão e commit local. A
 ativação em produção continua bloqueada pelas pendências externas da seção 8.
@@ -109,8 +109,9 @@ Correções no teste:
 - nenhuma cobertura removida ou teste ignorado.
 
 Evidência: **Node 20.20.2 → 3 execuções consecutivas, 3/3 aprovados em todas**;
-Node 26 → suíte completa aprovada. O CI GitHub ainda precisa ser executado após
-o push; não há evidência de CI verde sem essa execução.
+Node 26 → suíte completa aprovada. O CI GitHub foi executado após o push e os
+jobs Backend CI/test, postgres-concurrency e Dependency audit passaram; resta
+apenas o status externo de deploy Deno bloqueado por billing.
 
 ---
 
