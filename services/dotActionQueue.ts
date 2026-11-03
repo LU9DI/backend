@@ -6,6 +6,18 @@ import { executeDotActionThroughGateway } from './dotExecutionGateway.js';
 
 export type DotActionStatus = 'prepared' | 'approved' | 'executing' | 'executed' | 'failed' | 'cancelled';
 
+export class DotActionOptionConflictError extends Error {
+  readonly code = 'DOT_ACTION_OPTION_CONFLICT';
+
+  constructor(
+    readonly existingOptionId: string,
+    readonly requestedOptionId: string,
+  ) {
+    super('Já existe uma ação ativa para esta decisão com outra opção. Atualize a decisão antes de tentar novamente.');
+    this.name = 'DotActionOptionConflictError';
+  }
+}
+
 const actionLocks = new Map<string, Promise<void>>();
 
 async function withActionLock<T>(key: string, work: () => Promise<T>): Promise<T> {
@@ -98,7 +110,13 @@ export async function prepareDotActionFromDecision(
         "SELECT * FROM dot_action_queue WHERE empresa_id = ? AND decision_id = ? AND status IN ('prepared','approved','executing') LIMIT 1",
         [empresaId, decisionId],
       );
-      if (existing) return normalizeActionRow(existing);
+      if (existing) {
+        const existingOptionId = String(existing.option_id ?? existing.optionId ?? '');
+        if (existingOptionId !== String(option.id)) {
+          throw new DotActionOptionConflictError(existingOptionId, String(option.id));
+        }
+        return normalizeActionRow(existing);
+      }
 
       // `run` não devolve o id em Postgres (o adapter descarta RETURNING);
       // reler pela chave (empresa, decisão, opção) dentro da mesma transação
