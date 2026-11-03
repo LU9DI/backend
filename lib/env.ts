@@ -18,10 +18,7 @@ export function isProductionRuntime(): boolean {
 export function validateEnv(): EnvReport {
   const errors: string[] = [];
   const warnings: string[] = [];
-  const timeline = (process.env.DENO_TIMELINE || '').trim();
-  const isDenoDeploy = process.env.DENO_DEPLOY === 'true';
-  const isDenoProduction = isDenoDeploy && timeline === 'production';
-  const isProd = process.env.NODE_ENV === 'production' || isDenoProduction;
+  const isProd = process.env.NODE_ENV === 'production';
 
   const jwt = process.env.JWT_SECRET || '';
   if (!jwt) {
