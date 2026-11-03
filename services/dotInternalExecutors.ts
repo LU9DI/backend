@@ -1,4 +1,5 @@
 import { getDb } from '../lib/db.js';
+import type { Database } from 'sqlite';
 
 export type DotInternalExecutionInput = {
   empresaId: string;
@@ -32,7 +33,7 @@ const outcomes: Record<string, { status: string; nextStep: string }> = {
   },
 };
 
-async function ensureSchema() {
+export async function ensureDotInternalActionSchema() {
   const db = getDb();
   await db.exec(`CREATE TABLE IF NOT EXISTS dot_internal_cases (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,9 +53,9 @@ async function ensureSchema() {
   await db.exec('CREATE INDEX IF NOT EXISTS idx_dot_internal_cases_empresa_status ON dot_internal_cases(empresa_id, status, updated_at)');
 }
 
-export async function executeDotInternalAction(input: DotInternalExecutionInput): Promise<DotInternalExecutionResult> {
-  await ensureSchema();
-  const db = getDb();
+export async function executeDotInternalAction(input: DotInternalExecutionInput, dbOverride?: Database): Promise<DotInternalExecutionResult> {
+  if (!dbOverride) await ensureDotInternalActionSchema();
+  const db = dbOverride || getDb();
   const now = new Date().toISOString();
   const outcome = outcomes[input.action] || {
     status: 'open',
