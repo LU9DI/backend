@@ -18,13 +18,12 @@
 | Vulnerabilidade GHSA-rmxm-3fg6-px4f | **corrigida** (`@hono/node-server@2.1.6`) |
 | `npm audit` / `npm audit --omit=dev` | **0 / 0** |
 | Build (`tsc --noEmit`) | **0 erros** |
-| Suíte SQLite | **329/329 aprovados**, 0 falhas, 0 ignorados |
+| Suíte SQLite | **327/327 aprovados**, 0 falhas, 0 ignorados |
 | Suíte PostgreSQL | **22/22 aprovados**, 0 falhas, 0 ignorados |
 | Testes direcionados de SoD/atomicidade/CSRF/spoofing | aprovados (incluídos na suíte) |
 | `git diff --check` | **0** |
-| CI GitHub verde | **pendente** (sem push nesta rodada) |
-| Staging/Render/Supabase/owner/flags | **não executados** |
-| Commit/push | **não autorizados nesta rodada** |
+| CI GitHub (Backend CI/Dependency audit) | **verde**; único check vermelho é `deploy/lu9di/filtra-ai-api-fallback` por “Organization suspended / billing” (externo) |
+| Commit/push | **realizados** no branch da PR (`4a3bf87`); sem merge/deploy |
 
 A implementação está tecnicamente pronta para revisão e commit local. A
 ativação em produção continua bloqueada pelas pendências externas da seção 8.
@@ -185,7 +184,7 @@ original perdido. A entrega atual continua sendo uma reconstrução sobre
 
 | Comando | Resultado real |
 |---|---|
-| `npm test` | **329/329 aprovados**, 0 falhas, 0 ignorados |
+| `npm test` | **327/327 aprovados**, 0 falhas, 0 ignorados (CI) |
 | `npm run test:postgres` | **22/22 aprovados**, 0 falhas, 0 ignorados |
 | `npm run build` / `tsc --noEmit` | **0 erros** |
 | `npm audit` | **0 vulnerabilidades** |
@@ -218,11 +217,12 @@ devem ser acompanhados antes de autonomia ampla.
 
 ## 8. Bloqueadores para produção (externos ao código)
 
-1. **CI GitHub verde**: executar o workflow após commit/push; a falha de
-   `dotMonitorIsTest` foi investigada e o teste endurecido, mas CI real ainda
-   não foi observado.
-2. **Revisão humana independente** e autorização explícita de commit/push
-   (a revisão automática independente foi feita nesta rodada).
+1. **Status externo de deploy Deno**: o check
+   `deploy/lu9di/filtra-ai-api-fallback` falha com “Organization suspended —
+   resolve billing to deploy”. Não é falha de código; Backend CI e Dependency
+   audit estão verdes, mas esse status externo precisa ser resolvido.
+2. **Revisão humana independente** (a revisão automática independente foi feita
+   nesta rodada; commit/push já realizados no branch da PR).
 3. **Staging real**: deploy, PostgreSQL gerenciado, backup/migração de boot,
    smoke de preparar/aprovar/executar/acompanhar, falha/rollback, replay e
    isolamento entre empresas.
@@ -240,13 +240,14 @@ devem ser acompanhados antes de autonomia ampla.
 
 ## 9. Parecer
 
-**APROVADO COM RESSALVAS** para revisão e commit local.
+**APROVADO COM RESSALVAS** para revisão e merge controlado.
 
-O código está compilando, com auditoria 0/0, suítes SQLite 329/329 e PostgreSQL
-22/22, CSRF e spoofing cobertos e documentação de ativação criada. As ressalvas
-são de governança e validação externa (CI, staging, Render/Supabase, owner,
-flags, observabilidade, retenção, outbox) e de atualização do frontend para o
-header CSRF. **A produção permanece bloqueada até essas etapas serem concluídas
-e o CI da PR ficar verde.**
+O código está compilando, com auditoria 0/0, CI Backend verde (327/327 SQLite,
+22/22 PostgreSQL), CSRF e spoofing cobertos e documentação de ativação criada.
+O commit `4a3bf87` foi enviado ao branch da PR (sem merge/deploy). As ressalvas
+são de validação externa (staging/Render/Supabase, owner/flags,
+observabilidade), atualização do frontend para o header CSRF, aprovação da
+retenção, outbox externo e o check externo Deno bloqueado por billing.
+**A produção permanece bloqueada até essas etapas serem concluídas.**
 
-**Nada foi publicado ou implantado.**
+**Nenhum merge ou deploy foi realizado.**
