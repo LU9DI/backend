@@ -7,6 +7,7 @@ import { createDotFollowUp, ensureDotFollowUpSchema } from './dotFollowUp.js';
 import { requireDotAccess, type DotAccessResource } from './dotAccessControl.js';
 import { ensureDotInternalActionSchema, executeDotInternalAction } from './dotInternalExecutors.js';
 import { ensureDotActionSchema } from './dotActionQueue.js';
+import { dotActorAuditColumns, resolveDotActor, type DotActor } from './dotActor.js';
 
 export type DotExecutionResult = {
   ok: boolean;
@@ -35,8 +36,14 @@ function riskForAction(risk: string): DotRisk {
 export async function executeDotActionThroughGateway(
   empresaId: string,
   actionId: number,
-  actorUserId?: string | null,
+  actor: DotActor | null | undefined,
 ): Promise<DotExecutionResult> {
+  // Contrato explícito: ator de usuário com ID, ou ator interno autorizado.
+  // Nunca inferimos `dot` pela ausência de identidade; ausência é rejeitada.
+  const resolvedActor = resolveDotActor(actor);
+  const actorAudit = dotActorAuditColumns(resolvedActor);
+  const actorMetadata = resolvedActor.type === 'dot' ? { actor_source: resolvedActor.source } : {};
+
   const db = getDb();
   const row = await db.get(
     `SELECT a.*, d.status AS decision_status, d.requires_approval
@@ -65,7 +72,7 @@ export async function executeDotActionThroughGateway(
         : definition.channels.includes('google_reviews') ? 'marketing'
           : 'operations';
   try {
-    await requireDotAccess(empresaId, permissionResource, 'execute', actorUserId || null, { actionId, action: definition.action, executor: definition.executorKey });
+    await requireDotAccess(empresaId, permissionResource, 'execute', resolvedActor.type === 'user' ? resolvedActor.userId : null, { actionId, action: definition.action, executor: definition.executorKey });
   } catch (error: any) {
     return {
       ok: false,
@@ -131,9 +138,9 @@ export async function executeDotActionThroughGateway(
         actionId,
         decisionId: Number(current.decision_id),
         event: 'execution_started',
-        actorType: 'user',
-        actorId: actorUserId || null,
-        metadata: { executor: definition.executorKey, policy },
+        actorType: actorAudit.actorType,
+        actorId: actorAudit.actorId,
+        metadata: { executor: definition.executorKey, policy, ...actorMetadata },
       }, tx);
 
       const decision = await tx.get(
@@ -171,8 +178,8 @@ export async function executeDotActionThroughGateway(
         actionId,
         decisionId: Number(current.decision_id),
         event: 'executed',
-        actorType: 'user',
-        actorId: actorUserId || null,
+        actorType: actorAudit.actorType,
+        actorId: actorAudit.actorId,
         metadata: {
           executor: definition.executorKey,
           simulated: false,
@@ -181,6 +188,7 @@ export async function executeDotActionThroughGateway(
           internalStatus: internal.status,
           nextStep: internal.nextStep,
           created: internal.created,
+          ...actorMetadata,
         },
       }, tx);
 
@@ -218,9 +226,9 @@ export async function executeDotActionThroughGateway(
         actionId,
         decisionId: Number(row.decision_id),
         event: 'failed',
-        actorType: 'user',
-        actorId: actorUserId || null,
-        metadata: { executor: definition.executorKey, error: reason, phase, rolled_back: true },
+        actorType: actorAudit.actorType,
+        actorId: actorAudit.actorId,
+        metadata: { executor: definition.executorKey, error: reason, phase, rolled_back: true, ...actorMetadata },
       });
     } catch (auditError: any) {
       console.error('[dot] failed audit write failed:', String(auditError?.message || auditError).slice(0, 300));

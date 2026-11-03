@@ -27,9 +27,13 @@ test('DOT demo mode is opt-in, centralized and never available in production', (
 test('DOT execution binds permission to authenticated actor', () => {
   const routes = read('routes/dotRoutes.ts');
   const gateway = read('services/dotExecutionGateway.ts');
-  assert.match(routes, /executeDotAction\(access\.empresaId, actionId, access\.userId/);
-  assert.match(gateway, /actorUserId\?\s*:\s*string \| null/);
-  assert.match(gateway, /requireDotAccess\(empresaId, permissionResource, 'execute', actorUserId/);
+  // Rotas montam o ator exclusivamente a partir do token validado.
+  assert.match(routes, /executeDotAction\(access\.empresaId, actionId, dotUserActor\(access\.userId\)\)/);
+  // Gateway usa contrato de ator explícito e nunca grava usuário anônimo.
+  assert.match(gateway, /resolveDotActor\(actor\)/);
+  assert.match(gateway, /dotActorAuditColumns\(resolvedActor\)/);
+  assert.doesNotMatch(gateway, /actorType:\s*'user'/);
+  assert.match(gateway, /requireDotAccess\(empresaId, permissionResource, 'execute', resolvedActor\.type === 'user' \? resolvedActor\.userId : null/);
 });
 
 test('approval cannot execute the action inline', () => {
@@ -77,7 +81,7 @@ test('DOT session scope includes tenant and authenticated user identity', () => 
 
 test('DOT execution cannot proceed without an authenticated actor permission', () => {
   const gateway = read('services/dotExecutionGateway.ts');
-  assert.match(gateway, /requireDotAccess\(empresaId, permissionResource, 'execute', actorUserId/);
+  assert.match(gateway, /requireDotAccess\(empresaId, permissionResource, 'execute', resolvedActor\.type === 'user' \? resolvedActor\.userId : null/);
   assert.match(gateway, /Ação externa exige executor homologado pelo gateway/);
   assert.match(gateway, /status = 'approved'/);
 });
@@ -86,8 +90,13 @@ test('DOT execution audit preserves the authenticated actor', () => {
   const gateway = read('services/dotExecutionGateway.ts');
   const audit = read('services/dotActionAudit.ts');
   const migrations = read('lib/migrations.ts');
-  assert.match(gateway, /actorType: 'user'/);
-  assert.match(gateway, /actorId: actorUserId \|\| null/);
+  const actor = read('services/dotActor.ts');
+  // Ator efetivo vem do contrato tipado; gateway nunca grava usuário anônimo.
+  assert.match(actor, /export function dotActorAuditColumns/);
+  assert.match(actor, /actorId: string \| null/);
+  assert.doesNotMatch(gateway, /actorType: 'user'/);
+  assert.match(gateway, /actorType: actorAudit\.actorType/);
+  assert.match(gateway, /actorId: actorAudit\.actorId/);
   // O schema da trilha vive na migração central; o serviço só registra.
   assert.match(migrations, /actor_id TEXT/);
   assert.doesNotMatch(audit, /CREATE TABLE|ALTER TABLE/);
@@ -152,6 +161,14 @@ test('DOT admin routes: only owner manages; header+sessão em toda mutação pro
   // Nenhuma decisão administrativa depende de papel vindo do token.
   assert.doesNotMatch(admin, /role\s*===/);
   assert.doesNotMatch(accessRoutes, /role\s*===/);
+});
+
+test('DOT request paths never execute DDL de tabelas centrais', () => {
+  const routes = read('routes/dotRoutes.ts');
+  assert.doesNotMatch(routes, /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+dot_internal_cases/i);
+  assert.doesNotMatch(routes, /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+dot_events/i);
+  assert.match(routes, /ensureDotInternalActionSchema/);
+  assert.match(routes, /ensureDotFollowUpSchema/);
 });
 
 test('DOT owner provisioning is validated against the DB, audited and admin-only', () => {

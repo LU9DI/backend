@@ -29,6 +29,7 @@ import { createDotAgentGoal } from '../services/dotAgent.js';
 import { createMissionForGoal, ensureMissionTables, listDotAgentMissionSteps } from '../services/dotAgentMissions.js';
 import { runCurrentDotMissionStep } from '../services/dotAgentMissionRunner.js';
 import { listDotActions, approveDotAction, executeDotAction } from '../services/dotActionQueue.js';
+import { dotUserActor } from '../services/dotActor.js';
 
 function out(label: string, value: unknown) {
   console.log(`AUDIT ${label} ${JSON.stringify(value)}`);
@@ -268,9 +269,9 @@ async function main() {
         actions.find((a) => a?.status === 'prepared');
       out('fila-acoes', actions.map((a) => ({ id: a?.id, status: a?.status, action: a?.action })));
       if (!prepared) throw new Error('nenhuma ação preparada para aprovar/executar');
-      const ap = await approveDotAction(emp, prepared.id);
+      const ap = await approveDotAction(emp, prepared.id, dotUserActor('pg-smoke-approver'));
       out('aprovar', ap ? { id: ap.id, status: ap.status, executed: ap.executed } : null);
-      const ex = await executeDotAction(emp, prepared.id, null);
+      const ex = await executeDotAction(emp, prepared.id, dotUserActor('pg-smoke-executor'));
       out('executar', {
         ok: ex.ok,
         id: ex.id,
