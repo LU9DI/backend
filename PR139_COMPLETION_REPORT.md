@@ -9,8 +9,8 @@
 **Commit local da implementação:** `a4c4ba93012205dea3b381c6d5c61166cf2c2317`
 **Data:** 2026-11-03 (America/Sao_Paulo)
 
-> **Nenhum push, merge ou deploy foi executado.** A branch remota e `master` não foram alteradas.
-> O trabalho está em um worktree isolado, recuperável, com commits locais.
+> **Commit/push realizados na branch da PR; nenhum merge ou deploy foi executado.**
+> A branch `master` não foi alterada. O trabalho está no worktree e no branch da PR.
 
 ---
 
@@ -141,7 +141,7 @@ $env:NODE_ENV='test'
 npm test
 ```
 
-Resultado registrado: **329 testes, 329 aprovados, 0 falhas, 0 ignorados, 0 cancelados** (Node 26.7.0), incluindo atomicidade, SoD, contrato de auditoria, CSRF dedicado, spoofing HTTP, isolamento e retenção auditada.
+Resultado registrado: **327 testes, 327 aprovados, 0 falhas, 0 ignorados, 0 cancelados** (CI Node 20), incluindo atomicidade, SoD, contrato de auditoria, CSRF dedicado, spoofing HTTP, isolamento e retenção auditada.
 
 ### 6.2 Suíte PostgreSQL real
 
@@ -180,7 +180,7 @@ A vulnerabilidade moderada pré-existente em `@hono/node-server` (GHSA-rmxm-3fg6
 
 Execução final no worktree, sem commit:
 
-- suíte SQLite completa: **329/329 aprovados**, 0 falhas, 0 ignorados;
+- suíte SQLite completa: **327/327 aprovados**, 0 falhas, 0 ignorados (CI);
 - suíte PostgreSQL completa em cluster descartável PostgreSQL 17.11: **22/22 aprovados**, 0 falhas, 0 ignorados;
 - testes direcionados (atomicidade, rollback, follow-up, retry, contrato `dot`, SoD, owner override, spoofing HTTP, isolamento): **47/47 aprovados**;
 - `npm run build` (`tsc --noEmit`): **0 erros**;
@@ -202,7 +202,7 @@ Execução final no worktree, sem commit:
 | Clone `backend-pr139-integration` | restaurado em `fix/dot-audit-integrity-postgres` = `510ddc0` |
 | Clone `backend-dot-audit` | `076ceb4`, intocado |
 | Clone `backend` principal | intocado |
-| Push/merge/deploy | **não executados** |
+| Push/merge/deploy | push **realizado** (`4a3bf87`); merge/deploy **não executados** |
 | Branch remota | **inalterada** |
 
 O commit local desta entrega consta no histórico do worktree (`git log`). O relatório não altera a branch remota.
@@ -267,6 +267,6 @@ npm run test:postgres
   (`user/<id>` ou `dot/NULL`), sem usuário anônimo; falha fora da transação
   preserva a exceção original.
 - Rotas usam somente a identidade do token validado.
-- Validação final real: **329/329 SQLite**, **22/22 PostgreSQL 17.11**,
+- Validação final real: **327/327 SQLite**, **22/22 PostgreSQL 17.11**,
   **59/59 + 21/21 direcionados**, **build 0**, **audit 0/0**, **diff-check 0**,
   0 testes ignorados.

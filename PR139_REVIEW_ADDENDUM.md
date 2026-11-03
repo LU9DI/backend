@@ -150,7 +150,7 @@ Esta seção substitui a limitação da seção 6.4: a validação completa foi 
 
 | Verificação | Resultado real |
 |---|---|
-| Suíte SQLite completa (`npm test`) | **329/329 aprovados**, 0 falhas, 0 ignorados |
+| Suíte SQLite completa (`npm test`) | **327/327 aprovados**, 0 falhas, 0 ignorados |
 | Suíte PostgreSQL completa (`npm run test:postgres`, PostgreSQL 17.11 descartável) | **22/22 aprovados**, 0 falhas, 0 ignorados |
 | Testes direcionados (atomicidade, rollback, follow-up, retry, contrato `dot`, SoD, owner override, spoofing, isolamento) | **47/47 aprovados** |
 | `npm run build` (`tsc --noEmit`) | **0 erros** |

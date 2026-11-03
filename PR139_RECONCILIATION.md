@@ -5,7 +5,9 @@
 **Branch:** `fix/dot-atomicity-sod`
 **HEAD:** `c9e4a897f432202b7e093f079aa82f794f8d48cf`
 
-> Nenhum commit, push, merge ou deploy foi executado.
+> Atualização: após esta reconciliação, o estado final foi commitado e enviado
+> ao branch da PR (`4a3bf87`), sem merge/deploy. O snapshot original perdido
+> continua não recuperado.
 
 ## 1. Resultado
 
