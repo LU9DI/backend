@@ -7,7 +7,7 @@ import { getDotPreferences, saveDotPreferences } from '../services/dotPreference
 import { listDotEvents, runDotMonitor } from '../services/dotMonitor.js';
 import { resolveDotComplaint } from '../services/dotResolve.js';
 import { createDecisionsForEvents, listDotDecisions, updateDotDecision } from '../services/dotDecision.js';
-import { DotActionOptionConflictError, prepareDotActionFromDecision, approveDotAction, executeDotAction, listDotActions } from '../services/dotActionQueue.js';
+import { DotActionOptionConflictError, DotApprovalSeparationError, prepareDotActionFromDecision, approveDotAction, executeDotAction, listDotActions } from '../services/dotActionQueue.js';
 import { listDotFollowUps, completeDotFollowUp } from '../services/dotFollowUp.js';
 import { resumeMissionAfterApprovedExecution } from '../services/dotAgentMissionRunner.js';
 import { DotAdminError, requireDotAdminSession } from '../services/dotAdminSecurity.js';
@@ -451,7 +451,19 @@ export function mountDotRoutes(app: Express) {
     if (!access.allowed || !access.empresaId) return deny(res, access);
     if (!(await requireMutationPermission(res, access, 'filtra', 'update', { route: '/api/dot/actions/:id/approve' }))) return;
     const actionId = Number(req.params.id);
-    const action = await approveDotAction(access.empresaId, actionId, access.userId || null);
+    let action;
+    try {
+      action = await approveDotAction(access.empresaId, actionId, access.userId || null);
+    } catch (error) {
+      if (error instanceof DotApprovalSeparationError) {
+        return res.status(403).json({
+          ok: false,
+          error: error.message,
+          code: error.code,
+        });
+      }
+      throw error;
+    }
     if (!action) return res.status(409).json({ error: 'Ação não encontrada ou já processada.' });
 
     // Aprovar não executa. A aprovação apenas libera a ação para a etapa

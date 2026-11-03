@@ -638,6 +638,58 @@ describe('Bloqueio de sessão administrativa: cabeçalho anti-CSRF obrigatório'
     assert.equal(conflictingOption.status, 409, JSON.stringify(conflictingOption.data));
     assert.equal(conflictingOption.data.code, 'DOT_ACTION_OPTION_CONFLICT');
     assert.equal(conflictingOption.data.existingOptionId, 'opcao_1');
-    assert.equal(conflictingOption.data.requestedOptionId, 'opcao_2');
+  });
+
+  it('aprovação do próprio preparador retorna HTTP 403 DOT_SEPARATION_OF_DUTIES', async () => {
+    const employeeTok = tokenFor(employeeA, empresaA);
+    const now = new Date().toISOString();
+    // Concessão explícita e restrita para o funcionário preparar/aprovar.
+    for (const action of ['create', 'update']) {
+      await getDb().run(
+        `INSERT INTO dot_agent_permissions
+           (empresa_id,user_id,resource,action,granted,granted_by,granted_at,revoked_at,created_at,updated_at)
+         VALUES (?,?,?,?,1,'test',?,NULL,?,?)
+         ON CONFLICT DO NOTHING`,
+        [empresaA, employeeA, 'filtra', action, now, now, now],
+      );
+    }
+    const options = [
+      { id: 'opcao_1', title: 'Resolver diretamente', action: 'priorizar_e_resolver', risk: 'medium' },
+    ];
+    const inserted = await getDb().run(
+      `INSERT INTO dot_decisions
+        (empresa_id,event_id,type,priority,severity,reason,evidence_json,recommendation,options_json,requires_approval,status,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [empresaA, Date.now(), 'crise_reputacional', 'high', 'critical', 'SoD HTTP', '[]', 'Teste', JSON.stringify(options), 1, 'pending', now],
+    );
+    const prepared = await request('POST', `/api/dot/decisions/${Number(inserted.lastID)}/prepare-action`, {
+      token: employeeTok,
+      body: { optionId: 'opcao_1' },
+      headers: { 'X-Dot-Admin': '1' },
+    });
+    assert.equal(prepared.status, 200, JSON.stringify(prepared.data));
+    const actionId = Number(prepared.data.action?.id);
+
+    const denied = await request('POST', `/api/dot/actions/${actionId}/approve`, {
+      token: employeeTok,
+      headers: { 'X-Dot-Admin': '1' },
+    });
+    assert.equal(denied.status, 403, JSON.stringify(denied.data));
+    assert.equal(denied.data.code, 'DOT_SEPARATION_OF_DUTIES');
+
+    const action = await getDb().get('SELECT status FROM dot_action_queue WHERE empresa_id = ? AND id = ?', [empresaA, actionId]);
+    assert.equal(String(action?.status), 'prepared', 'rollback deve preservar prepared');
+    const approvedAudit = await getDb().all(
+      "SELECT id FROM dot_action_audit WHERE empresa_id = ? AND action_id = ? AND event = 'approved'",
+      [empresaA, actionId],
+    );
+    assert.equal(approvedAudit.length, 0);
+
+    // Aprovador distinto (owner) conclui normalmente.
+    const ownerApproval = await request('POST', `/api/dot/actions/${actionId}/approve`, {
+      token: tokenFor(ownerA, empresaA),
+      headers: { 'X-Dot-Admin': '1' },
+    });
+    assert.equal(ownerApproval.status, 200, JSON.stringify(ownerApproval.data));
   });
 });

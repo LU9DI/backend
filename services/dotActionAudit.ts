@@ -1,4 +1,5 @@
 import { getDb } from '../lib/db.js';
+import type { Database } from 'sqlite';
 import { requireSchema } from '../lib/migrations.js';
 
 export type DotActionAuditEvent =
@@ -36,9 +37,12 @@ export async function ensureDotActionAuditSchema() {
   });
 }
 
-export async function recordDotActionAudit(input: DotActionAuditInput) {
-  await ensureDotActionAuditSchema();
-  const db = getDb();
+export async function recordDotActionAudit(input: DotActionAuditInput, database?: Database) {
+  // Quando recebemos a transação do gateway, o schema já foi verificado por ele
+  // e a escrita precisa usar a MESMA conexão (senão a auditoria escaparia do
+  // rollback).
+  if (!database) await ensureDotActionAuditSchema();
+  const db = database ?? getDb();
   await db.run(
     `INSERT INTO dot_action_audit
       (empresa_id, action_id, decision_id, event, actor_type, actor_id, metadata, created_at)

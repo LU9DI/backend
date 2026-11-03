@@ -18,6 +18,23 @@ export class DotActionOptionConflictError extends Error {
   }
 }
 
+/**
+ * Separação de funções: quem preparou não pode aprovar, exceto o owner
+ * autoritativo da empresa (tabela `empresa_owners`), com exceção auditada.
+ */
+export class DotApprovalSeparationError extends Error {
+  readonly code = 'DOT_SEPARATION_OF_DUTIES';
+  readonly status = 403;
+
+  constructor() {
+    super(
+      'A aprovação deve ser feita por um usuário diferente do preparador. ' +
+        'O owner da empresa pode aprovar a própria preparação como exceção auditada.',
+    );
+    this.name = 'DotApprovalSeparationError';
+  }
+}
+
 const actionLocks = new Map<string, Promise<void>>();
 
 async function withActionLock<T>(key: string, work: () => Promise<T>): Promise<T> {
@@ -52,7 +69,7 @@ function normalizeActionRow(row: any) {
  * Verifica o schema da fila de ações — sem DDL em caminho de requisição.
  * Tabela/índices são criados apenas em `runCentralMigrations`.
  */
-async function ensureSchema() {
+export async function ensureDotActionSchema() {
   const db = getDb();
   await requireSchema(db, {
     tables: ['dot_action_queue'],
@@ -83,7 +100,7 @@ export async function prepareDotActionFromDecision(
   optionId: string,
   actorUserId?: string | null,
 ) {
-  await ensureSchema();
+  await ensureDotActionSchema();
   await ensureDotActionAuditSchema();
   const prepared = await withActionLock(`prepare:${empresaId}:${decisionId}`, () =>
     withDbTransaction(async (tx) => {
@@ -175,7 +192,7 @@ export async function prepareDotActionFromDecision(
 }
 
 export async function approveDotAction(empresaId: string, actionId: number, actorUserId?: string | null) {
-  await ensureSchema();
+  await ensureDotActionSchema();
   await ensureDotActionAuditSchema();
   const now = new Date().toISOString();
 
@@ -192,6 +209,55 @@ export async function approveDotAction(empresaId: string, actionId: number, acto
         [action.decision_id, empresaId],
       );
       if (!decision || String(decision.status) !== 'prepared' || Number(decision.requires_approval) !== 1) return null;
+
+      // Separação de funções: identifica o preparador pela trilha auditável,
+      // nunca por campo do cliente. A exceção de owner é verificada na tabela
+      // autoritativa `empresa_owners`, dentro da mesma transação.
+      const preparer = await tx.get(
+        `SELECT actor_type, actor_id FROM dot_action_audit
+          WHERE empresa_id = ? AND action_id = ? AND event = 'prepared'
+          ORDER BY id DESC LIMIT 1`,
+        [empresaId, actionId],
+      );
+      const preparerType = String(preparer?.actor_type || '');
+      const preparerId = preparer?.actor_id ? String(preparer.actor_id) : null;
+      let separationDecision: 'distinct_actors' | 'owner_override' | 'no_preparer_recorded' | 'internal_actor' =
+        'no_preparer_recorded';
+      let ownerOverride = false;
+
+      if (preparer && preparerType === 'dot') {
+        // Preparação automática do monitor/scheduler: não há usuário preparador.
+        separationDecision = 'internal_actor';
+      } else if (preparerId) {
+        if (actorUserId && String(actorUserId) === preparerId) {
+          let ownerUserId: string | null = null;
+          try {
+            const owner = await tx.get(
+              'SELECT user_id FROM empresa_owners WHERE empresa_id = ? LIMIT 1',
+              [empresaId],
+            );
+            ownerUserId = owner?.user_id ? String(owner.user_id) : null;
+          } catch {
+            // Sem tabela de owners: sem exceção possível (fail-closed).
+            ownerUserId = null;
+          }
+          if (!ownerUserId || ownerUserId !== String(actorUserId)) {
+            throw new DotApprovalSeparationError();
+          }
+          separationDecision = 'owner_override';
+          ownerOverride = true;
+        } else {
+          separationDecision = 'distinct_actors';
+        }
+      }
+
+      const separationMetadata = {
+        separation_decision: separationDecision,
+        owner_override: ownerOverride,
+        preparer_id: preparerId,
+        preparer_actor_type: preparerType || null,
+        approver_id: actorUserId || null,
+      };
 
       const decisionApproved = await tx.run(
         "UPDATE dot_decisions SET status = 'approved' WHERE id = ? AND empresa_id = ? AND status = 'prepared' AND requires_approval = 1",
@@ -211,7 +277,7 @@ export async function approveDotAction(empresaId: string, actionId: number, acto
         `INSERT INTO dot_action_audit
           (empresa_id, action_id, decision_id, event, actor_type, actor_id, metadata, created_at)
           VALUES (?,?,?,?,?,?,?,?)`,
-        [empresaId, actionId, Number(action.decision_id), 'approved', 'user', actorUserId || null, null, now],
+        [empresaId, actionId, Number(action.decision_id), 'approved', 'user', actorUserId || null, JSON.stringify(separationMetadata).slice(0, 12000), now],
       );
 
       return {
@@ -221,6 +287,8 @@ export async function approveDotAction(empresaId: string, actionId: number, acto
         action: String(action.action),
         status: 'approved',
         executed: false,
+        separation: separationDecision,
+        ownerOverride,
       };
     }),
   );
@@ -229,12 +297,12 @@ export async function approveDotAction(empresaId: string, actionId: number, acto
 }
 
 export async function listDotActions(empresaId: string) {
-  await ensureSchema();
+  await ensureDotActionSchema();
   const rows = await getDb().all('SELECT * FROM dot_action_queue WHERE empresa_id = ? ORDER BY id DESC LIMIT 50', [empresaId]);
   return (rows || []).map(normalizeActionRow);
 }
 
 export async function executeDotAction(empresaId: string, actionId: number, actorUserId?: string | null) {
-  await ensureSchema();
+  await ensureDotActionSchema();
   return executeDotActionThroughGateway(empresaId, actionId, actorUserId || null);
 }

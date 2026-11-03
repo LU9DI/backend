@@ -1,5 +1,6 @@
 import { getDb } from '../lib/db.js';
 import type { Database } from 'sqlite';
+import { requireSchema } from '../lib/migrations.js';
 
 export type DotInternalExecutionInput = {
   empresaId: string;
@@ -33,24 +34,26 @@ const outcomes: Record<string, { status: string; nextStep: string }> = {
   },
 };
 
-export async function ensureDotInternalActionSchema() {
-  const db = getDb();
-  await db.exec(`CREATE TABLE IF NOT EXISTS dot_internal_cases (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    empresa_id TEXT NOT NULL,
-    decision_id INTEGER NOT NULL,
-    action_id INTEGER NOT NULL,
-    event_id INTEGER,
-    action TEXT NOT NULL,
-    status TEXT NOT NULL,
-    priority TEXT NOT NULL,
-    summary TEXT NOT NULL,
-    next_step TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )`);
-  await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_internal_cases_action ON dot_internal_cases(empresa_id, action_id)');
-  await db.exec('CREATE INDEX IF NOT EXISTS idx_dot_internal_cases_empresa_status ON dot_internal_cases(empresa_id, status, updated_at)');
+export async function ensureDotInternalActionSchema(database: Database = getDb()) {
+  // Sem DDL em caminho de requisição: a tabela/índices vêm de runCentralMigrations.
+  await requireSchema(database, {
+    tables: ['dot_internal_cases'],
+    columns: {
+      dot_internal_cases: [
+        'empresa_id',
+        'decision_id',
+        'action_id',
+        'status',
+        'priority',
+        'summary',
+        'next_step',
+      ],
+    },
+    indexes: [
+      { table: 'dot_internal_cases', name: 'ux_dot_internal_cases_action' },
+      { table: 'dot_internal_cases', name: 'idx_dot_internal_cases_empresa_status' },
+    ],
+  });
 }
 
 export async function executeDotInternalAction(input: DotInternalExecutionInput, dbOverride?: Database): Promise<DotInternalExecutionResult> {
