@@ -225,8 +225,10 @@ describe('DOT — idempotência', () => {
     const same = await queueMod.prepareDotActionFromDecision(empresaA, Number(decision.id), decision.options[0].id);
     assert.equal(Number(same.id), Number(primeira.id));
 
-    const outro = await queueMod.prepareDotActionFromDecision(empresaA, Number(decision.id), decision.options[1].id);
-    assert.equal(Number(outro.id), Number(primeira.id));
+    await assert.rejects(
+      () => queueMod.prepareDotActionFromDecision(empresaA, Number(decision.id), decision.options[1].id),
+      queueMod.DotActionOptionConflictError,
+    );
   });
 
   it('aprovar duas vezes não duplica efeito', async () => {
