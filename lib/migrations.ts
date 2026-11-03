@@ -530,6 +530,121 @@ async function migrateDotActionSchema(db: Database | PgDatabase): Promise<void> 
     'idx_dot_action_audit_action',
     'CREATE INDEX IF NOT EXISTS idx_dot_action_audit_action ON dot_action_audit(empresa_id, action_id, created_at)',
   );
+
+  // Tabelas usadas pelo gateway de execução atômica e pelos follow-ups.
+  // Centralizadas aqui para que nenhuma requisição precise executar DDL.
+  await createTableIfMissing(
+    db,
+    'dot_internal_cases',
+    `CREATE TABLE IF NOT EXISTS dot_internal_cases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      empresa_id TEXT NOT NULL,
+      decision_id INTEGER NOT NULL,
+      action_id INTEGER NOT NULL,
+      event_id INTEGER,
+      action TEXT NOT NULL,
+      status TEXT NOT NULL,
+      priority TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      next_step TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+  );
+  await createIndexIfMissing(
+    db,
+    'dot_internal_cases',
+    'ux_dot_internal_cases_action',
+    'CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_internal_cases_action ON dot_internal_cases(empresa_id, action_id)',
+  );
+  await createIndexIfMissing(
+    db,
+    'dot_internal_cases',
+    'idx_dot_internal_cases_empresa_status',
+    'CREATE INDEX IF NOT EXISTS idx_dot_internal_cases_empresa_status ON dot_internal_cases(empresa_id, status, updated_at)',
+  );
+
+  await createTableIfMissing(
+    db,
+    'dot_followups',
+    `CREATE TABLE IF NOT EXISTS dot_followups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      empresa_id TEXT NOT NULL,
+      decision_id INTEGER NOT NULL,
+      action_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      due_at TEXT NOT NULL,
+      outcome TEXT,
+      baseline_json TEXT,
+      result_json TEXT,
+      created_at TEXT NOT NULL,
+      completed_at TEXT
+    )`,
+  );
+  await addColumnIfMissing(db, 'dot_followups', 'baseline_json', 'TEXT');
+  await addColumnIfMissing(db, 'dot_followups', 'result_json', 'TEXT');
+  await createIndexIfMissing(
+    db,
+    'dot_followups',
+    'ux_dot_followups_action',
+    'CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_followups_action ON dot_followups(empresa_id, action_id)',
+  );
+  await createIndexIfMissing(
+    db,
+    'dot_followups',
+    'idx_dot_followups_empresa_status',
+    'CREATE INDEX IF NOT EXISTS idx_dot_followups_empresa_status ON dot_followups(empresa_id, status, due_at)',
+  );
+
+  await createTableIfMissing(
+    db,
+    'dot_events',
+    `CREATE TABLE IF NOT EXISTS dot_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      empresa_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      title TEXT NOT NULL,
+      details TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      acknowledged_at TEXT,
+      source_followup_id INTEGER
+    )`,
+  );
+  await addColumnIfMissing(db, 'dot_events', 'source_followup_id', 'INTEGER');
+  await createIndexIfMissing(
+    db,
+    'dot_events',
+    'ux_dot_events_followup',
+    'CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_events_followup ON dot_events(empresa_id, source_followup_id)',
+  );
+  await createIndexIfMissing(
+    db,
+    'dot_events',
+    'idx_dot_events_empresa_type',
+    'CREATE INDEX IF NOT EXISTS idx_dot_events_empresa_type ON dot_events(empresa_id, type, created_at)',
+  );
+
+  // Propriedade autoritativa usada pela separação de funções (owner override).
+  // A tabela nasce vazia: nenhum vínculo é inferido; provisionamento é feito
+  // por fluxo administrativo auditado.
+  await createTableIfMissing(
+    db,
+    'empresa_owners',
+    `CREATE TABLE IF NOT EXISTS empresa_owners (
+      empresa_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      provisioned_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+  );
+  await createIndexIfMissing(
+    db,
+    'empresa_owners',
+    'idx_empresa_owners_user',
+    'CREATE INDEX IF NOT EXISTS idx_empresa_owners_user ON empresa_owners(user_id)',
+  );
 }
 
 /**
