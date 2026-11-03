@@ -73,7 +73,7 @@ async function seedDecision(empresaId: string) {
   return Number(r.lastID);
 }
 
-queueTest('Dot action queue: prepare is tenant-scoped and blocks a second active option', async () => {
+queueTest('Dot action queue: prepare is tenant-scoped and rejects a second active option', async () => {
   await setup();
   const empresa = crypto.randomUUID();
   const otherEmpresa = crypto.randomUUID();
@@ -83,9 +83,10 @@ queueTest('Dot action queue: prepare is tenant-scoped and blocks a second active
   assert.ok(first);
   assert.equal(first?.status, 'prepared');
 
-  const second = await prepareDotActionFromDecision(empresa, decisionId, 'opcao_2');
-  assert.ok(second);
-  assert.equal(second?.optionId, 'opcao_1');
+  await assert.rejects(
+    () => prepareDotActionFromDecision(empresa, decisionId, 'opcao_2'),
+    { code: 'DOT_ACTION_OPTION_CONFLICT' },
+  );
 
   const crossTenant = await prepareDotActionFromDecision(otherEmpresa, decisionId, 'opcao_1');
   assert.equal(crossTenant, null);
