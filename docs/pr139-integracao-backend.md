@@ -3,13 +3,13 @@
 > **Repositório:** `LU9DI/backend`
 > **PR:** [#139 — fix(dot): make preparation audit atomic and enforce CSRF](https://github.com/LU9DI/backend/pull/139)
 > **Branch:** `fix/dot-audit-integrity-postgres` → `master`
-> **HEAD de código revisado:** `510ddc015cc2ed1db9eed7153a995ea252c82c50`
+> **HEAD funcional revisado:** `ee654f6e115c256ae884afe77994c3ea22f7cadf`
 > **Base:** `b8caf4048f557ce6681b1e08fe66475c7f406d66`
 > **Estado:** aberto, não mesclado. Este relatório não autoriza merge nem deploy.
 
 ## 1. Estado atual do PR
 
-O código funcional foi revisado no SHA `510ddc0` (20 commits; 49 arquivos alterados). Este relatório foi atualizado em um commit documental posterior, que agora é a ponta do PR. A base do PR permanece `b8caf404`. Os checks do novo HEAD documental ainda precisam ser confirmados.
+O HEAD atual do PR é `ee654f6` (28 commits; 49 arquivos alterados), com base `b8caf404`. Este relatório será atualizado em commit documental separado; os checks do novo HEAD documental precisarão ser confirmados após a atualização.
 
 O documento anterior continha informações de uma etapa antiga da integração — commit local `5769919`, patch apenas local, push bloqueado e base `a74c75d`. Essas informações não descrevem mais o estado atual do PR e ficam substituídas por este registro.
 
@@ -25,23 +25,21 @@ O documento anterior continha informações de uma etapa antiga da integração 
 - A rota `DELETE /api/dot/admin/session` exige o cabeçalho anti-CSRF.
 - A configuração ativa do repositório foi alinhada a Node.js + Render + Supabase; os arquivos/configurações Deno/Jatai foram removidos do código versionado.
 
-## 3. Validação no commit de código `510ddc0`
+## 3. Validação no HEAD funcional `ee654f6`
 
-Os cinco check-runs retornados pelo GitHub para esse SHA estavam concluídos com sucesso:
+A execução mais recente do GitHub Actions para o HEAD funcional concluiu com sucesso:
 
 | Check | Resultado |
 |---|---|
-| Backend CI — test (run 184) | **success** |
-| Backend CI — postgres-concurrency (run 184) | **success** |
-| Dependency audit (run 60) | **success** |
-| Backend CI — test (execução anterior do mesmo SHA) | **success** |
-| Backend CI — postgres-concurrency (execução anterior do mesmo SHA) | **success** |
+| Backend CI — test (run 199) | **success** |
+| Backend CI — postgres-concurrency (run 199) | **success** |
+| Dependency audit (run 67) | **success** |
 
-Workflows consultados:
-- Backend CI: run `41568680321` (e execução anterior `41568675473`).
-- Dependency audit: run `41568680076`.
+Links das execuções:
+- [Backend CI — run 199](https://github.com/LU9DI/backend/actions/runs/41570326775)
+- [Dependency audit — run 67](https://github.com/LU9DI/backend/actions/runs/41570326693)
 
-Os resultados acima pertencem ao SHA de código `510ddc0`. A atualização deste próprio documento gera um novo commit e, portanto, exige nova confirmação dos checks no novo HEAD antes de qualquer decisão posterior.
+A primeira execução após a implementação (`b0bed66`) detectou duas suítes antigas que ainda esperavam o comportamento anterior de devolver a opção já preparada. Os testes foram atualizados para exigir conflito explícito quando a opção solicitada diverge. Na execução seguinte (`ee654f6`), build, suíte unitária/de integração, concorrência PostgreSQL e auditoria de dependências passaram. O status externo Deno continua sendo um status separado e não é um check de CI.
 
 ## 4. Status externo de deploy no GitHub
 
@@ -71,19 +69,18 @@ Consulta realizada diretamente no workspace **My Workspace**, no serviço existe
 
 O histórico do Render registra uma suspensão em 30/10/2026 com o ator `Free Tier Usage Exceeded`, seguida de retomada em 01/11/2026. Na consulta atual, o serviço não está suspenso.
 
-O commit implantado no Render é a base do PR (`b8caf404`), não o HEAD do PR (`510ddc0`). Não há evidência de que o HEAD do PR #139 tenha sido implantado. O status Deno acima não deve ser usado como diagnóstico do deploy Render.
+O commit implantado no Render é a base do PR (`b8caf404`), não o HEAD funcional (`ee654f6`). Não há evidência de que o HEAD do PR #139 tenha sido implantado. O status Deno acima não deve ser usado como diagnóstico do deploy Render.
 
-## 6. Revisão técnica — item pendente
+## 6. Revisão técnica — divergência de opção corrigida
 
-Foi identificado um caso de consistência funcional em `services/dotActionQueue.ts`:
+Foi corrigido o caso de consistência em `services/dotActionQueue.ts`:
 
-- `prepareDotActionFromDecision` procura uma ação ativa apenas por empresa e decisão.
-- Se já existir uma ação preparada para `optionId=A`, uma nova chamada para a mesma decisão com `optionId=B` retorna a ação A como se a solicitação B tivesse sido atendida.
-- A decisão pode conter mais de uma opção; o teste de proteção de rota usa `opcao_1` e `opcao_2`.
+- Repetir a preparação com a mesma opção continua idempotente e devolve a mesma ação ativa.
+- Solicitar outra opção enquanto existe uma ação ativa para a decisão lança `DotActionOptionConflictError` (`DOT_ACTION_OPTION_CONFLICT`).
+- A rota `POST /api/dot/decisions/:id/prepare-action` converte esse conflito em HTTP `409`, informando a opção já preparada e a opção solicitada.
+- A ação original e sua trilha de auditoria permanecem intactas; não é criada uma segunda ação.
 
-A idempotência deve preservar a mesma opção solicitada. Para opção diferente, o serviço deve responder com conflito/resultado explícito em vez de devolver silenciosamente outra opção. Falta adicionar um teste de regressão para esse cenário e decidir o contrato HTTP correspondente.
-
-Esse item não é um problema de CI nem de deploy. Ele deve ser resolvido e validado antes de considerar a revisão funcional concluída.
+Regressões adicionadas/ajustadas em `tests/dotActionAuditIntegrity.test.ts`, `tests/dotActionQueue.test.ts`, `tests/dotCoreRegression.test.ts` e `tests/dotRouteProtection.test.ts`. A suíte completa, o build e o teste de concorrência PostgreSQL passaram no run 199.
 
 ## 7. Limites e decisões desta revisão
 
@@ -94,4 +91,4 @@ Esse item não é um problema de CI nem de deploy. Ele deve ser resolvido e vali
 - Nenhuma integração Deno foi removida ou alterada.
 - O novo job PostgreSQL do GitHub Actions usa PostgreSQL efêmero do próprio workflow; não usa Supabase nem dados de produção.
 
-**Próximo gate:** corrigir/testar a divergência entre a opção solicitada e a ação ativa retornada; confirmar novamente os checks no HEAD após este commit documental; só então concluir a revisão do PR. Merge e deploy continuam fora do escopo.
+**Próximo gate:** revisão final do diff e decisão humana sobre a integração Deno legada. A correção funcional foi validada; merge e deploy continuam fora do escopo desta execução.
