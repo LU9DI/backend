@@ -65,6 +65,8 @@ async function request(
     method,
     headers: {
       'Content-Type': 'application/json',
+      // Header CSRF dedicado, exigido em toda mutação de empresa do Dot.
+      'X-Dot-Csrf': '1',
       ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
       ...(opts.headers || {}),
     },
@@ -546,5 +548,199 @@ describe('Ferramentas e execução: produto preservado, execução protegida', (
       headers: adminHeaders(unlocked.setCookie.split(';')[0]),
     });
     assert.equal(runWithSession.status, 409, JSON.stringify(runWithSession.data));
+  });
+});
+
+describe('Bloqueio de sessão administrativa: cabeçalho anti-CSRF obrigatório', () => {
+  it('DELETE /api/dot/admin/session sem X-Dot-Admin é recusado e não revoga a sessão', async () => {
+    const ownerTok = tokenFor(ownerA, empresaA);
+    await clearPinDelay(empresaA, ownerA);
+    const unlocked = await unlock(ownerTok, PIN_NOVO);
+    assert.equal(unlocked.status, 200, JSON.stringify(unlocked.data));
+    const cookie = unlocked.setCookie.split(';')[0];
+
+    // Regressão: antes desta correção o DELETE revogava a sessão sem cabeçalho
+    // (mutation CSRF-able), divergindo da matriz de docs/DOT_PRODUCAO.md §7.
+    const withoutHeader = await request('DELETE', '/api/dot/admin/session', {
+      token: ownerTok,
+      headers: { Cookie: cookie },
+    });
+    assert.equal(withoutHeader.status, 403);
+    assert.equal(withoutHeader.data.code, 'DOT_ADMIN_HEADER_REQUIRED');
+
+    const stateAfterDenied = await request('GET', '/api/dot/admin/state', {
+      token: ownerTok,
+      headers: { Cookie: cookie },
+    });
+    assert.equal(stateAfterDenied.data.session_active, true, 'sessão não pode cair com requisição recusada');
+
+    const withHeader = await request('DELETE', '/api/dot/admin/session', {
+      token: ownerTok,
+      headers: { ...adminHeaders(cookie) },
+    });
+    assert.equal(withHeader.status, 200, JSON.stringify(withHeader.data));
+
+    const stateAfterLock = await request('GET', '/api/dot/admin/state', {
+      token: ownerTok,
+      headers: { Cookie: cookie },
+    });
+    assert.equal(stateAfterLock.data.session_active, false, 'bloqueio com cabeçalho revoga a sessão');
+  });
+
+  it('prepare-action registra o proprietário autenticado como ator da preparação', async () => {
+    const ownerTok = tokenFor(ownerA, empresaA);
+    const options = [
+      { id: 'opcao_1', title: 'Resolver diretamente', action: 'priorizar_e_resolver', risk: 'medium' },
+      { id: 'opcao_2', title: 'Escalar para responsável', action: 'escalar_responsavel', risk: 'low' },
+    ];
+    const inserted = await getDb().run(
+      `INSERT INTO dot_decisions
+        (empresa_id,event_id,type,priority,severity,reason,evidence_json,recommendation,options_json,requires_approval,status,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        empresaA,
+        Date.now(),
+        'crise_reputacional',
+        'high',
+        'critical',
+        'Teste de ator',
+        '[]',
+        'Teste',
+        JSON.stringify(options),
+        1,
+        'pending',
+        new Date().toISOString(),
+      ],
+    );
+
+    const prepared = await request('POST', `/api/dot/decisions/${Number(inserted.lastID)}/prepare-action`, {
+      token: ownerTok,
+      body: { optionId: 'opcao_1' },
+    });
+    assert.equal(prepared.status, 200, JSON.stringify(prepared.data));
+    const actionId = Number(prepared.data.action?.id);
+    assert.ok(Number.isInteger(actionId) && actionId > 0);
+
+    const audit = await getDb().get(
+      "SELECT actor_type, actor_id FROM dot_action_audit WHERE empresa_id = ? AND action_id = ? AND event = 'prepared' ORDER BY id DESC LIMIT 1",
+      [empresaA, actionId],
+    );
+    assert.ok(audit, 'a preparação precisa deixar trilha de auditoria');
+    assert.equal(String(audit.actor_type), 'user');
+    assert.equal(String(audit.actor_id), ownerA);
+
+    const conflictingOption = await request(
+      'POST',
+      `/api/dot/decisions/${Number(inserted.lastID)}/prepare-action`,
+      {
+        token: ownerTok,
+        body: { optionId: 'opcao_2' },
+      },
+    );
+    assert.equal(conflictingOption.status, 409, JSON.stringify(conflictingOption.data));
+    assert.equal(conflictingOption.data.code, 'DOT_ACTION_OPTION_CONFLICT');
+    assert.equal(conflictingOption.data.existingOptionId, 'opcao_1');
+  });
+
+  it('aprovação do próprio preparador retorna HTTP 403 DOT_SEPARATION_OF_DUTIES', async () => {
+    const employeeTok = tokenFor(employeeA, empresaA);
+    const now = new Date().toISOString();
+    // Concessão explícita e restrita para o funcionário preparar/aprovar.
+    for (const action of ['create', 'update']) {
+      await getDb().run(
+        `INSERT INTO dot_agent_permissions
+           (empresa_id,user_id,resource,action,granted,granted_by,granted_at,revoked_at,created_at,updated_at)
+         VALUES (?,?,?,?,1,'test',?,NULL,?,?)
+         ON CONFLICT DO NOTHING`,
+        [empresaA, employeeA, 'filtra', action, now, now, now],
+      );
+    }
+    const options = [
+      { id: 'opcao_1', title: 'Resolver diretamente', action: 'priorizar_e_resolver', risk: 'medium' },
+    ];
+    const inserted = await getDb().run(
+      `INSERT INTO dot_decisions
+        (empresa_id,event_id,type,priority,severity,reason,evidence_json,recommendation,options_json,requires_approval,status,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [empresaA, Date.now(), 'crise_reputacional', 'high', 'critical', 'SoD HTTP', '[]', 'Teste', JSON.stringify(options), 1, 'pending', now],
+    );
+    const prepared = await request('POST', `/api/dot/decisions/${Number(inserted.lastID)}/prepare-action`, {
+      token: employeeTok,
+      body: {
+        optionId: 'opcao_1',
+        // Tentativa de spoofing: identidade só pode vir do token autenticado.
+        actorUserId: ownerA,
+        actor_id: ownerA,
+        approver_id: ownerA,
+      },
+      headers: { 'X-Dot-Admin': '1' },
+    });
+    assert.equal(prepared.status, 200, JSON.stringify(prepared.data));
+    const actionId = Number(prepared.data.action?.id);
+
+    const preparedAudit = await getDb().get(
+      "SELECT actor_type, actor_id FROM dot_action_audit WHERE empresa_id = ? AND action_id = ? AND event = 'prepared' ORDER BY id DESC LIMIT 1",
+      [empresaA, actionId],
+    );
+    assert.equal(String(preparedAudit?.actor_type), 'user');
+    assert.equal(String(preparedAudit?.actor_id), employeeA, 'preparador deve vir do token, nunca do corpo');
+
+    const denied = await request('POST', `/api/dot/actions/${actionId}/approve`, {
+      token: employeeTok,
+      headers: { 'X-Dot-Admin': '1' },
+      body: {
+        // Tentativa de spoofing do aprovador; deve ser ignorada.
+        actorUserId: ownerA,
+        actor_id: ownerA,
+        approver_id: ownerA,
+        approved_by: ownerA,
+      },
+    });
+    assert.equal(denied.status, 403, JSON.stringify(denied.data));
+    assert.equal(denied.data.code, 'DOT_SEPARATION_OF_DUTIES');
+
+    const action = await getDb().get('SELECT status FROM dot_action_queue WHERE empresa_id = ? AND id = ?', [empresaA, actionId]);
+    assert.equal(String(action?.status), 'prepared', 'rollback deve preservar prepared');
+    const approvedAudit = await getDb().all(
+      "SELECT id FROM dot_action_audit WHERE empresa_id = ? AND action_id = ? AND event = 'approved'",
+      [empresaA, actionId],
+    );
+    assert.equal(approvedAudit.length, 0);
+
+    // Aprovador distinto (owner) conclui normalmente.
+    const ownerApproval = await request('POST', `/api/dot/actions/${actionId}/approve`, {
+      token: tokenFor(ownerA, empresaA),
+      headers: { 'X-Dot-Admin': '1' },
+    });
+    assert.equal(ownerApproval.status, 200, JSON.stringify(ownerApproval.data));
+  });
+
+  it('mutação de empresa sem X-Dot-Csrf é recusada antes de autenticar', async () => {
+    const response = await fetch(`${baseUrl}/api/dot/preferences`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autonomy: 'assistente' }),
+    });
+    const body = await response.json().catch(() => ({}));
+    assert.equal(response.status, 403);
+    assert.equal(body.code, 'DOT_CSRF_REQUIRED');
+
+    const withHeader = await fetch(`${baseUrl}/api/dot/preferences`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Dot-Csrf': '1' },
+      body: JSON.stringify({ autonomy: 'assistente' }),
+    });
+    const withHeaderBody = await withHeader.json().catch(() => ({}));
+    assert.notEqual(withHeaderBody.code, 'DOT_CSRF_REQUIRED', 'com header CSRF o middleware não pode barrar');
+
+    // Rotas de agente também são mutações de empresa e passam pelo mesmo middleware.
+    const agentWithoutCsrf = await fetch(`${baseUrl}/api/dot/agent/goals`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Objetivo CSRF' }),
+    });
+    const agentBody = await agentWithoutCsrf.json().catch(() => ({}));
+    assert.equal(agentWithoutCsrf.status, 403);
+    assert.equal(agentBody.code, 'DOT_CSRF_REQUIRED');
   });
 });

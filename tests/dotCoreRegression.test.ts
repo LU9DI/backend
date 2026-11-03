@@ -20,6 +20,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import crypto from 'crypto';
+import { dotUserActor } from '../services/dotActor.js';
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-jwt-secret-min-32-chars-long!!';
@@ -133,13 +134,13 @@ describe('DOT — isolamento por empresa_id', () => {
 
   it('não aprova ação de outra empresa', async () => {
     const actionB = monitorB.prepared_actions[0];
-    const r = await queueMod.approveDotAction(empresaA, Number(actionB.id));
+    const r = await queueMod.approveDotAction(empresaA, Number(actionB.id), dotUserActor('tenant-a-approver'));
     assert.equal(r, null);
   });
 
   it('não executa ação de outra empresa', async () => {
     const actionB = monitorB.prepared_actions[0];
-    const r = await gatewayMod.executeDotActionThroughGateway(empresaA, Number(actionB.id));
+    const r = await gatewayMod.executeDotActionThroughGateway(empresaA, Number(actionB.id), dotUserActor('tenant-a-executor'));
     assert.equal(r.ok, false);
   });
 
@@ -163,7 +164,7 @@ describe('DOT — isolamento por empresa_id', () => {
 describe('DOT — aprovação obrigatória, execução interna e auditoria', () => {
   it('não executa antes da aprovação', async () => {
     const action = monitorA.prepared_actions[0];
-    const r = await gatewayMod.executeDotActionThroughGateway(empresaA, Number(action.id));
+    const r = await gatewayMod.executeDotActionThroughGateway(empresaA, Number(action.id), dotUserActor('tenant-a-executor'));
     assert.equal(r.ok, false);
     assert.match(String(r.reason), /não aprovada|não encontrada/i);
     const row = await dbMod.getDb().get('SELECT status FROM dot_action_queue WHERE id = ? AND empresa_id = ?', [Number(action.id), empresaA]);
@@ -173,11 +174,11 @@ describe('DOT — aprovação obrigatória, execução interna e auditoria', () 
   it('executa após aprovação e cria caso interno, follow-up e auditoria ordenada', async () => {
     const action = monitorA.prepared_actions[0];
 
-    const approved = await queueMod.approveDotAction(empresaA, Number(action.id));
+    const approved = await queueMod.approveDotAction(empresaA, Number(action.id), dotUserActor('usuario-aprovador'));
     assert.ok(approved);
     assert.equal(approved.status, 'approved');
 
-    const exec = await gatewayMod.executeDotActionThroughGateway(empresaA, Number(action.id));
+    const exec = await gatewayMod.executeDotActionThroughGateway(empresaA, Number(action.id), dotUserActor('usuario-executor'));
     assert.equal(exec.ok, true, String(exec.reason));
     assert.equal(exec.status, 'executed');
     assert.equal(exec.simulated, false);
@@ -225,21 +226,23 @@ describe('DOT — idempotência', () => {
     const same = await queueMod.prepareDotActionFromDecision(empresaA, Number(decision.id), decision.options[0].id);
     assert.equal(Number(same.id), Number(primeira.id));
 
-    const outro = await queueMod.prepareDotActionFromDecision(empresaA, Number(decision.id), decision.options[1].id);
-    assert.equal(Number(outro.id), Number(primeira.id));
+    await assert.rejects(
+      () => queueMod.prepareDotActionFromDecision(empresaA, Number(decision.id), decision.options[1].id),
+      queueMod.DotActionOptionConflictError,
+    );
   });
 
   it('aprovar duas vezes não duplica efeito', async () => {
     const actionB = monitorB.prepared_actions[0];
-    const first = await queueMod.approveDotAction(empresaB, Number(actionB.id));
+    const first = await queueMod.approveDotAction(empresaB, Number(actionB.id), dotUserActor('approver-b1'));
     assert.ok(first);
-    const second = await queueMod.approveDotAction(empresaB, Number(actionB.id));
+    const second = await queueMod.approveDotAction(empresaB, Number(actionB.id), dotUserActor('approver-b2'));
     assert.equal(second, null);
   });
 
   it('executar duas vezes não duplica caso interno nem follow-up', async () => {
     const action = monitorA.prepared_actions[0];
-    const again = await gatewayMod.executeDotActionThroughGateway(empresaA, Number(action.id));
+    const again = await gatewayMod.executeDotActionThroughGateway(empresaA, Number(action.id), dotUserActor('usuario-executor'));
     assert.equal(again.ok, false);
 
     const casos = await dbMod.getDb().get(

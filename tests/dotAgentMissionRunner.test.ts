@@ -23,6 +23,7 @@ import {
 } from '../services/dotAgentMissions.js';
 import { runCurrentDotMissionStep } from '../services/dotAgentMissionRunner.js';
 import { approveDotAction } from '../services/dotActionQueue.js';
+import { dotUserActor } from '../services/dotActor.js';
 
 process.env.NODE_ENV = 'test';
 process.env.SQLITE_DB_PATH = '/tmp/filtra-dot-mission-runner-test.sqlite';
@@ -148,7 +149,7 @@ runnerTest('Dot mission runner: ciclo completo com barreira de aprovação', asy
   assert.equal(Number(afterRepeat?.current_step), Number(missionRow?.current_step));
 
   // Aprovação explícita (separada da execução).
-  const approved = await approveDotAction(empresa, actionId);
+  const approved = await approveDotAction(empresa, actionId, dotUserActor('usuario-aprovador'));
   assert.equal(approved?.status, 'approved');
 
   // approval: agora avança

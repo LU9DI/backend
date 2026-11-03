@@ -1,4 +1,6 @@
 import { getDb } from '../lib/db.js';
+import type { Database } from 'sqlite';
+import { requireSchema } from '../lib/migrations.js';
 import { getDotPreferences } from './dotPreferences.js';
 import { createDecisionsForEvents } from './dotDecision.js';
 import { prepareDotActionFromDecision } from './dotActionQueue.js';
@@ -6,42 +8,27 @@ import { evaluateDotPolicy } from './dotPolicy.js';
 
 export type DotFollowUpStatus = 'pending' | 'completed' | 'cancelled';
 
-async function ensureSchema() {
-  const db = getDb();
-  await db.exec(`CREATE TABLE IF NOT EXISTS dot_followups (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    empresa_id TEXT NOT NULL,
-    decision_id INTEGER NOT NULL,
-    action_id INTEGER NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    due_at TEXT NOT NULL,
-    outcome TEXT,
-    baseline_json TEXT,
-    result_json TEXT,
-    created_at TEXT NOT NULL,
-    completed_at TEXT
-  )`);
-  try { await db.exec('ALTER TABLE dot_followups ADD COLUMN baseline_json TEXT'); } catch {}
-  try { await db.exec('ALTER TABLE dot_followups ADD COLUMN result_json TEXT'); } catch {}
-  await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_followups_action ON dot_followups(empresa_id, action_id)');
-  await db.exec(`CREATE TABLE IF NOT EXISTS dot_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    empresa_id TEXT NOT NULL,
-    type TEXT NOT NULL,
-    severity TEXT NOT NULL,
-    title TEXT NOT NULL,
-    details TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    acknowledged_at TEXT
-  )`);
-  try { await db.exec('ALTER TABLE dot_events ADD COLUMN source_followup_id INTEGER'); } catch {}
-  await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_events_followup ON dot_events(empresa_id, source_followup_id)');
-  await db.exec('CREATE INDEX IF NOT EXISTS idx_dot_events_empresa_type ON dot_events(empresa_id, type, created_at)');
-  await db.exec('CREATE INDEX IF NOT EXISTS idx_dot_followups_empresa_status ON dot_followups(empresa_id, status, due_at)');
+/**
+ * Verificação de schema sem DDL. Tabelas e índices são criados apenas em
+ * `runCentralMigrations`/`initDB`.
+ */
+export async function ensureDotFollowUpSchema(database: Database = getDb()) {
+  await requireSchema(database, {
+    tables: ['dot_followups', 'dot_events'],
+    columns: {
+      dot_followups: ['empresa_id', 'decision_id', 'action_id', 'status', 'due_at', 'baseline_json'],
+      dot_events: ['empresa_id', 'type', 'severity', 'details', 'source_followup_id'],
+    },
+    indexes: [
+      { table: 'dot_followups', name: 'ux_dot_followups_action' },
+      { table: 'dot_followups', name: 'idx_dot_followups_empresa_status' },
+      { table: 'dot_events', name: 'ux_dot_events_followup' },
+    ],
+  });
 }
 
-async function captureSnapshot(empresaId: string) {
-  const db = getDb();
+async function captureSnapshot(empresaId: string, database: Database = getDb()) {
+  const db = database;
   let rows: any[] = [];
   try {
     rows = await db.all(
@@ -70,9 +57,15 @@ async function captureSnapshot(empresaId: string) {
   };
 }
 
-export async function createDotFollowUp(empresaId: string, decisionId: number, actionId: number, dueInHours = 24) {
-  await ensureSchema();
-  const db = getDb();
+export async function createDotFollowUp(
+  empresaId: string,
+  decisionId: number,
+  actionId: number,
+  dueInHours = 24,
+  database?: Database,
+) {
+  const db = database ?? getDb();
+  if (!database) await ensureDotFollowUpSchema(db);
   const existing = await db.get(
     'SELECT * FROM dot_followups WHERE empresa_id = ? AND action_id = ? LIMIT 1',
     [empresaId, actionId],
@@ -80,7 +73,7 @@ export async function createDotFollowUp(empresaId: string, decisionId: number, a
   if (existing) return existing;
 
   const now = new Date();
-  const baseline = await captureSnapshot(empresaId);
+  const baseline = await captureSnapshot(empresaId, db);
   const dueAt = new Date(now.getTime() + Math.max(1, dueInHours) * 60 * 60 * 1000).toISOString();
   const result = await db.run(
     'INSERT INTO dot_followups (empresa_id,decision_id,action_id,status,due_at,baseline_json,created_at) VALUES (?,?,?,?,?,?,?) RETURNING id',
@@ -90,7 +83,7 @@ export async function createDotFollowUp(empresaId: string, decisionId: number, a
 }
 
 export async function monitorDueDotFollowUps(empresaId?: string) {
-  await ensureSchema();
+  await ensureDotFollowUpSchema();
   const db = getDb();
   const now = new Date().toISOString();
   const rows = empresaId
@@ -237,7 +230,7 @@ export async function monitorDueDotFollowUps(empresaId?: string) {
 }
 
 export async function listDotFollowUps(empresaId: string) {
-  await ensureSchema();
+  await ensureDotFollowUpSchema();
   return getDb().all(
     "SELECT * FROM dot_followups WHERE empresa_id = ? ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, due_at ASC, id DESC LIMIT 100",
     [empresaId],
@@ -245,7 +238,7 @@ export async function listDotFollowUps(empresaId: string) {
 }
 
 export async function completeDotFollowUp(empresaId: string, followUpId: number, outcome?: string) {
-  await ensureSchema();
+  await ensureDotFollowUpSchema();
   const db = getDb();
   const result = await db.run(
     "UPDATE dot_followups SET status = 'completed', outcome = ?, completed_at = ? WHERE id = ? AND empresa_id = ? AND status = 'pending'",

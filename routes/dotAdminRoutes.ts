@@ -188,10 +188,14 @@ export function mountDotAdminRoutes(app: Express) {
   });
 
   // Bloqueio: revoga a sessão atual (idempotente).
+  // A mutação exige o mesmo cabeçalho anti-CSRF das demais operações
+  // administrativas: encerrar a sessão de outro usuário/tenant por CSRF é
+  // negado antes de qualquer efeito (ver docs/DOT_PRODUCAO.md §7).
   app.delete('/api/dot/admin/session', async (req: Request, res: Response) => {
     try {
       const gate = await resolveDotGate(req);
       if (!gate.allowed) return denyGate(res, gate);
+      ensureHeader(req);
       const token = readDotAdminCookie(req);
       if (token && gate.empresaId && gate.userId) {
         const revoked = await revokeDotAdminSessionByToken(token, 'lock');
