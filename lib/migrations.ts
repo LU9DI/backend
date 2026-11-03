@@ -531,6 +531,30 @@ async function migrateDotActionSchema(db: Database | PgDatabase): Promise<void> 
     'CREATE INDEX IF NOT EXISTS idx_dot_action_audit_action ON dot_action_audit(empresa_id, action_id, created_at)',
   );
 
+  // Marcador EXPLÍCITO e RESTRITO de migração histórica. A ausência de evento
+  // `prepared` bloqueia a aprovação; a única exceção é uma linha verificável
+  // nesta tabela, criada por operação administrativa deliberada e escopada por
+  // (empresa, ação). Nada é inserido automaticamente pelo código.
+  await createTableIfMissing(
+    db,
+    'dot_action_legacy_approval_markers',
+    `CREATE TABLE IF NOT EXISTS dot_action_legacy_approval_markers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      empresa_id TEXT NOT NULL,
+      action_id INTEGER NOT NULL,
+      marker TEXT NOT NULL,
+      reason TEXT,
+      created_by TEXT,
+      created_at TEXT NOT NULL
+    )`,
+  );
+  await createIndexIfMissing(
+    db,
+    'dot_action_legacy_approval_markers',
+    'ux_dot_action_legacy_marker',
+    'CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_action_legacy_marker ON dot_action_legacy_approval_markers(empresa_id, action_id, marker)',
+  );
+
   // Tabelas usadas pelo gateway de execução atômica e pelos follow-ups.
   // Centralizadas aqui para que nenhuma requisição precise executar DDL.
   await createTableIfMissing(

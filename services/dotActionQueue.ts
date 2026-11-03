@@ -1,8 +1,10 @@
 import { dbEngine, getDb, withDbTransaction } from '../lib/db.js';
 import { requireSchema } from '../lib/migrations.js';
+import type { Database } from 'sqlite';
 import { dotActionRequiresApproval, getDotActionDefinition } from './dotActionRegistry.js';
 import { ensureDotActionAuditSchema } from './dotActionAudit.js';
 import { executeDotActionThroughGateway } from './dotExecutionGateway.js';
+import { dotActorAuditColumns, resolveDotActor, type DotActor } from './dotActor.js';
 
 export type DotActionStatus = 'prepared' | 'approved' | 'executing' | 'executed' | 'failed' | 'cancelled';
 
@@ -26,12 +28,46 @@ export class DotApprovalSeparationError extends Error {
   readonly code = 'DOT_SEPARATION_OF_DUTIES';
   readonly status = 403;
 
-  constructor() {
-    super(
-      'A aprovação deve ser feita por um usuário diferente do preparador. ' +
-        'O owner da empresa pode aprovar a própria preparação como exceção auditada.',
-    );
+  constructor(
+    message = 'A aprovação deve ser feita por um usuário diferente do preparador. ' +
+      'O owner da empresa pode aprovar a própria preparação como exceção auditada.',
+  ) {
+    super(message);
     this.name = 'DotApprovalSeparationError';
+  }
+}
+
+/**
+ * Marcador único aceito para compatibilidade histórica. Uma ação sem evento
+ * `prepared` só é aprovada se existir, para o par (empresa, ação), uma linha
+ * EXPLÍCITA com este marcador na tabela `dot_action_legacy_approval_markers`.
+ * O código nunca insere esse marcador: ele é criado por operação
+ * administrativa deliberada e auditável.
+ */
+export const DOT_LEGACY_NO_PREPARER_MARKER = 'no_preparer_recorded_v1';
+
+type LegacyApprovalMarker = { marker: string; reason: string | null };
+
+/**
+ * Verifica o marcador restrito de migração. Ausência de tabela ou de linha
+ * significa ausência de exceção (fail-closed): a aprovação é bloqueada.
+ */
+async function findLegacyApprovalMarker(
+  db: Database,
+  empresaId: string,
+  actionId: number,
+): Promise<LegacyApprovalMarker | null> {
+  try {
+    const row: any = await db.get(
+      `SELECT marker, reason FROM dot_action_legacy_approval_markers
+        WHERE empresa_id = ? AND action_id = ? AND marker = ? LIMIT 1`,
+      [empresaId, actionId, DOT_LEGACY_NO_PREPARER_MARKER],
+    );
+    if (!row) return null;
+    return { marker: String(row.marker), reason: row.reason ? String(row.reason) : null };
+  } catch {
+    // Tabela ausente em banco legado: sem marcador verificável, sem exceção.
+    return null;
   }
 }
 
@@ -191,7 +227,26 @@ export async function prepareDotActionFromDecision(
   return prepared;
 }
 
-export async function approveDotAction(empresaId: string, actionId: number, actorUserId?: string | null) {
+/**
+ * Aprova uma ação preparada.
+ *
+ * Identidade é EXPLÍCITA e obrigatória (`DotActor`): usuário autenticado com
+ * ID, ou ator interno autorizado com origem declarada. Chamada sem ator válido
+ * é rejeitada ANTES da transação — sem alterar decisão, fila ou auditoria.
+ *
+ * A ausência do evento `prepared` BLOQUEIA a aprovação. A única exceção é um
+ * marcador explícito, verificável e restrito de migração por (empresa, ação).
+ */
+export async function approveDotAction(
+  empresaId: string,
+  actionId: number,
+  actor: DotActor | null | undefined,
+) {
+  // Resolve/valida o ator antes de qualquer escrita: identidade ausente ou
+  // inválida não pode produzir efeito nem auditoria de aprovação.
+  const approver = resolveDotActor(actor);
+  const approverAudit = dotActorAuditColumns(approver);
+
   await ensureDotActionSchema();
   await ensureDotActionAuditSchema();
   const now = new Date().toISOString();
@@ -219,29 +274,72 @@ export async function approveDotAction(empresaId: string, actionId: number, acto
           ORDER BY id DESC LIMIT 1`,
         [empresaId, actionId],
       );
-      const preparerType = String(preparer?.actor_type || '');
-      const preparerId = preparer?.actor_id ? String(preparer.actor_id) : null;
-      let separationDecision: 'distinct_actors' | 'owner_override' | 'no_preparer_recorded' | 'internal_actor' =
-        'no_preparer_recorded';
-      let ownerOverride = false;
+      const preparerType = preparer ? String(preparer.actor_type || '').trim().toLowerCase() : null;
+      const rawPreparerId = preparer?.actor_id;
+      const preparerId =
+        typeof rawPreparerId === 'string' && rawPreparerId.trim().length > 0
+          ? rawPreparerId.trim()
+          : null;
 
-      if (preparer && preparerType === 'dot') {
-        // Preparação automática do monitor/scheduler: não há usuário preparador.
+      let separationDecision: 'distinct_actors' | 'owner_override' | 'no_preparer_recorded' | 'internal_actor';
+      let ownerOverride = false;
+      let legacyMarker: LegacyApprovalMarker | null = null;
+
+      if (!preparer) {
+        // Requisito de segurança: sem evento `prepared`, a aprovação é
+        // bloqueada. Não se presume preparação pelo Dot a partir da ausência
+        // de auditoria. Compatibilidade histórica só com marcador explícito,
+        // verificável e restrito (empresa, ação) — nunca inferida.
+        legacyMarker = await findLegacyApprovalMarker(tx, empresaId, actionId);
+        if (!legacyMarker) {
+          throw new DotApprovalSeparationError(
+            'Não há evento de preparação auditado para esta ação; a aprovação está bloqueada. ' +
+              'Compatibilidade histórica exige marcador explícito de migração.',
+          );
+        }
+        // Ação legada aprovada exige humano identificado; ator interno não
+        // substitui a revisão humana de um histórico sem preparador.
+        if (approver.type !== 'user') {
+          throw new DotApprovalSeparationError(
+            'Ação legada sem preparação registrada só pode ser aprovada por usuário autenticado.',
+          );
+        }
+        separationDecision = 'no_preparer_recorded';
+      } else if (preparerType === 'dot') {
+        // Contrato de auditoria: ator `dot` é interno e NÃO tem usuário.
+        // actor_id preenchido (inclusive string vazia) é histórico inválido e
+        // não pode ser convertido em aprovação.
+        if (preparer.actor_id !== null && preparer.actor_id !== undefined) {
+          throw new DotApprovalSeparationError();
+        }
         separationDecision = 'internal_actor';
-      } else if (preparerId) {
-        if (actorUserId && String(actorUserId) === preparerId) {
-          let ownerUserId: string | null = null;
+      } else if (preparerType === 'user') {
+        // Evento humano sem identidade válida é inválido: não há como provar
+        // separação de funções, então a aprovação falha fechada.
+        if (!preparerId) throw new DotApprovalSeparationError();
+        // Ação preparada por humano exige aprovação humana: ator interno do
+        // Dot não substitui a barreira de revisão humana.
+        if (approver.type === 'dot') {
+          throw new DotApprovalSeparationError(
+            'Ação preparada por usuário exige aprovação de outro usuário autenticado.',
+          );
+        }
+
+        if (approver.userId === preparerId) {
+          let ownerExists = false;
           try {
+            // Existência direta do vínculo (empresa, usuário); não infere
+            // owner a partir de uma linha arbitrária da tabela.
             const owner = await tx.get(
-              'SELECT user_id FROM empresa_owners WHERE empresa_id = ? LIMIT 1',
-              [empresaId],
+              'SELECT 1 AS ok FROM empresa_owners WHERE empresa_id = ? AND user_id = ?',
+              [empresaId, approver.userId],
             );
-            ownerUserId = owner?.user_id ? String(owner.user_id) : null;
+            ownerExists = Boolean(owner);
           } catch {
             // Sem tabela de owners: sem exceção possível (fail-closed).
-            ownerUserId = null;
+            ownerExists = false;
           }
-          if (!ownerUserId || ownerUserId !== String(actorUserId)) {
+          if (!ownerExists) {
             throw new DotApprovalSeparationError();
           }
           separationDecision = 'owner_override';
@@ -249,14 +347,25 @@ export async function approveDotAction(empresaId: string, actionId: number, acto
         } else {
           separationDecision = 'distinct_actors';
         }
+      } else {
+        // Tipo desconhecido no histórico auditável: bloqueia a aprovação.
+        throw new DotApprovalSeparationError();
       }
 
       const separationMetadata = {
         separation_decision: separationDecision,
         owner_override: ownerOverride,
         preparer_id: preparerId,
-        preparer_actor_type: preparerType || null,
-        approver_id: actorUserId || null,
+        preparer_actor_type: preparerType,
+        approver_actor_type: approverAudit.actorType,
+        approver_id: approverAudit.actorId,
+        ...(approver.type === 'dot' ? { approver_source: approver.source } : {}),
+        ...(legacyMarker
+          ? {
+              legacy_migration_marker: legacyMarker.marker,
+              legacy_migration_reason: legacyMarker.reason,
+            }
+          : {}),
       };
 
       const decisionApproved = await tx.run(
@@ -277,7 +386,16 @@ export async function approveDotAction(empresaId: string, actionId: number, acto
         `INSERT INTO dot_action_audit
           (empresa_id, action_id, decision_id, event, actor_type, actor_id, metadata, created_at)
           VALUES (?,?,?,?,?,?,?,?)`,
-        [empresaId, actionId, Number(action.decision_id), 'approved', 'user', actorUserId || null, JSON.stringify(separationMetadata).slice(0, 12000), now],
+        [
+          empresaId,
+          actionId,
+          Number(action.decision_id),
+          'approved',
+          approverAudit.actorType,
+          approverAudit.actorId,
+          JSON.stringify(separationMetadata).slice(0, 12000),
+          now,
+        ],
       );
 
       return {
@@ -302,7 +420,11 @@ export async function listDotActions(empresaId: string) {
   return (rows || []).map(normalizeActionRow);
 }
 
-export async function executeDotAction(empresaId: string, actionId: number, actorUserId?: string | null) {
+export async function executeDotAction(
+  empresaId: string,
+  actionId: number,
+  actor: DotActor | null | undefined,
+) {
   await ensureDotActionSchema();
-  return executeDotActionThroughGateway(empresaId, actionId, actorUserId || null);
+  return executeDotActionThroughGateway(empresaId, actionId, actor);
 }

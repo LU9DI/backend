@@ -31,6 +31,7 @@ delete process.env.DATABASE_URL;
 
 import { closeDB, getDb, initDB } from '../lib/db.js';
 import { executeDotAction } from '../services/dotActionQueue.js';
+import { DotActorIdentityError, dotInternalActor, dotUserActor } from '../services/dotActor.js';
 import { ensureDotAccessSchema } from '../services/dotAccessControl.js';
 
 let ready = false;
@@ -91,7 +92,7 @@ runTest('execução feliz grava caso, follow-up, status e auditoria no mesmo com
   await setup();
   const empresa = crypto.randomUUID();
   const { actionId } = await seedApprovedAction(empresa);
-  const result = await executeDotAction(empresa, actionId, 'owner-test');
+  const result = await executeDotAction(empresa, actionId, dotUserActor('owner-test'));
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.status, 'executed');
 
@@ -103,10 +104,14 @@ runTest('execução feliz grava caso, follow-up, status e auditoria no mesmo com
   const followups = await db.all('SELECT id FROM dot_followups WHERE empresa_id=? AND action_id=?', [empresa, actionId]);
   assert.equal(followups.length, 1);
   const events = await db.all(
-    "SELECT event FROM dot_action_audit WHERE empresa_id=? AND action_id=? AND event IN ('execution_started','executed') ORDER BY id",
+    "SELECT event, actor_type, actor_id FROM dot_action_audit WHERE empresa_id=? AND action_id=? AND event IN ('execution_started','executed') ORDER BY id",
     [empresa, actionId],
   );
   assert.deepEqual(events.map((row: any) => row.event), ['execution_started', 'executed']);
+  for (const row of events) {
+    assert.equal(String(row.actor_type), 'user', 'ator efetivo deve ser auditado como usuário');
+    assert.equal(String(row.actor_id), 'owner-test', 'actor_id deve ser o usuário autenticado efetivo');
+  }
 });
 
 runTest('falha ao criar follow-up reverte caso, claim e auditoria inicial', async () => {
@@ -121,7 +126,7 @@ runTest('falha ao criar follow-up reverte caso, claim e auditoria inicial', asyn
     END;
   `);
   try {
-    const result = await executeDotAction(empresa, actionId, 'owner-test');
+    const result = await executeDotAction(empresa, actionId, dotUserActor('owner-test'));
     assert.equal(result.ok, false);
     assert.equal(result.status, 'approved');
 
@@ -135,8 +140,10 @@ runTest('falha ao criar follow-up reverte caso, claim e auditoria inicial', asyn
     assert.equal(started.length, 0, 'auditoria inicial deve ser revertida');
     const executed = await db.all("SELECT id FROM dot_action_audit WHERE empresa_id=? AND action_id=? AND event='executed'", [empresa, actionId]);
     assert.equal(executed.length, 0, 'nunca registrar sucesso após falha');
-    const failed = await db.all("SELECT metadata FROM dot_action_audit WHERE empresa_id=? AND action_id=? AND event='failed'", [empresa, actionId]);
+    const failed = await db.all("SELECT actor_type, actor_id, metadata FROM dot_action_audit WHERE empresa_id=? AND action_id=? AND event='failed'", [empresa, actionId]);
     assert.equal(failed.length, 1, 'falha deve ser auditada fora da transação');
+    assert.equal(String(failed[0].actor_type), 'user', 'failed deve registrar o ator efetivo');
+    assert.equal(String(failed[0].actor_id), 'owner-test');
     const metadata = JSON.parse(String(failed[0].metadata));
     assert.equal(metadata.rolled_back, true);
     assert.equal(metadata.phase, 'follow_up');
@@ -145,7 +152,7 @@ runTest('falha ao criar follow-up reverte caso, claim e auditoria inicial', asyn
   }
 
   // Recuperação: removida a falha forçada, a MESMA ação executa.
-  const retry = await executeDotAction(empresa, actionId, 'owner-test');
+  const retry = await executeDotAction(empresa, actionId, dotUserActor('owner-test'));
   assert.equal(retry.ok, true, JSON.stringify(retry));
   const action = await db.get('SELECT status FROM dot_action_queue WHERE empresa_id=? AND id=?', [empresa, actionId]);
   assert.equal(action.status, 'executed');
@@ -156,8 +163,8 @@ runTest('duas execuções concorrentes da mesma ação produzem um único efeito
   const empresa = crypto.randomUUID();
   const { actionId } = await seedApprovedAction(empresa);
   const results = await Promise.all([
-    executeDotAction(empresa, actionId, 'owner-a'),
-    executeDotAction(empresa, actionId, 'owner-b'),
+    executeDotAction(empresa, actionId, dotUserActor('owner-a')),
+    executeDotAction(empresa, actionId, dotUserActor('owner-b')),
   ]);
   assert.equal(results.filter((result) => result.ok).length, 1, JSON.stringify(results));
   const db = getDb();
@@ -169,10 +176,82 @@ runTest('duas execuções concorrentes da mesma ação produzem um único efeito
   assert.equal(executed.length, 1);
 
   // Replay depois do commit também não duplica.
-  const replay = await executeDotAction(empresa, actionId, 'owner-c');
+  const replay = await executeDotAction(empresa, actionId, dotUserActor('owner-c'));
   assert.equal(replay.ok, false);
   const casesAfter = await db.all('SELECT id FROM dot_internal_cases WHERE empresa_id=? AND action_id=?', [empresa, actionId]);
   assert.equal(casesAfter.length, 1);
+});
+
+runTest('ator interno explícito é auditado como dot, sem usuário anônimo', async () => {
+  await setup();
+  const empresa = crypto.randomUUID();
+  const { actionId } = await seedApprovedAction(empresa);
+  const result = await executeDotAction(empresa, actionId, dotInternalActor('scheduler'));
+  assert.equal(result.ok, true, JSON.stringify(result));
+
+  const db = getDb();
+  const rows = await db.all(
+    "SELECT event, actor_type, actor_id, metadata FROM dot_action_audit WHERE empresa_id=? AND action_id=? AND event IN ('execution_started','executed') ORDER BY id",
+    [empresa, actionId],
+  );
+  assert.deepEqual(rows.map((row: any) => row.event), ['execution_started', 'executed']);
+  for (const row of rows) {
+    assert.equal(String(row.actor_type), 'dot');
+    assert.equal(row.actor_id, null, 'ator interno nunca registra usuário anônimo');
+    assert.equal(JSON.parse(String(row.metadata)).actor_source, 'scheduler');
+  }
+});
+
+runTest('falha com ator interno audita failed como dot e não mascara a exceção', async () => {
+  await setup();
+  const empresa = crypto.randomUUID();
+  const { actionId } = await seedApprovedAction(empresa);
+  const db = getDb();
+  await db.exec(`
+    CREATE TRIGGER fail_followup_internal BEFORE INSERT ON dot_followups
+    BEGIN
+      SELECT RAISE(ABORT, 'internal follow-up failure');
+    END;
+  `);
+  try {
+    const result = await executeDotAction(empresa, actionId, dotInternalActor('monitor'));
+    assert.equal(result.ok, false);
+    assert.match(String(result.reason), /internal follow-up failure/i, 'exceção original não pode ser mascarada');
+
+    const failed: any = await db.get(
+      "SELECT actor_type, actor_id, metadata FROM dot_action_audit WHERE empresa_id=? AND action_id=? AND event='failed'",
+      [empresa, actionId],
+    );
+    assert.equal(String(failed.actor_type), 'dot');
+    assert.equal(failed.actor_id, null);
+    const metadata = JSON.parse(String(failed.metadata));
+    assert.equal(metadata.rolled_back, true);
+    assert.equal(metadata.actor_source, 'monitor');
+    const action: any = await db.get('SELECT status FROM dot_action_queue WHERE empresa_id=? AND id=?', [empresa, actionId]);
+    assert.equal(action.status, 'approved', 'rollback preserva a ação aprovada');
+  } finally {
+    await db.exec('DROP TRIGGER IF EXISTS fail_followup_internal');
+  }
+});
+
+runTest('identidade ausente é rejeitada sem efeito e a ação continua executável', async () => {
+  await setup();
+  const empresa = crypto.randomUUID();
+  const { actionId } = await seedApprovedAction(empresa);
+
+  await assert.rejects(
+    () => executeDotAction(empresa, actionId, undefined),
+    (error: any) => error instanceof DotActorIdentityError && error.code === 'DOT_ACTOR_IDENTITY_REQUIRED',
+  );
+
+  const db = getDb();
+  const action: any = await db.get('SELECT status FROM dot_action_queue WHERE empresa_id=? AND id=?', [empresa, actionId]);
+  assert.equal(action.status, 'approved');
+  const audits = await db.all('SELECT id FROM dot_action_audit WHERE empresa_id=? AND action_id=?', [empresa, actionId]);
+  assert.equal(audits.length, 0, 'rejeição de identidade não pode gravar auditoria');
+
+  const retry = await executeDotAction(empresa, actionId, dotUserActor('owner-test'));
+  assert.equal(retry.ok, true, JSON.stringify(retry));
 });
 
 runTest('limpeza', async () => {

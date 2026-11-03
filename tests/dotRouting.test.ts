@@ -51,6 +51,7 @@ async function api(
     method,
     headers: {
       'Content-Type': 'application/json',
+      'X-Dot-Csrf': '1',
       Authorization: `Bearer ${tokenFor(empresa)}`,
       ...extraHeaders,
     },

@@ -141,7 +141,7 @@ $env:NODE_ENV='test'
 npm test
 ```
 
-Resultado registrado: **314 testes, 314 aprovados, 0 falhas, 0 ignorados, 0 cancelados** (Node 26.7.0), incluindo os novos testes de atomicidade, SOD e HTTP 403.
+Resultado registrado: **329 testes, 329 aprovados, 0 falhas, 0 ignorados, 0 cancelados** (Node 26.7.0), incluindo atomicidade, SoD, contrato de auditoria, CSRF dedicado, spoofing HTTP, isolamento e retenção auditada.
 
 ### 6.2 Suíte PostgreSQL real
 
@@ -153,21 +153,18 @@ $env:NODE_ENV='test'
 npm run test:postgres
 ```
 
-Resultado registrado: **20 testes, 20 aprovados, 0 falhas, 0 ignorados, 0 cancelados** — 17 testes PostgreSQL já existentes na PR + 3 novos (`dotExecutionAtomicity.pg.test.ts`).
+Resultado registrado: **22 testes, 22 aprovados, 0 falhas, 0 ignorados, 0 cancelados** — testes PostgreSQL da PR, incluindo concorrência e atomicidade.
 
 ### 6.3 Teste de CI `dotMonitorIsTest.test.ts`
 
-O teste foi mantido; não foi removido nem mascarado. Execução isolada:
+O teste foi mantido; não foi removido nem mascarado. A causa provável do flake foi corrigida no próprio teste: `initDB()` era chamado várias vezes sem fechar a instância anterior, deixando handles SQLite abertos, e os bancos usavam caminhos fixos em `/tmp`. O teste agora usa diretório temporário único, `closeDB()` antes de trocar/reabrir e hook `after` para fechar/limpar.
 
-- Node 20.20.2: **3/3 aprovados**;
+Execução isolada após a correção:
+
+- Node 20.20.2: **3 execuções consecutivas, 3/3 aprovados em todas**;
 - Node 26.7.0: **3/3 aprovados**.
 
-A falha de CI `Unable to deserialize cloned data due to invalid or unsupported version` não foi reproduzida. É um flake conhecido do runner `node:test`/`v8.deserialize` (IPC do runner), não uma falha do teste:
-- https://github.com/nodejs/node/issues/64061
-- https://github.com/nodejs/node/issues/66164
-- https://github.com/nodejs/node/issues/56802
-
-Recomendação: reexecutar o job de CI; não foi aplicado retry automático para não mascarar regressões.
+O erro literal de CI (`Unable to deserialize cloned data`) não foi reproduzido neste ambiente; o CI GitHub ainda precisa ser executado após o push. Referências do flake conhecido do runner: https://github.com/nodejs/node/issues/64061, https://github.com/nodejs/node/issues/66164, https://github.com/nodejs/node/issues/56802.
 
 ### 6.4 TypeScript / build / diff
 
@@ -177,7 +174,19 @@ Recomendação: reexecutar o job de CI; não foi aplicado retry automático para
 
 ### 6.5 Auditoria de dependências
 
-`npm audit --omit=dev` → **1 vulnerabilidade moderada pré-existente** em `@hono/node-server` (GHSA-rmxm-3fg6-px4f). Não foi introduzida por este trabalho: `package.json`/`package-lock.json` não foram alterados em relação a `3f584eb`. Não foi aplicado `npm audit fix` para não incluir atualização de dependência não relacionada no PR. Registrar como pendência separada.
+A vulnerabilidade moderada pré-existente em `@hono/node-server` (GHSA-rmxm-3fg6-px4f) foi corrigida na preparação de produção: override para `@hono/node-server@2.1.6`, versão estável corrigida permitida por `@modelcontextprotocol/node@2.1.2`. Depois da correção: `npm audit` e `npm audit --omit=dev` → **0 vulnerabilidades**. Detalhes em `PR139_PRODUCTION_READINESS_REPORT.md`.
+
+### 6.6 Validação final (2026-11-03)
+
+Execução final no worktree, sem commit:
+
+- suíte SQLite completa: **329/329 aprovados**, 0 falhas, 0 ignorados;
+- suíte PostgreSQL completa em cluster descartável PostgreSQL 17.11: **22/22 aprovados**, 0 falhas, 0 ignorados;
+- testes direcionados (atomicidade, rollback, follow-up, retry, contrato `dot`, SoD, owner override, spoofing HTTP, isolamento): **47/47 aprovados**;
+- `npm run build` (`tsc --noEmit`): **0 erros**;
+- `npm audit` e `npm audit --omit=dev`: **0 vulnerabilidades** após override de `@hono/node-server` para `2.1.6`;
+- `git diff --check`: **0**.
+
 
 ---
 
@@ -241,3 +250,23 @@ npm run test:postgres
 ```
 
 **Nenhum merge e nenhum deploy foram realizados.**
+
+---
+
+## 11. Atualização final (identidade, bloqueio sem `prepared` e auditoria)
+
+> Ver **`PR139_REVIEW_ADDENDUM.md` §8**, que substitui a seção 3.2 deste relatório
+> onde ela descrevia `no_preparer_recorded` sem marcador.
+
+- Contrato tipado de ator (`services/dotActor.ts`): usuário autenticado ou ator
+  interno autorizado; ausência/identidade inválida é **rejeitada** (nunca vira `dot`).
+- Ausência de evento `prepared` **BLOQUEIA** a aprovação; compatibilidade
+  histórica apenas com marcador explícito e restrito em
+  `dot_action_legacy_approval_markers` por `(empresa_id, action_id)`.
+- `execution_started`, `executed` e `failed` auditam o ator efetivo
+  (`user/<id>` ou `dot/NULL`), sem usuário anônimo; falha fora da transação
+  preserva a exceção original.
+- Rotas usam somente a identidade do token validado.
+- Validação final real: **329/329 SQLite**, **22/22 PostgreSQL 17.11**,
+  **59/59 + 21/21 direcionados**, **build 0**, **audit 0/0**, **diff-check 0**,
+  0 testes ignorados.

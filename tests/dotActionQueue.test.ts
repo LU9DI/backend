@@ -20,6 +20,7 @@ import {
   executeDotAction,
   listDotActions,
 } from '../services/dotActionQueue.js';
+import { DotActorIdentityError, dotInternalActor, dotUserActor } from '../services/dotActor.js';
 
 process.env.NODE_ENV = 'test';
 process.env.SQLITE_DB_PATH = '/tmp/filtra-dot-action-queue-test.sqlite';
@@ -99,7 +100,7 @@ queueTest('Dot action queue: approval is one-way and execution is replay-safe', 
   const prepared = await prepareDotActionFromDecision(empresa, decisionId, 'opcao_1');
   assert.ok(prepared?.id);
 
-  const approved = await approveDotAction(empresa, Number(prepared.id), 'approver-1');
+  const approved = await approveDotAction(empresa, Number(prepared.id), dotUserActor('approver-1'));
   assert.equal(approved?.status, 'approved');
 
   const approvalAudit = await getDb().get(
@@ -109,10 +110,10 @@ queueTest('Dot action queue: approval is one-way and execution is replay-safe', 
   assert.equal(approvalAudit?.actor_type, 'user');
   assert.equal(String(approvalAudit?.actor_id), 'approver-1');
 
-  const replayApproval = await approveDotAction(empresa, Number(prepared.id));
+  const replayApproval = await approveDotAction(empresa, Number(prepared.id), dotUserActor('approver-1'));
   assert.equal(replayApproval, null);
 
-  const executed = await executeDotAction(empresa, Number(prepared.id));
+  const executed = await executeDotAction(empresa, Number(prepared.id), dotUserActor('executor-1'));
   assert.equal(executed.ok, true);
   assert.equal(executed.status, 'executed');
   assert.equal(executed.simulated, false);
@@ -126,7 +127,7 @@ queueTest('Dot action queue: approval is one-way and execution is replay-safe', 
   assert.equal(internalCase?.status, 'prioritized');
   assert.equal(Number(internalCase?.action_id), Number(prepared.id));
 
-  const replayExecution = await executeDotAction(empresa, Number(prepared.id));
+  const replayExecution = await executeDotAction(empresa, Number(prepared.id), dotUserActor('executor-1'));
   assert.equal(replayExecution.ok, false);
 });
 
@@ -149,7 +150,7 @@ queueTest('Dot action queue: audit failure rolls back approval state', async () 
 
   try {
     await assert.rejects(
-      approveDotAction(empresa, Number(prepared.id), 'approver-rollback'),
+      approveDotAction(empresa, Number(prepared.id), dotUserActor('approver-rollback')),
       /simulated audit failure/i,
     );
   } finally {
@@ -183,8 +184,8 @@ queueTest('Dot action queue: concurrent approvals consume the same action only o
   assert.ok(prepared?.id);
 
   const results = await Promise.all([
-    approveDotAction(empresa, Number(prepared.id)),
-    approveDotAction(empresa, Number(prepared.id)),
+    approveDotAction(empresa, Number(prepared.id), dotUserActor('approver-a')),
+    approveDotAction(empresa, Number(prepared.id), dotUserActor('approver-b')),
   ]);
 
   assert.equal(results.filter((item) => item?.status === 'approved').length, 1);
@@ -210,12 +211,12 @@ queueTest('Dot action queue: execution requires explicit permission', async () =
   const decisionId = await seedDecision(empresa);
   const prepared = await prepareDotActionFromDecision(empresa, decisionId, 'opcao_1');
   assert.ok(prepared?.id);
-  const approved = await approveDotAction(empresa, Number(prepared.id));
+  const approved = await approveDotAction(empresa, Number(prepared.id), dotUserActor('approver-1'));
   assert.equal(approved?.status, 'approved');
 
   const db = getDb();
   await db.run('DELETE FROM dot_agent_permissions WHERE empresa_id = ? AND resource = ? AND action = ?', [empresa, 'operations', 'execute']);
-  const blocked = await executeDotAction(empresa, Number(prepared.id));
+  const blocked = await executeDotAction(empresa, Number(prepared.id), dotUserActor('executor-1'));
   assert.equal(blocked.ok, false);
   assert.match(String(blocked.reason || ''), /permissão|permission/i);
 
@@ -223,7 +224,7 @@ queueTest('Dot action queue: execution requires explicit permission', async () =
     'INSERT INTO dot_agent_permissions (empresa_id,user_id,resource,action,granted,granted_by,granted_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
     [empresa, null, 'operations', 'execute', 1, 'test', new Date().toISOString(), new Date().toISOString(), new Date().toISOString()]
   );
-  const allowed = await executeDotAction(empresa, Number(prepared.id));
+  const allowed = await executeDotAction(empresa, Number(prepared.id), dotUserActor('executor-1'));
   assert.equal(allowed.ok, true);
   assert.equal(allowed.status, 'executed');
 });
@@ -235,6 +236,47 @@ queueTest('Dot action queue: an action cannot execute before approval', async ()
   const prepared = await prepareDotActionFromDecision(empresa, decisionId, 'opcao_1');
   assert.ok(prepared?.id);
 
-  const result = await executeDotAction(empresa, Number(prepared.id));
+  const result = await executeDotAction(empresa, Number(prepared.id), dotUserActor('executor-1'));
   assert.equal(result.ok, false);
+});
+
+queueTest('Dot action queue: identidade ausente ou inválida é rejeitada sem efeito', async () => {
+  await setup();
+  const empresa = crypto.randomUUID();
+  const decisionId = await seedDecision(empresa);
+  const prepared = await prepareDotActionFromDecision(empresa, decisionId, 'opcao_1');
+  assert.ok(prepared?.id);
+
+  // Sem ator, string solta e tipo desconhecido NÃO viram ator `dot`.
+  for (const invalid of [undefined, null, 'owner-1' as any, { type: 'admin', userId: 'x' } as any, { type: 'user', userId: '   ' } as any]) {
+    await assert.rejects(
+      () => approveDotAction(empresa, Number(prepared.id), invalid),
+      (error: any) => error instanceof DotActorIdentityError && error.code === 'DOT_ACTOR_IDENTITY_REQUIRED',
+    );
+  }
+  await assert.rejects(
+    () => executeDotAction(empresa, Number(prepared.id), undefined),
+    (error: any) => error instanceof DotActorIdentityError,
+  );
+
+  // Nada foi alterado: ação segue preparada e sem evento approved.
+  const db = getDb();
+  const action: any = await db.get('SELECT status, approved_at FROM dot_action_queue WHERE empresa_id=? AND id=?', [empresa, prepared!.id]);
+  assert.equal(action.status, 'prepared');
+  assert.equal(action.approved_at, null);
+  const approvedAudits = await db.all(
+    "SELECT id FROM dot_action_audit WHERE empresa_id=? AND action_id=? AND event='approved'",
+    [empresa, prepared!.id],
+  );
+  assert.equal(approvedAudits.length, 0);
+
+  // Ator interno explicitamente declarado continua permitido e auditado como dot.
+  const internalApproval = await approveDotAction(empresa, Number(prepared.id), dotInternalActor('scheduler'));
+  assert.equal(internalApproval?.status, 'approved');
+  const audit: any = await db.get(
+    "SELECT actor_type, actor_id FROM dot_action_audit WHERE empresa_id=? AND action_id=? AND event='approved' ORDER BY id DESC LIMIT 1",
+    [empresa, prepared!.id],
+  );
+  assert.equal(String(audit.actor_type), 'dot');
+  assert.equal(audit.actor_id, null);
 });

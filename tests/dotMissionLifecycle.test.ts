@@ -43,6 +43,7 @@ import {
   runCurrentDotMissionStep,
 } from '../services/dotAgentMissionRunner.js';
 import { approveDotAction, executeDotAction, listDotActions } from '../services/dotActionQueue.js';
+import { dotUserActor } from '../services/dotActor.js';
 
 process.env.NODE_ENV = 'test';
 process.env.SQLITE_DB_PATH = '/tmp/filtra-dot-mission-lifecycle-test.sqlite';
@@ -154,15 +155,15 @@ lifecycleTest('Dot missão: ciclo completo aprova, executa e conclui com output 
   assert.equal(steps[5].output, null);
 
   // Executar antes de aprovar é recusado pelo gateway.
-  const notApproved = await executeDotAction(empresa, actionId, 'usuario-teste');
+  const notApproved = await executeDotAction(empresa, actionId, dotUserActor('usuario-executor'));
   assert.equal(notApproved.ok, false);
 
   // Aprovação explícita — não executa nada.
-  const approved = await approveDotAction(empresa, actionId);
+  const approved = await approveDotAction(empresa, actionId, dotUserActor('usuario-aprovador'));
   assert.equal(approved?.status, 'approved');
 
   // Execução real pelo gateway (executor interno).
-  const executed = await executeDotAction(empresa, actionId, 'usuario-teste');
+  const executed = await executeDotAction(empresa, actionId, dotUserActor('usuario-executor'));
   assert.equal(executed.ok, true, executed.reason);
   assert.equal(executed.status, 'executed');
 
@@ -189,7 +190,7 @@ lifecycleTest('Dot missão: aprovação sem execução conclui o fluxo sem execu
   await seedReviews(empresa, [2, 2, 3, 2, 2, 2]);
   const { mission, actionId } = await advanceToApproval(empresa);
 
-  const approved = await approveDotAction(empresa, actionId);
+  const approved = await approveDotAction(empresa, actionId, dotUserActor('usuario-aprovador'));
   assert.equal(approved?.status, 'approved');
 
   // A listagem expõe a ação vinculada com o status real (a UI usa isso).
@@ -221,7 +222,7 @@ lifecycleTest('Dot missão: execução não aprovada e avanço direto não atrav
   await grantPermission(empresa, 'operations', 'execute');
   const { mission, actionId } = await advanceToApproval(empresa);
 
-  const notApproved = await executeDotAction(empresa, actionId, 'usuario-teste');
+  const notApproved = await executeDotAction(empresa, actionId, dotUserActor('usuario-executor'));
   assert.equal(notApproved.ok, false);
 
   // Avanço manual direto respeita a mesma barreira.

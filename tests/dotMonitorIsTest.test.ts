@@ -12,7 +12,9 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { test } from 'node:test';
+import os from 'node:os';
+import path from 'node:path';
+import { after, test } from 'node:test';
 
 let sqliteAvailable = true;
 try {
@@ -27,16 +29,26 @@ const isTestTest = (name: string, fn: () => Promise<void>) =>
 
 process.env.NODE_ENV = 'test';
 
-const freshDbPath = '/tmp/filtra-dot-is-test-fresh.sqlite';
-const legacyDbPath = '/tmp/filtra-dot-is-test-legacy.sqlite';
-const schedulerDbPath = '/tmp/filtra-dot-is-test-scheduler.sqlite';
+// Diretório único por processo/execução: evita colisão entre testes paralelos
+// (CI e execução local) e resíduos de execuções anteriores.
+const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'filtra-dot-is-test-'));
+const freshDbPath = path.join(testRoot, 'fresh.sqlite');
+const legacyDbPath = path.join(testRoot, 'legacy.sqlite');
+const schedulerDbPath = path.join(testRoot, 'scheduler.sqlite');
 
-function removeDb(path: string) {
-  try {
-    fs.unlinkSync(path);
-  } catch {
-    /* banco ainda não existe */
-  }
+after(async () => {
+  // `initDB` não fecha a instância anterior ao trocar de caminho; sem este
+  // fechamento explícito o processo acumula handles SQLite entre os cenários
+  // (fonte de flake/crash no runner do CI).
+  const { closeDB } = await import('../lib/db.js');
+  await closeDB();
+  fs.rmSync(testRoot, { recursive: true, force: true });
+});
+
+async function useDatabase(dbPath: string) {
+  const { closeDB } = await import('../lib/db.js');
+  await closeDB();
+  process.env.SQLITE_DB_PATH = dbPath;
 }
 
 async function createLegacyDatabase(path: string) {
@@ -71,8 +83,7 @@ async function seedEmpresa(empresaId: string, plan = 'rei') {
 }
 
 isTestTest('A2: init limpo cria is_test e o monitor roda sem erro de coluna', async () => {
-  removeDb(freshDbPath);
-  process.env.SQLITE_DB_PATH = freshDbPath;
+  await useDatabase(freshDbPath);
   const { initDB, getDb } = await import('../lib/db.js');
   await initDB();
 
@@ -96,9 +107,8 @@ isTestTest('A2: init limpo cria is_test e o monitor roda sem erro de coluna', as
 });
 
 isTestTest('A2: banco legado sem is_test ganha a coluna por migração idempotente', async () => {
-  removeDb(legacyDbPath);
+  await useDatabase(legacyDbPath);
   await createLegacyDatabase(legacyDbPath);
-  process.env.SQLITE_DB_PATH = legacyDbPath;
   const { initDB, getDb } = await import('../lib/db.js');
   await initDB();
 
@@ -111,6 +121,11 @@ isTestTest('A2: banco legado sem is_test ganha a coluna por migração idempoten
   assert.equal(Number(rows[0].is_test), 0);
 
   // Idempotência: rodar o initDB de novo não falha nem duplica a coluna.
+  // Fecha a instância anterior antes de reabrir: initDB troca o handle global
+  // sem fechar o anterior, e um handle esquecido mantém o arquivo travado no
+  // Windows (EBUSY na limpeza) e acumula recursos no runner do CI.
+  const { closeDB } = await import('../lib/db.js');
+  await closeDB();
   await initDB();
   columns = await getDb().all('PRAGMA table_info(reviews)');
   assert.equal(columns.filter((column: { name?: string }) => column.name === 'is_test').length, 1);
@@ -122,8 +137,7 @@ isTestTest('A2: banco legado sem is_test ganha a coluna por migração idempoten
 });
 
 isTestTest('A2: erro por empresa no scheduler fica observável sem derrubar a rodada', async () => {
-  removeDb(schedulerDbPath);
-  process.env.SQLITE_DB_PATH = schedulerDbPath;
+  await useDatabase(schedulerDbPath);
   const { initDB, getDb } = await import('../lib/db.js');
   await initDB();
 

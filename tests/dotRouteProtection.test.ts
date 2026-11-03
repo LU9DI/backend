@@ -65,6 +65,8 @@ async function request(
     method,
     headers: {
       'Content-Type': 'application/json',
+      // Header CSRF dedicado, exigido em toda mutação de empresa do Dot.
+      'X-Dot-Csrf': '1',
       ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
       ...(opts.headers || {}),
     },
@@ -664,15 +666,35 @@ describe('Bloqueio de sessão administrativa: cabeçalho anti-CSRF obrigatório'
     );
     const prepared = await request('POST', `/api/dot/decisions/${Number(inserted.lastID)}/prepare-action`, {
       token: employeeTok,
-      body: { optionId: 'opcao_1' },
+      body: {
+        optionId: 'opcao_1',
+        // Tentativa de spoofing: identidade só pode vir do token autenticado.
+        actorUserId: ownerA,
+        actor_id: ownerA,
+        approver_id: ownerA,
+      },
       headers: { 'X-Dot-Admin': '1' },
     });
     assert.equal(prepared.status, 200, JSON.stringify(prepared.data));
     const actionId = Number(prepared.data.action?.id);
 
+    const preparedAudit = await getDb().get(
+      "SELECT actor_type, actor_id FROM dot_action_audit WHERE empresa_id = ? AND action_id = ? AND event = 'prepared' ORDER BY id DESC LIMIT 1",
+      [empresaA, actionId],
+    );
+    assert.equal(String(preparedAudit?.actor_type), 'user');
+    assert.equal(String(preparedAudit?.actor_id), employeeA, 'preparador deve vir do token, nunca do corpo');
+
     const denied = await request('POST', `/api/dot/actions/${actionId}/approve`, {
       token: employeeTok,
       headers: { 'X-Dot-Admin': '1' },
+      body: {
+        // Tentativa de spoofing do aprovador; deve ser ignorada.
+        actorUserId: ownerA,
+        actor_id: ownerA,
+        approver_id: ownerA,
+        approved_by: ownerA,
+      },
     });
     assert.equal(denied.status, 403, JSON.stringify(denied.data));
     assert.equal(denied.data.code, 'DOT_SEPARATION_OF_DUTIES');
@@ -691,5 +713,34 @@ describe('Bloqueio de sessão administrativa: cabeçalho anti-CSRF obrigatório'
       headers: { 'X-Dot-Admin': '1' },
     });
     assert.equal(ownerApproval.status, 200, JSON.stringify(ownerApproval.data));
+  });
+
+  it('mutação de empresa sem X-Dot-Csrf é recusada antes de autenticar', async () => {
+    const response = await fetch(`${baseUrl}/api/dot/preferences`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autonomy: 'assistente' }),
+    });
+    const body = await response.json().catch(() => ({}));
+    assert.equal(response.status, 403);
+    assert.equal(body.code, 'DOT_CSRF_REQUIRED');
+
+    const withHeader = await fetch(`${baseUrl}/api/dot/preferences`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Dot-Csrf': '1' },
+      body: JSON.stringify({ autonomy: 'assistente' }),
+    });
+    const withHeaderBody = await withHeader.json().catch(() => ({}));
+    assert.notEqual(withHeaderBody.code, 'DOT_CSRF_REQUIRED', 'com header CSRF o middleware não pode barrar');
+
+    // Rotas de agente também são mutações de empresa e passam pelo mesmo middleware.
+    const agentWithoutCsrf = await fetch(`${baseUrl}/api/dot/agent/goals`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Objetivo CSRF' }),
+    });
+    const agentBody = await agentWithoutCsrf.json().catch(() => ({}));
+    assert.equal(agentWithoutCsrf.status, 403);
+    assert.equal(agentBody.code, 'DOT_CSRF_REQUIRED');
   });
 });

@@ -8,7 +8,10 @@ import { listDotEvents, runDotMonitor } from '../services/dotMonitor.js';
 import { resolveDotComplaint } from '../services/dotResolve.js';
 import { createDecisionsForEvents, listDotDecisions, updateDotDecision } from '../services/dotDecision.js';
 import { DotActionOptionConflictError, DotApprovalSeparationError, prepareDotActionFromDecision, approveDotAction, executeDotAction, listDotActions } from '../services/dotActionQueue.js';
-import { listDotFollowUps, completeDotFollowUp } from '../services/dotFollowUp.js';
+import { DotActorIdentityError, dotUserActor } from '../services/dotActor.js';
+import type { DotExecutionResult } from '../services/dotExecutionGateway.js';
+import { listDotFollowUps, completeDotFollowUp, ensureDotFollowUpSchema } from '../services/dotFollowUp.js';
+import { ensureDotInternalActionSchema } from '../services/dotInternalExecutors.js';
 import { resumeMissionAfterApprovedExecution } from '../services/dotAgentMissionRunner.js';
 import { DotAdminError, requireDotAdminSession } from '../services/dotAdminSecurity.js';
 import { planLabel, normalizePlanAlias } from '../lib/plans.js';
@@ -329,6 +332,28 @@ function deny(res: Response, access: DotAccess) {
 }
 
 export function mountDotRoutes(app: Express) {
+  // CSRF dedicado para mutações de empresa do Dot. O header é exigido antes
+  // de qualquer autenticação/permissão: um POST cross-site não consegue
+  // definir header customizado, mesmo com cookie SameSite=None em produção.
+  // Somente as rotas administrativas ficam de fora (elas exigem X-Dot-Admin).
+  app.use('/api/dot', (req: Request, res: Response, next) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(String(req.method || '').toUpperCase())) return next();
+    const pathname = String(req.originalUrl || '').split('?')[0];
+    if (pathname === '/api/dot/admin' || pathname.startsWith('/api/dot/admin/')) {
+      return next();
+    }
+    const csrf = String(req.headers['x-dot-csrf'] ?? '').trim().toLowerCase();
+    // Fallback consciente para clientes administrativos antigos que já enviam
+    // X-Dot-Admin; ambos são headers customizados e não são forjáveis por CSRF.
+    const admin = String(req.headers['x-dot-admin'] ?? '').trim().toLowerCase();
+    if (csrf === '1' || csrf === 'true' || admin === '1') return next();
+    return res.status(403).json({
+      ok: false,
+      error: 'Cabeçalho X-Dot-Csrf: 1 é obrigatório para mutações do Filtra Dot.',
+      code: 'DOT_CSRF_REQUIRED',
+    });
+  });
+
   app.get('/api/dot/status', async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
     res.json({
@@ -444,8 +469,15 @@ export function mountDotRoutes(app: Express) {
     const actionId = Number(req.params.id);
     let action;
     try {
-      action = await approveDotAction(access.empresaId, actionId, access.userId || null);
+      // Identidade do aprovador vem EXCLUSIVAMENTE do token validado em
+      // resolveDotGate(). Campos como actorUserId/actor_id/approver_id/
+      // approved_by no corpo são ignorados por construção — o contrato só
+      // aceita DotActor, montado a partir de access.userId.
+      action = await approveDotAction(access.empresaId, actionId, dotUserActor(access.userId));
     } catch (error) {
+      if (error instanceof DotActorIdentityError) {
+        return res.status(error.status).json({ ok: false, error: error.message, code: error.code });
+      }
       if (error instanceof DotApprovalSeparationError) {
         return res.status(403).json({
           ok: false,
@@ -479,7 +511,16 @@ export function mountDotRoutes(app: Express) {
       });
     }
     const actionId = Number(req.params.id);
-    const result = await executeDotAction(access.empresaId, actionId, access.userId || null);
+    let result: DotExecutionResult;
+    try {
+      // Executor só recebe a identidade autenticada do token.
+      result = await executeDotAction(access.empresaId, actionId, dotUserActor(access.userId));
+    } catch (error) {
+      if (error instanceof DotActorIdentityError) {
+        return res.status(error.status).json({ ok: false, error: error.message, code: error.code });
+      }
+      throw error;
+    }
     if (!result.ok) return res.status(409).json(result);
 
     // Executar não é aprovar: a missão vinculada só é retomada quando a própria
@@ -511,20 +552,8 @@ export function mountDotRoutes(app: Express) {
     const access = await resolveDotAccess(req);
     if (!access.allowed || !access.empresaId) return deny(res, access);
     const db = (await import('../lib/db.js')).getDb();
-    await db.exec(`CREATE TABLE IF NOT EXISTS dot_internal_cases (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      empresa_id TEXT NOT NULL,
-      decision_id INTEGER NOT NULL,
-      action_id INTEGER NOT NULL,
-      event_id INTEGER,
-      action TEXT NOT NULL,
-      status TEXT NOT NULL,
-      priority TEXT NOT NULL,
-      summary TEXT NOT NULL,
-      next_step TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )`);
+    // Sem DDL em caminho de requisição: a tabela é criada nas migrações centrais.
+    await ensureDotInternalActionSchema(db);
     const cases = await db.all(
       'SELECT * FROM dot_internal_cases WHERE empresa_id = ? ORDER BY CASE WHEN status IN (\'prioritized\',\'escalated\') THEN 0 ELSE 1 END, id DESC LIMIT 100',
       [access.empresaId],
@@ -574,16 +603,8 @@ export function mountDotRoutes(app: Express) {
     }
     const result = await resolveDotComplaint(access.empresaId, complaint);
     const db = (await import('../lib/db.js')).getDb();
-    await db.exec(`CREATE TABLE IF NOT EXISTS dot_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      empresa_id TEXT NOT NULL,
-      type TEXT NOT NULL,
-      severity TEXT NOT NULL,
-      title TEXT NOT NULL,
-      details TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      acknowledged_at TEXT
-    )`);
+    // Sem DDL em caminho de requisição: dot_events vem das migrações centrais.
+    await ensureDotFollowUpSchema(db);
     const severity = result.verification_status === 'confirmed' ? 'critical' : 'warning';
     const eventTitle = result.verification_status === 'confirmed'
       ? 'Reclamação confirmada pelo Dot Resolve'
