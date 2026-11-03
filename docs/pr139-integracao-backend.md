@@ -9,7 +9,7 @@
 
 ## 1. Estado atual do PR
 
-O HEAD atual consultado no GitHub é `510ddc0` (20 commits; 49 arquivos alterados). A base do PR é `b8caf404`.
+O código funcional foi revisado no SHA `510ddc0` (20 commits; 49 arquivos alterados). Este relatório foi atualizado em um commit documental posterior, que agora é a ponta do PR. A base do PR permanece `b8caf404`. Os checks do novo HEAD documental ainda precisam ser confirmados.
 
 O documento anterior continha informações de uma etapa antiga da integração — commit local `5769919`, patch apenas local, push bloqueado e base `a74c75d`. Essas informações não descrevem mais o estado atual do PR e ficam substituídas por este registro.
 
