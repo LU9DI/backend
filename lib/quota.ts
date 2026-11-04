@@ -38,15 +38,15 @@ function cleanupAiReservations(now = Date.now()) {
 }
 
 export function planTemIA(plan: string | null | undefined): boolean {
-  const p = String(plan || '').toLowerCase();
+  const p = normalizePlanAlias(plan);
   if (p === 'inicial' || p === 'pro') return false;
   return ['ultra', 'corporativo', 'rei', 'trial', 'teste'].includes(p);
 }
 export function getFeedbackLimit(plan: string): number {
-  return PLAN_FEEDBACK_LIMITS[String(plan || 'trial').toLowerCase()] ?? PLAN_FEEDBACK_LIMITS.trial;
+  return PLAN_FEEDBACK_LIMITS[normalizePlanAlias(plan) || 'trial'] ?? PLAN_FEEDBACK_LIMITS.trial;
 }
 export function getTokenLimit(plan: string): number {
-  return PLAN_TOKEN_LIMITS[String(plan || 'trial').toLowerCase()] ?? PLAN_TOKEN_LIMITS.trial;
+  return PLAN_TOKEN_LIMITS[normalizePlanAlias(plan) || 'trial'] ?? PLAN_TOKEN_LIMITS.trial;
 }
 
 /**
