@@ -39,7 +39,12 @@ async function acquisitionReputationGuard(db: any) {
   return { paused, sent, bounced, complained, bounce_rate: bounceRate, complaint_rate: complaintRate, reason: complained > 0 ? 'complaint' : (paused ? 'bounce_rate' : null) };
 }
 
-export async function ensureAcquisitionEngineSchema(db = getDb()) {
+// A preparação do schema é feita uma vez por processo/conexão. O worker de
+// aquisição roda em intervalo curto; repetir ALTER TABLE e CREATE INDEX em todo
+// tick gera tráfego de catálogo desnecessário no Postgres.
+const acquisitionSchemaReady = new WeakMap<object, Promise<void>>();
+
+async function createAcquisitionEngineSchema(db: any) {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS leads (
       id TEXT PRIMARY KEY,
@@ -87,6 +92,21 @@ export async function ensureAcquisitionEngineSchema(db = getDb()) {
   }
   await db.exec('CREATE INDEX IF NOT EXISTS idx_acq_leads_ready ON leads(acquisition_eligible, acquisition_suppressed, acquisition_next_at)');
   await db.exec('CREATE INDEX IF NOT EXISTS idx_acq_sends_day ON acquisition_sends(status, scheduled_at)');
+}
+
+export async function ensureAcquisitionEngineSchema(db = getDb()) {
+  const key = db as unknown as object;
+  const cached = acquisitionSchemaReady.get(key);
+  if (cached) return cached;
+
+  const setup = createAcquisitionEngineSchema(db);
+  acquisitionSchemaReady.set(key, setup);
+  try {
+    await setup;
+  } catch (error) {
+    if (acquisitionSchemaReady.get(key) === setup) acquisitionSchemaReady.delete(key);
+    throw error;
+  }
 }
 
 function localDayStartUtcIso(now = new Date()) {
