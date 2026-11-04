@@ -11,7 +11,7 @@ import { prepareDotActionFromDecision, approveDotAction, executeDotAction, listD
 import { listDotFollowUps, completeDotFollowUp } from '../services/dotFollowUp.js';
 import { resumeMissionAfterApprovedExecution } from '../services/dotAgentMissionRunner.js';
 import { DotAdminError, requireDotAdminSession } from '../services/dotAdminSecurity.js';
-import { planLabel, normalizePlanAlias } from '../lib/plans.js';
+import { planLabel, normalizePlan } from '../lib/plans.js';
 import { resolveDotGate } from '../services/dotAccessGate.js';
 import { getDotSchedulerStatus } from '../services/dotScheduler.js';
 import { getDotAgentWorkerStatus } from '../services/dotAgentWorker.js';
@@ -55,8 +55,9 @@ type DotAccess = {
   allowed: boolean;
   demo: boolean;
   empresaId?: string;
-  plan?: string;
-  planLabel?: string;
+  plan?: string | null;
+  planLabel?: string | null;
+  planIdentified: boolean;
   reason?: string;
   userId: string | null;
 };
@@ -84,26 +85,31 @@ function cleanupDotTokenReservations(now = Date.now()) {
   }
 }
 
-function dotPlanKey(plan?: string | null): string {
-  // 'corp'/'corporate' → 'corporativo': a mesma normalização usada no gate e na cota.
-  return normalizePlanAlias(plan || 'rei') || 'rei';
+function dotPlanKey(plan?: string | null): 'rei' | 'corporativo' | null {
+  // Sem plano oficial identificado, não há chave de cota nem fallback para Rei.
+  const normalized = normalizePlan(plan);
+  return normalized === 'rei' || normalized === 'corporativo' ? normalized : null;
 }
 
 function dotResponseTokenLimit(plan?: string | null): number {
-  return DOT_RESPONSE_TOKEN_LIMITS[dotPlanKey(plan)] || 900;
+  const key = dotPlanKey(plan);
+  return key ? (DOT_RESPONSE_TOKEN_LIMITS[key] || 0) : 0;
 }
 
 async function checkDotTokenBudget(
   empresaId: string | null | undefined,
   plan: string | null | undefined,
 ): Promise<{ ok: boolean; used: number; feature_used: number; limit: number; feature_limit: number; response_limit: number; remaining: number; feature_remaining: number; feedback_limit: number }> {
+  const normalizedPlan = dotPlanKey(plan);
   const responseLimit = dotResponseTokenLimit(plan);
+  if (!normalizedPlan) {
+    return { ok: false, used: 0, feature_used: 0, limit: 0, feature_limit: 0, response_limit: 0, remaining: 0, feature_remaining: 0, feedback_limit: 0 };
+  }
   if (!empresaId) {
     return { ok: true, used: 0, feature_used: 0, limit: 0, feature_limit: 0, response_limit: responseLimit, remaining: responseLimit, feature_remaining: responseLimit, feedback_limit: 0 };
   }
 
   cleanupDotTokenReservations();
-  const normalizedPlan = dotPlanKey(plan);
   const featureLimit = getFeatureTokenLimit(normalizedPlan, 'dot');
   const feedbackLimit = getTokenLimit(normalizedPlan);
   let featureUsed: number;
@@ -174,7 +180,8 @@ const DOT_TOKEN_WARNING_THRESHOLD = 0.8;
  * sem valor confiável, a cota é apresentada como esgotada (nunca como livre).
  */
 async function dotFeatureTokenSnapshot(empresaId: string | null | undefined, plan: string | null | undefined) {
-  const limit = getFeatureTokenLimit(dotPlanKey(plan), 'dot');
+  const planKey = dotPlanKey(plan);
+  const limit = planKey ? getFeatureTokenLimit(planKey, 'dot') : 0;
   if (!empresaId || limit <= 0) {
     return { used: 0, limit, remaining: Math.max(0, limit) };
   }
@@ -292,8 +299,9 @@ async function resolveDotAccess(req: Request): Promise<DotAccess> {
     allowed: gate.allowed,
     demo: gate.demo,
     empresaId: gate.empresaId,
-    plan: gate.plan,
-    planLabel: gate.plan ? planLabel(gate.plan) : gate.demo ? 'Rei' : undefined,
+    plan: normalizePlan(gate.plan),
+    planLabel: normalizePlan(gate.plan) ? planLabel(normalizePlan(gate.plan) as string) : null,
+    planIdentified: normalizePlan(gate.plan) !== null,
     reason: gate.reason,
     userId: gate.userId,
   };
@@ -338,8 +346,9 @@ export function mountDotRoutes(app: Express) {
         (process.env.NODE_ENV !== 'production' || process.env.FILTRA_DOT_ENABLED === '1'),
       access: access.allowed,
       demo: access.demo,
-      plan: access.plan || 'rei',
-      plan_label: access.planLabel || 'Rei',
+      plan: access.plan ?? null,
+      plan_label: access.planLabel ?? null,
+      plan_identified: access.planIdentified,
       priority_access: ['rei', 'corporativo'],
       scheduler: getDotSchedulerStatus(),
       worker: getDotAgentWorkerStatus(),

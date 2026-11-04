@@ -4,7 +4,7 @@ export const PLANOS_OFICIAIS = ['inicial', 'pro', 'ultra', 'corporativo', 'rei']
 export type PlanoOficial = (typeof PLANOS_OFICIAIS)[number];
 
 export function isPlanoOficial(p: string): p is PlanoOficial {
-  return (PLANOS_OFICIAIS as readonly string[]).includes(String(p || '').toLowerCase());
+  return normalizePlan(p) !== null;
 }
 
 /**
@@ -13,9 +13,18 @@ export function isPlanoOficial(p: string): p is PlanoOficial {
  * precisam valer o mesmo acesso em todas as trilhas (Dot, cotas, relatórios).
  */
 export function normalizePlanAlias(plan: string | null | undefined): string {
-  const p = String(plan || '').toLowerCase().trim();
+  let p = String(plan || '').toLowerCase().trim();
+  if (p.endsWith('-anual')) p = p.slice(0, -'-anual'.length);
   if (p === 'corp' || p === 'corporate') return 'corporativo';
   return p;
+}
+
+/** Retorna somente um plano oficial canônico; valores ausentes/desconhecidos ficam null. */
+export function normalizePlan(plan: string | null | undefined): PlanoOficial | null {
+  const canonical = normalizePlanAlias(plan);
+  return (PLANOS_OFICIAIS as readonly string[]).includes(canonical)
+    ? canonical as PlanoOficial
+    : null;
 }
 
 /**
