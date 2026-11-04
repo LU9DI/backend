@@ -40,14 +40,24 @@ async function runTick() {
   }
 }
 
+// Falhas transitórias no banco não podem virar rejeições não tratadas:
+// o processo Node encerrava quando db.all() falhava antes do loop por missão.
+export async function runDotAgentWorkerTick(task: () => Promise<void> = runTick) {
+  try {
+    await task();
+  } catch (error: any) {
+    console.warn('[dot-agent-worker] tick falhou; nova tentativa no próximo ciclo:', error?.message || error);
+  }
+}
+
 export function startDotAgentWorker() {
   if (process.env.DOT_AGENT_WORKER_ENABLED === '0') return;
   if (timer) return;
 
   const intervalMs = Math.max(60_000, Number(process.env.DOT_AGENT_WORKER_INTERVAL_MS || 300_000));
 
-  void runTick();
-  timer = setInterval(() => void runTick(), intervalMs);
+  void runDotAgentWorkerTick();
+  timer = setInterval(() => void runDotAgentWorkerTick(), intervalMs);
   timer.unref();
   console.log(`🤖 DOT agente em background: intervalo ${Math.round(intervalMs / 60000)} min.`);
 }

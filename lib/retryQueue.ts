@@ -19,36 +19,54 @@ export type RetryJobType =
   | 'generic'
   | string;
 
+// Cacheia o bootstrap do esquema por conexão de banco. O worker chama
+// processRetryQueue a cada minuto; sem cache, cada tick repetia CREATE/ALTER/INDEX.
+const retryQueueSchemaReady = new WeakMap<object, Promise<void>>();
+
 export async function ensureRetryQueue(db: Database = getDb()) {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS retry_queue (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      job_type TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      attempts INTEGER NOT NULL DEFAULT 0,
-      max_attempts INTEGER NOT NULL DEFAULT 8,
-      next_run_at TEXT NOT NULL,
-      last_error TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      dedupe_key TEXT,
-      processing_at TEXT
+  const key = db as unknown as object;
+  const cached = retryQueueSchemaReady.get(key);
+  if (cached) return cached;
+
+  const setup = (async () => {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS retry_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_type TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 8,
+        next_run_at TEXT NOT NULL,
+        last_error TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        dedupe_key TEXT,
+        processing_at TEXT
+      );
+    `);
+    await db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_retry_pending ON retry_queue(status, next_run_at)`
     );
-  `);
-  await db.exec(
-    `CREATE INDEX IF NOT EXISTS idx_retry_pending ON retry_queue(status, next_run_at)`
-  );
+    try {
+      await db.exec(`ALTER TABLE retry_queue ADD COLUMN processing_at TEXT`);
+    } catch {
+      /* coluna já existe */
+    }
+    await db.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_retry_dedupe ON retry_queue(dedupe_key) WHERE dedupe_key IS NOT NULL AND status = 'pending'`
+    ).catch(() => {
+      /* SQLite partial unique pode falhar em versões antigas — ignora */
+    });
+  })();
+
+  retryQueueSchemaReady.set(key, setup);
   try {
-    await db.exec(`ALTER TABLE retry_queue ADD COLUMN processing_at TEXT`);
-  } catch {
-    /* coluna já existe */
+    await setup;
+  } catch (error) {
+    if (retryQueueSchemaReady.get(key) === setup) retryQueueSchemaReady.delete(key);
+    throw error;
   }
-  await db.exec(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_retry_dedupe ON retry_queue(dedupe_key) WHERE dedupe_key IS NOT NULL AND status = 'pending'`
-  ).catch(() => {
-    /* SQLite partial unique pode falhar em versões antigas — ignora */
-  });
 }
 
 function maxAttempts(): number {
