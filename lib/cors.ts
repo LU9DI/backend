@@ -18,10 +18,18 @@ export function buildCorsOptions(): CorsOptions {
     .split(',')
     .map((s) => s.trim().replace(/\/$/, ''))
     .filter(Boolean);
+  // Origins exatas dos dois frontends ativos no Render e do domínio público.
+  // Não libera curingas nem previews temporários.
+  const renderFrontendOrigins = [
+    'https://filtra-ai-web-cloud.onrender.com',
+    'https://filtra-ai-web-runtime.onrender.com',
+    'https://filtraai.com',
+    'https://www.filtraai.com',
+  ];
   const defaults = [process.env.APP_URL, process.env.FRONTEND_URL]
     .filter(Boolean)
     .map((s) => String(s).replace(/\/$/, ''));
-  const allowlist = [...new Set([...fromEnv, ...defaults])];
+  const allowlist = [...new Set([...fromEnv, ...defaults, ...renderFrontendOrigins])];
 
   if (!isProd) return { origin: true, credentials: true };
   if (allowlist.length === 0) {
