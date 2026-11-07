@@ -15,6 +15,7 @@ import {
   getActiveDotAdminSession,
   getDotAdminPinState,
   readDotAdminCookie,
+  requireDotAdminSession,
   resetDotAdminPin,
   revokeDotAdminSessionByToken,
   setDotAdminCookie,
@@ -25,6 +26,11 @@ import {
 import { getEmpresaOwnerUserId } from '../lib/empresaOwnership.js';
 import { clientIp, writeAudit } from '../lib/auditLog.js';
 import { getDb } from '../lib/db.js';
+import {
+  getDotBudgetSnapshot,
+  listOpenDotReservations,
+  reconcileDotBudget,
+} from '../services/dotLedger.js';
 
 const unlockLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -213,6 +219,90 @@ export function mountDotAdminRoutes(app: Express) {
       }
       clearDotAdminCookie(res);
       return res.json({ ok: true });
+    } catch (error) {
+      return adminFail(res, error);
+    }
+  });
+
+  // Visão operacional do orçamento do Dot (somente o proprietário): números
+  // agregados e reservas abertas. Nenhuma resposta expõe usuário, CNPJ ou
+  // conteúdo de avaliação — só identificador, estado e contagem de tokens.
+  app.get('/api/dot/admin/budget', async (req: Request, res: Response) => {
+    try {
+      const gate = await resolveDotGate(req);
+      if (!gate.allowed) return denyGate(res, gate);
+      ensureOwner(gate);
+      const empresaId = gate.empresaId as string;
+      const budget = await getDotBudgetSnapshot(empresaId, gate.plan || undefined);
+      const open = await listOpenDotReservations(empresaId);
+      return res.json({
+        ok: true,
+        budget,
+        open_reservations: open.map((item) => ({
+          id: item.id,
+          status: item.status,
+          tokens_reserved: item.tokens_reserved,
+          tokens_estimated: item.tokens_estimated,
+          ambiguous: Number(item.ambiguous) === 1,
+          provider: item.provider,
+          sent_at: item.sent_at,
+          created_at: item.created_at,
+          expires_at: item.expires_at,
+        })),
+      });
+    } catch (error) {
+      return adminFail(res, error);
+    }
+  });
+
+  // Reconciliação explícita de reservas abertas/ambíguas. Exige a SESSÃO
+  // administrativa do Dot (PIN) além do JWT do proprietário — mesma barreira
+  // das demais operações sensíveis. Sem sessão, o Dot continua desbloqueável
+  // só pelo PIN, nunca por esta rota.
+  app.post('/api/dot/admin/budget/reconcile', async (req: Request, res: Response) => {
+    try {
+      const gate = await resolveDotGate(req);
+      if (!gate.allowed) return denyGate(res, gate);
+      ensureOwner(gate);
+      const empresaId = gate.empresaId as string;
+      await requireDotAdminSession(req, empresaId, gate.userId || null);
+      const body = req.body || {};
+      const reservationId = Number(body?.reservation_id);
+      const decision = String(body?.decision || '');
+      if (!Number.isFinite(reservationId) || reservationId <= 0 || !Number.isInteger(reservationId)) {
+        return res.status(400).json({ ok: false, error: 'reservation_id inválido (inteiro positivo obrigatório).', code: 'DOT_RECONCILE_BAD_ID' });
+      }
+      if (decision !== 'settle' && decision !== 'release') {
+        return res.status(400).json({ ok: false, error: "decision deve ser 'settle' ou 'release'.", code: 'DOT_RECONCILE_BAD_DECISION' });
+      }
+      const tokensRaw = decision === 'settle' ? body?.tokens : undefined;
+      const tokens = tokensRaw === undefined || tokensRaw === null ? null : Number(tokensRaw);
+      if (tokens !== null && (!Number.isFinite(tokens) || tokens < 0)) {
+        return res.status(400).json({ ok: false, error: 'tokens deve ser um número >= 0.', code: 'DOT_RECONCILE_BAD_TOKENS' });
+      }
+      const reason = typeof body?.reason === 'string' ? body.reason.slice(0, 500) : undefined;
+      const provider = typeof body?.provider === 'string' ? body.provider.slice(0, 20) : null;
+      const result = await reconcileDotBudget({
+        empresaId,
+        reservationId,
+        decision: decision as 'settle' | 'release',
+        tokens,
+        reason,
+        provider,
+      });
+      await writeAudit(getDb(), {
+        action: 'dot.budget_reconciled',
+        actor_user_id: gate.userId || null,
+        empresa_id: empresaId,
+        result: result.ok ? 'ok' : 'error',
+        ip: clientIp(req),
+        user_agent: String(req.headers['user-agent'] || '').slice(0, 200),
+        detail: { reservation_id: reservationId, decision, ok: result.ok },
+      });
+      if (!result.ok) {
+        return res.status(409).json({ ok: false, error: result.reason || 'Reconciliação recusada.', code: 'DOT_RECONCILE_REFUSED' });
+      }
+      return res.json({ ok: true, result });
     } catch (error) {
       return adminFail(res, error);
     }
