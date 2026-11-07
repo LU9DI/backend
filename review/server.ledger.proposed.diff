@@ -1,0 +1,184 @@
+diff --git a/server.ts b/review/server.ledger.proposed.ts.txt
+index 8b3809a..54f90d6 100644
+--- a/server.ts
++++ b/review/server.ledger.proposed.ts.txt
+@@ -62,9 +62,10 @@ import { ensureDotAdminSecuritySchema } from './services/dotAdminSecurity.js';
+ import { ensureDotAccessSchema } from './services/dotAccessControl.js';
+ import { ensureDotAgentSchema } from './services/dotAgent.js';
+ import { ensureMissionTables } from './services/dotAgentMissions.js';
+-import { startDotMonitorScheduler } from './services/dotScheduler.js';
+-import { startMonthlyReportScheduler, getMonthlyReportSchedulerStatus } from './services/monthlyReportScheduler.js';
+-import { startDotAgentWorker } from './services/dotAgentWorker.js';
++import { startDotMonitorScheduler, stopDotMonitorScheduler } from './services/dotScheduler.js';
++import { startMonthlyReportScheduler, getMonthlyReportSchedulerStatus, stopMonthlyReportScheduler } from './services/monthlyReportScheduler.js';
++import { startDotAgentWorker, stopDotAgentWorkerAndDrain } from './services/dotAgentWorker.js';
++import { assertDotLedgerSchema } from './services/dotLedger.js';
+ import { mcpApp } from './filtraMcp.js';
+ import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
+ import { paypalConfigured } from './lib/paypal.js';
+@@ -77,14 +78,14 @@ import { ensurePushSchema, pushConfigured, initWebPush } from './lib/push.js';
+ import { ensureAiUsageSchema } from './lib/aiUsage.js';
+ import { ensureOpsTables } from './lib/opsLog.js';
+ import { ensureAuditSchema } from './lib/auditLog.js';
+-import { ensureRetryQueue, startRetryWorker } from './lib/retryQueue.js';
++import { ensureRetryQueue, startRetryWorker, stopRetryWorker } from './lib/retryQueue.js';
+ import { registerAllRetryHandlers } from './lib/retryHandlers.js';
+ import { ensurePlanPricingSchema } from './lib/planPricing.js';
+ import { allowPlanSwitch } from './lib/plans.js';
+ import { smtpConfigured } from './lib/mailer.js';
+ import { n8nConfigured } from './lib/n8n.js';
+-import { ensureAcquisitionEngineSchema, startAcquisitionWorker } from './lib/acquisitionEngine.js';
+-import { startAcquisitionReplenisher } from './lib/acquisitionReplenisher.js';
++import { ensureAcquisitionEngineSchema, startAcquisitionWorker, stopAcquisitionWorker } from './lib/acquisitionEngine.js';
++import { startAcquisitionReplenisher, stopAcquisitionReplenisher } from './lib/acquisitionReplenisher.js';
+ import { startProductHuntAcquisition } from './lib/acquisitionProductHunt.js';
+ import { startHubSpotAcquisitionSync } from './lib/hubspotAcquisitionSync.js';
+ import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
+@@ -224,6 +225,20 @@ app.get('/api/metrics', (req, res) => {
+ const PORT = Number(process.env.PORT || 5000);
+ let server: Server | null = null;
+ let shuttingDown = false;
++/** `true` só depois de VALIDAR o schema do ledger criado pela migração central. */
++let dotLedgerReady = false;
++
++/**
++ * Componentes de background com parada SÍNCRONA (timer). O DOT NÃO entra aqui:
++ * usa drains assíncronos próprios (`stopDotMonitorScheduler`/
++ * `stopDotAgentWorkerAndDrain`), que aguardam a execução em voo. Registrar o
++ * DOT aqui criaria parada DUPLICADA.
++ */
++const backgroundStops: Array<{ name: string; stop: () => unknown }> = [];
++
++function trackBackground(name: string, stop: () => unknown): void {
++  backgroundStops.push({ name, stop });
++}
+ 
+ 
+ 
+@@ -266,12 +281,42 @@ async function gracefulShutdown(signal: string) {
+   force.unref();
+ 
+   try {
++    // 1) Para de aceitar novas requisições HTTP (o processo segue vivo).
+     if (server) {
+       await new Promise<void>((resolve) => server!.close(() => resolve()));
+       console.log('HTTP fechado.');
+     }
++
++    // 2) Timers dos subsistemas com parada SÍNCRONA. Aqui `stop` significa
++    //    "parar o timer" — nada em voo é aguardado neste grupo.
++    for (const entry of backgroundStops.slice().reverse()) {
++      try {
++        const result = entry.stop();
++        console.log(`[shutdown] ${entry.name}: timer parado`, result === undefined ? '' : JSON.stringify(result));
++      } catch (e: any) {
++        console.warn(`[shutdown] falha ao parar ${entry.name}:`, e?.message || e);
++      }
++    }
++
++    // 3) Drena o DOT: aguarda a execução em voo (scheduler e worker) dentro do
++    //    teto individual. O retorno distingue drenagem concluída de timeout.
++    const drain = async <T>(label: string, stop: () => Promise<T>): Promise<T | null> => {
++      try {
++        const result = await stop();
++        console.log(`[shutdown] ${label}:`, JSON.stringify(result));
++        return result;
++      } catch (e: any) {
++        console.warn(`[shutdown] falha ao drenar ${label}:`, e?.message || e);
++        return null;
++      }
++    };
++    const dotScheduler = await drain('DOT scheduler', () => stopDotMonitorScheduler(5_000));
++    const dotWorker = await drain('DOT agent worker', () => stopDotAgentWorkerAndDrain(5_000));
++
++    // 4) Fecha o pool UMA única vez, após as drenagens. Se algum drain expirou,
++    //    o risco de operação pendente fica explícito no log abaixo.
+     await closeDB();
+-    console.log('Banco fechado.');
++    console.log('Banco fechado.', { dot_scheduler: dotScheduler, dot_agent_worker: dotWorker });
+     clearTimeout(force);
+     process.exit(0);
+   } catch (e: any) {
+@@ -354,19 +399,27 @@ export async function startServer() {
+     await ensureRetryQueue(getDb());
+     registerAllRetryHandlers();
+     startRetryWorker();
++    trackBackground('retry worker', stopRetryWorker);
+   } catch (e) {
+     console.warn('retry queue:', e);
+   }
+   try {
+     await ensureAcquisitionEngineSchema(getDb());
+     startAcquisitionWorker();
+-    setTimeout(() => {
++    trackBackground('acquisition worker', stopAcquisitionWorker);
++    // O bootstrap atrasado do replenisher também é cancelado no encerramento:
++    // sem isso ele podia nascer DEPOIS do fechamento do pool do PostgreSQL.
++    const replenisherBoot = setTimeout(() => {
+       try {
+         startAcquisitionReplenisher();
+       } catch (e: any) {
+         console.warn('[acquisition-replenisher] delayed bootstrap failed:', e?.message || e);
+       }
+     }, 60_000);
++    trackBackground('acquisition replenisher', () => {
++      clearTimeout(replenisherBoot);
++      return stopAcquisitionReplenisher();
++    });
+     await startProductHuntAcquisition();
+     await startHubSpotAcquisitionSync();
+   } catch (e) {
+@@ -384,6 +437,15 @@ export async function startServer() {
+   } catch (e) {
+     console.warn('dot schema:', e);
+   }
++  try {
++    // A tabela `dot_budget_reservations` e as colunas de token são criadas pela
++    // migração central (`initDB`). Aqui só VALIDAMOS: sem segunda fonte de DDL
++    // e sem DDL por requisição. Falha aqui mantém o DOT desativado (fail-closed).
++    await assertDotLedgerSchema();
++    dotLedgerReady = true;
++  } catch (e) {
++    console.warn('dot ledger schema:', e);
++  }
+   try {
+     await ensureEmpresaOwnerSchema(getDb());
+     await ensureDotAdminSecuritySchema();
+@@ -427,14 +489,21 @@ export async function startServer() {
+   mountTelegramRoutes(app);
+   mountFiscalRoutes(app);
+   if (dotRuntimeEnabled()) {
+-    mountDotRoutes(app);
+-    mountDotAccessRoutes(app);
+-    mountDotAgentRoutes(app);
+-    mountDotAgentMissionRoutes(app);
+-    mountDotAdminRoutes(app);
+-    startDotMonitorScheduler();
+-    startDotAgentWorker();
+-    console.log('[dot] Filtra Dot habilitado: rotas + monitor + agente em background.');
++    if (!dotLedgerReady) {
++      // Fail-closed: sem schema de orçamento validado, o DOT não é ativado; o
++      // restante do servidor segue funcionando normalmente.
++      app.get('/api/dot/status', (_req, res) => res.status(503).json({ ok: false, enabled: false, access: false, error: 'Filtra Dot indisponível: schema do orçamento não validado.' }));
++      console.error('[dot] ledger schema inválido — Filtra Dot NÃO ativado (fail-closed).');
++    } else {
++      mountDotRoutes(app);
++      mountDotAccessRoutes(app);
++      mountDotAgentRoutes(app);
++      mountDotAgentMissionRoutes(app);
++      mountDotAdminRoutes(app);
++      startDotMonitorScheduler();
++      startDotAgentWorker();
++      console.log('[dot] Filtra Dot habilitado: rotas + monitor + agente em background.');
++    }
+   } else {
+     app.get('/api/dot/status', (_req, res) => res.status(403).json({ ok: false, enabled: false, access: false, error: 'Filtra Dot desativado. Defina FILTRA_DOT_ENABLED=1 para habilitar.' }));
+     console.log('[dot] Filtra Dot desativado (defina FILTRA_DOT_ENABLED=1 para habilitar).');
+@@ -442,6 +511,7 @@ export async function startServer() {
+ 
+   // Agendador in-process do relatório mensal (sem cron externo e sem credenciais).
+   startMonthlyReportScheduler();
++  trackBackground('monthly report scheduler', stopMonthlyReportScheduler);
+ 
+   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
+   mountAdminPasswordResetRoutes(app, getDb);

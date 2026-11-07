@@ -1,0 +1,89 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [master, 'feat/**', 'fix/**', 'chore/**']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install native build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y python3 make g++
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit and integration tests
+        run: npm test
+
+  postgres-concurrency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: filtra_test
+          # Locale C explícito: determinismo de ordenação/colation igual ao da
+          # validação local (PostgreSQL 17.11, locale C). Sem `--encoding=UTF8`
+          # o initdb em locale C criaria SQL_ASCII; os dois andam juntos.
+          POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d filtra_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NODE_ENV: test
+      # Cliente também em locale C, alinhado ao servidor.
+      LC_ALL: C
+      LANG: C
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/filtra_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install native build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y python3 make g++
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Build
+        run: npm run build
+      # Fail-closed: os testes PG criam/derrubam bancos no host de DATABASE_URL.
+      # A guarda em tests/helpers/pg-test-utils.ts já recusa hosts remotos, mas
+      # a checagem aqui falha ANTES de qualquer conexão se a config for alterada.
+      - name: Guard — DATABASE_URL must be local (never production)
+        run: |
+          node -e "const u=new URL(process.env.DATABASE_URL);const h=u.hostname.replace(/^\[|\]$/g,'');if(!['localhost','127.0.0.1','::1'].includes(h)){console.error('Recusado: DATABASE_URL de teste não é local:',h);process.exit(1);}console.log('DATABASE_URL local confirmado:',h);"
+      - name: PostgreSQL multi-process concurrency test
+        run: npm run test:postgres

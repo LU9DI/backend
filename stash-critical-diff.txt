@@ -1,0 +1,364 @@
+diff --git a/lib/cors.ts b/lib/cors.ts
+index 2be2793..b303b57 100644
+--- a/lib/cors.ts
++++ b/lib/cors.ts
+@@ -18,18 +18,10 @@ export function buildCorsOptions(): CorsOptions {
+     .split(',')
+     .map((s) => s.trim().replace(/\/$/, ''))
+     .filter(Boolean);
+-  // Origins exatas dos dois frontends ativos no Render e do domínio público.
+-  // Não libera curingas nem previews temporários.
+-  const renderFrontendOrigins = [
+-    'https://filtra-ai-web-cloud.onrender.com',
+-    'https://filtra-ai-web-runtime.onrender.com',
+-    'https://filtraai.com',
+-    'https://www.filtraai.com',
+-  ];
+   const defaults = [process.env.APP_URL, process.env.FRONTEND_URL]
+     .filter(Boolean)
+     .map((s) => String(s).replace(/\/$/, ''));
+-  const allowlist = [...new Set([...fromEnv, ...defaults, ...renderFrontendOrigins])];
++  const allowlist = [...new Set([...fromEnv, ...defaults])];
+ 
+   if (!isProd) return { origin: true, credentials: true };
+   if (allowlist.length === 0) {
+diff --git a/lib/plans.ts b/lib/plans.ts
+index f52e786..b731cd5 100644
+--- a/lib/plans.ts
++++ b/lib/plans.ts
+@@ -4,7 +4,7 @@ export const PLANOS_OFICIAIS = ['inicial', 'pro', 'ultra', 'corporativo', 'rei']
+ export type PlanoOficial = (typeof PLANOS_OFICIAIS)[number];
+ 
+ export function isPlanoOficial(p: string): p is PlanoOficial {
+-  return normalizePlan(p) !== null;
++  return (PLANOS_OFICIAIS as readonly string[]).includes(String(p || '').toLowerCase());
+ }
+ 
+ /**
+@@ -13,20 +13,11 @@ export function isPlanoOficial(p: string): p is PlanoOficial {
+  * precisam valer o mesmo acesso em todas as trilhas (Dot, cotas, relatórios).
+  */
+ export function normalizePlanAlias(plan: string | null | undefined): string {
+-  let p = String(plan || '').toLowerCase().trim();
+-  if (p.endsWith('-anual')) p = p.slice(0, -'-anual'.length);
++  const p = String(plan || '').toLowerCase().trim();
+   if (p === 'corp' || p === 'corporate') return 'corporativo';
+   return p;
+ }
+ 
+-/** Retorna somente um plano oficial canônico; valores ausentes/desconhecidos ficam null. */
+-export function normalizePlan(plan: string | null | undefined): PlanoOficial | null {
+-  const canonical = normalizePlanAlias(plan);
+-  return (PLANOS_OFICIAIS as readonly string[]).includes(canonical)
+-    ? canonical as PlanoOficial
+-    : null;
+-}
+-
+ /**
+  * Troca de planos por teste (sem Stripe).
+  * Produção: SEMPRE desligado — a env ALLOW_PLAN_SWITCH é ignorada.
+diff --git a/lib/quota.ts b/lib/quota.ts
+index e72600e..fbb04d2 100644
+--- a/lib/quota.ts
++++ b/lib/quota.ts
+@@ -38,15 +38,15 @@ function cleanupAiReservations(now = Date.now()) {
+ }
+ 
+ export function planTemIA(plan: string | null | undefined): boolean {
+-  const p = normalizePlanAlias(plan);
++  const p = String(plan || '').toLowerCase();
+   if (p === 'inicial' || p === 'pro') return false;
+   return ['ultra', 'corporativo', 'rei', 'trial', 'teste'].includes(p);
+ }
+ export function getFeedbackLimit(plan: string): number {
+-  return PLAN_FEEDBACK_LIMITS[normalizePlanAlias(plan) || 'trial'] ?? PLAN_FEEDBACK_LIMITS.trial;
++  return PLAN_FEEDBACK_LIMITS[String(plan || 'trial').toLowerCase()] ?? PLAN_FEEDBACK_LIMITS.trial;
+ }
+ export function getTokenLimit(plan: string): number {
+-  return PLAN_TOKEN_LIMITS[normalizePlanAlias(plan) || 'trial'] ?? PLAN_TOKEN_LIMITS.trial;
++  return PLAN_TOKEN_LIMITS[String(plan || 'trial').toLowerCase()] ?? PLAN_TOKEN_LIMITS.trial;
+ }
+ 
+ /**
+diff --git a/package-lock.json b/package-lock.json
+index 670fa73..e773017 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -460,15 +460,15 @@
+       }
+     },
+     "node_modules/@hono/node-server": {
+-      "version": "2.1.6",
+-      "resolved": "https://registry.npmjs.org/@hono/node-server/-/node-server-2.1.6.tgz",
+-      "integrity": "sha512-p/KH9MnfNcsm3sR6x4lNgm5j+QN4Et8srKredl9DZfXiyZ1UQ3aQ2YVpFLbqktYN5JI+DB+VZFKM2PqE5hLKjQ==",
++      "version": "1.19.17",
++      "resolved": "https://registry.npmjs.org/@hono/node-server/-/node-server-1.19.17.tgz",
++      "integrity": "sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ==",
+       "license": "MIT",
+       "engines": {
+-        "node": ">=20"
++        "node": ">=18.14.1"
+       },
+       "peerDependencies": {
+-        "hono": "^4 || ^5.0.0-0"
++        "hono": "^4"
+       }
+     },
+     "node_modules/@isaacs/fs-minipass": {
+diff --git a/package.json b/package.json
+index 0aa1d31..0d33c43 100644
+--- a/package.json
++++ b/package.json
+@@ -53,7 +53,6 @@
+   },
+   "overrides": {
+     "qs": "^6.17.1",
+-    "bcrypt": "npm:bcryptjs@^3.0.2",
+-    "@hono/node-server": "2.1.6"
++    "bcrypt": "npm:bcryptjs@^3.0.2"
+   }
+ }
+diff --git a/routes/dotRoutes.ts b/routes/dotRoutes.ts
+index 89593ef..4bb852c 100644
+--- a/routes/dotRoutes.ts
++++ b/routes/dotRoutes.ts
+@@ -7,14 +7,11 @@ import { getDotPreferences, saveDotPreferences } from '../services/dotPreference
+ import { listDotEvents, runDotMonitor } from '../services/dotMonitor.js';
+ import { resolveDotComplaint } from '../services/dotResolve.js';
+ import { createDecisionsForEvents, listDotDecisions, updateDotDecision } from '../services/dotDecision.js';
+-import { DotActionOptionConflictError, DotApprovalSeparationError, prepareDotActionFromDecision, approveDotAction, executeDotAction, listDotActions } from '../services/dotActionQueue.js';
+-import { DotActorIdentityError, dotUserActor } from '../services/dotActor.js';
+-import type { DotExecutionResult } from '../services/dotExecutionGateway.js';
+-import { listDotFollowUps, completeDotFollowUp, ensureDotFollowUpSchema } from '../services/dotFollowUp.js';
+-import { ensureDotInternalActionSchema } from '../services/dotInternalExecutors.js';
++import { prepareDotActionFromDecision, approveDotAction, executeDotAction, listDotActions } from '../services/dotActionQueue.js';
++import { listDotFollowUps, completeDotFollowUp } from '../services/dotFollowUp.js';
+ import { resumeMissionAfterApprovedExecution } from '../services/dotAgentMissionRunner.js';
+ import { DotAdminError, requireDotAdminSession } from '../services/dotAdminSecurity.js';
+-import { planLabel, normalizePlan } from '../lib/plans.js';
++import { planLabel, normalizePlanAlias } from '../lib/plans.js';
+ import { resolveDotGate } from '../services/dotAccessGate.js';
+ import { getDotSchedulerStatus } from '../services/dotScheduler.js';
+ import { getDotAgentWorkerStatus } from '../services/dotAgentWorker.js';
+@@ -58,9 +55,8 @@ type DotAccess = {
+   allowed: boolean;
+   demo: boolean;
+   empresaId?: string;
+-  plan?: string | null;
+-  planLabel?: string | null;
+-  planIdentified: boolean;
++  plan?: string;
++  planLabel?: string;
+   reason?: string;
+   userId: string | null;
+ };
+@@ -88,31 +84,26 @@ function cleanupDotTokenReservations(now = Date.now()) {
+   }
+ }
+ 
+-function dotPlanKey(plan?: string | null): 'rei' | 'corporativo' | null {
+-  // Sem plano oficial identificado, não há chave de cota nem fallback para Rei.
+-  const normalized = normalizePlan(plan);
+-  return normalized === 'rei' || normalized === 'corporativo' ? normalized : null;
++function dotPlanKey(plan?: string | null): string {
++  // 'corp'/'corporate' → 'corporativo': a mesma normalização usada no gate e na cota.
++  return normalizePlanAlias(plan || 'rei') || 'rei';
+ }
+ 
+ function dotResponseTokenLimit(plan?: string | null): number {
+-  const key = dotPlanKey(plan);
+-  return key ? (DOT_RESPONSE_TOKEN_LIMITS[key] || 0) : 0;
++  return DOT_RESPONSE_TOKEN_LIMITS[dotPlanKey(plan)] || 900;
+ }
+ 
+ async function checkDotTokenBudget(
+   empresaId: string | null | undefined,
+   plan: string | null | undefined,
+ ): Promise<{ ok: boolean; used: number; feature_used: number; limit: number; feature_limit: number; response_limit: number; remaining: number; feature_remaining: number; feedback_limit: number }> {
+-  const normalizedPlan = dotPlanKey(plan);
+   const responseLimit = dotResponseTokenLimit(plan);
+-  if (!normalizedPlan) {
+-    return { ok: false, used: 0, feature_used: 0, limit: 0, feature_limit: 0, response_limit: 0, remaining: 0, feature_remaining: 0, feedback_limit: 0 };
+-  }
+   if (!empresaId) {
+     return { ok: true, used: 0, feature_used: 0, limit: 0, feature_limit: 0, response_limit: responseLimit, remaining: responseLimit, feature_remaining: responseLimit, feedback_limit: 0 };
+   }
+ 
+   cleanupDotTokenReservations();
++  const normalizedPlan = dotPlanKey(plan);
+   const featureLimit = getFeatureTokenLimit(normalizedPlan, 'dot');
+   const feedbackLimit = getTokenLimit(normalizedPlan);
+   let featureUsed: number;
+@@ -183,8 +174,7 @@ const DOT_TOKEN_WARNING_THRESHOLD = 0.8;
+  * sem valor confiável, a cota é apresentada como esgotada (nunca como livre).
+  */
+ async function dotFeatureTokenSnapshot(empresaId: string | null | undefined, plan: string | null | undefined) {
+-  const planKey = dotPlanKey(plan);
+-  const limit = planKey ? getFeatureTokenLimit(planKey, 'dot') : 0;
++  const limit = getFeatureTokenLimit(dotPlanKey(plan), 'dot');
+   if (!empresaId || limit <= 0) {
+     return { used: 0, limit, remaining: Math.max(0, limit) };
+   }
+@@ -302,9 +292,8 @@ async function resolveDotAccess(req: Request): Promise<DotAccess> {
+     allowed: gate.allowed,
+     demo: gate.demo,
+     empresaId: gate.empresaId,
+-    plan: normalizePlan(gate.plan),
+-    planLabel: normalizePlan(gate.plan) ? planLabel(normalizePlan(gate.plan) as string) : null,
+-    planIdentified: normalizePlan(gate.plan) !== null,
++    plan: gate.plan,
++    planLabel: gate.plan ? planLabel(gate.plan) : gate.demo ? 'Rei' : undefined,
+     reason: gate.reason,
+     userId: gate.userId,
+   };
+@@ -340,28 +329,6 @@ function deny(res: Response, access: DotAccess) {
+ }
+ 
+ export function mountDotRoutes(app: Express) {
+-  // CSRF dedicado para mutações de empresa do Dot. O header é exigido antes
+-  // de qualquer autenticação/permissão: um POST cross-site não consegue
+-  // definir header customizado, mesmo com cookie SameSite=None em produção.
+-  // Somente as rotas administrativas ficam de fora (elas exigem X-Dot-Admin).
+-  app.use('/api/dot', (req: Request, res: Response, next) => {
+-    if (['GET', 'HEAD', 'OPTIONS'].includes(String(req.method || '').toUpperCase())) return next();
+-    const pathname = String(req.originalUrl || '').split('?')[0];
+-    if (pathname === '/api/dot/admin' || pathname.startsWith('/api/dot/admin/')) {
+-      return next();
+-    }
+-    const csrf = String(req.headers['x-dot-csrf'] ?? '').trim().toLowerCase();
+-    // Fallback consciente para clientes administrativos antigos que já enviam
+-    // X-Dot-Admin; ambos são headers customizados e não são forjáveis por CSRF.
+-    const admin = String(req.headers['x-dot-admin'] ?? '').trim().toLowerCase();
+-    if (csrf === '1' || csrf === 'true' || admin === '1') return next();
+-    return res.status(403).json({
+-      ok: false,
+-      error: 'Cabeçalho X-Dot-Csrf: 1 é obrigatório para mutações do Filtra Dot.',
+-      code: 'DOT_CSRF_REQUIRED',
+-    });
+-  });
+-
+   app.get('/api/dot/status', async (req: Request, res: Response) => {
+     const access = await resolveDotAccess(req);
+     res.json({
+@@ -371,9 +338,8 @@ export function mountDotRoutes(app: Express) {
+         (process.env.NODE_ENV !== 'production' || process.env.FILTRA_DOT_ENABLED === '1'),
+       access: access.allowed,
+       demo: access.demo,
+-      plan: access.plan ?? null,
+-      plan_label: access.planLabel ?? null,
+-      plan_identified: access.planIdentified,
++      plan: access.plan || 'rei',
++      plan_label: access.planLabel || 'Rei',
+       priority_access: ['rei', 'corporativo'],
+       scheduler: getDotSchedulerStatus(),
+       worker: getDotAgentWorkerStatus(),
+@@ -428,20 +394,7 @@ export function mountDotRoutes(app: Express) {
+     if (!(await requireMutationPermission(res, access, 'filtra', 'create', { route: '/api/dot/decisions/:id/prepare-action' }))) return;
+     const optionId = String(req.body?.optionId || '');
+     if (!['opcao_1', 'opcao_2'].includes(optionId)) return res.status(400).json({ error: 'Opção inválida.' });
+-    let action;
+-    try {
+-      action = await prepareDotActionFromDecision(access.empresaId, Number(req.params.id), optionId, access.userId || null);
+-    } catch (error) {
+-      if (error instanceof DotActionOptionConflictError) {
+-        return res.status(409).json({
+-          error: error.message,
+-          code: error.code,
+-          existingOptionId: error.existingOptionId,
+-          requestedOptionId: error.requestedOptionId,
+-        });
+-      }
+-      throw error;
+-    }
++    const action = await prepareDotActionFromDecision(access.empresaId, Number(req.params.id), optionId, access.userId || null);
+     if (!action) return res.status(404).json({ error: 'Decisão ou opção não encontrada.' });
+     res.json({ ok: true, action, executed: false });
+   });
+@@ -476,26 +429,7 @@ export function mountDotRoutes(app: Express) {
+     if (!access.allowed || !access.empresaId) return deny(res, access);
+     if (!(await requireMutationPermission(res, access, 'filtra', 'update', { route: '/api/dot/actions/:id/approve' }))) return;
+     const actionId = Number(req.params.id);
+-    let action;
+-    try {
+-      // Identidade do aprovador vem EXCLUSIVAMENTE do token validado em
+-      // resolveDotGate(). Campos como actorUserId/actor_id/approver_id/
+-      // approved_by no corpo são ignorados por construção — o contrato só
+-      // aceita DotActor, montado a partir de access.userId.
+-      action = await approveDotAction(access.empresaId, actionId, dotUserActor(access.userId));
+-    } catch (error) {
+-      if (error instanceof DotActorIdentityError) {
+-        return res.status(error.status).json({ ok: false, error: error.message, code: error.code });
+-      }
+-      if (error instanceof DotApprovalSeparationError) {
+-        return res.status(403).json({
+-          ok: false,
+-          error: error.message,
+-          code: error.code,
+-        });
+-      }
+-      throw error;
+-    }
++    const action = await approveDotAction(access.empresaId, actionId, access.userId || null);
+     if (!action) return res.status(409).json({ error: 'Ação não encontrada ou já processada.' });
+ 
+     // Aprovar não executa. A aprovação apenas libera a ação para a etapa
+@@ -520,16 +454,7 @@ export function mountDotRoutes(app: Express) {
+       });
+     }
+     const actionId = Number(req.params.id);
+-    let result: DotExecutionResult;
+-    try {
+-      // Executor só recebe a identidade autenticada do token.
+-      result = await executeDotAction(access.empresaId, actionId, dotUserActor(access.userId));
+-    } catch (error) {
+-      if (error instanceof DotActorIdentityError) {
+-        return res.status(error.status).json({ ok: false, error: error.message, code: error.code });
+-      }
+-      throw error;
+-    }
++    const result = await executeDotAction(access.empresaId, actionId, access.userId || null);
+     if (!result.ok) return res.status(409).json(result);
+ 
+     // Executar não é aprovar: a missão vinculada só é retomada quando a própria
+@@ -561,8 +486,20 @@ export function mountDotRoutes(app: Express) {
+     const access = await resolveDotAccess(req);
+     if (!access.allowed || !access.empresaId) return deny(res, access);
+     const db = (await import('../lib/db.js')).getDb();
+-    // Sem DDL em caminho de requisição: a tabela é criada nas migrações centrais.
+-    await ensureDotInternalActionSchema(db);
++    await db.exec(`CREATE TABLE IF NOT EXISTS dot_internal_cases (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      empresa_id TEXT NOT NULL,
++      decision_id INTEGER NOT NULL,
++      action_id INTEGER NOT NULL,
++      event_id INTEGER,
++      action TEXT NOT NULL,
++      status TEXT NOT NULL,
++      priority TEXT NOT NULL,
++      summary TEXT NOT NULL,
++      next_step TEXT NOT NULL,
++      created_at TEXT NOT NULL,
++      updated_at TEXT NOT NULL
++    )`);
+     const cases = await db.all(
+       'SELECT * FROM dot_internal_cases WHERE empresa_id = ? ORDER BY CASE WHEN status IN (\'prioritized\',\'escalated\') THEN 0 ELSE 1 END, id DESC LIMIT 100',
+       [access.empresaId],
+@@ -612,8 +549,16 @@ export function mountDotRoutes(app: Express) {
+     }
+     const result = await resolveDotComplaint(access.empresaId, complaint);
+     const db = (await import('../lib/db.js')).getDb();
+-    // Sem DDL em caminho de requisição: dot_events vem das migrações centrais.
+-    await ensureDotFollowUpSchema(db);
++    await db.exec(`CREATE TABLE IF NOT EXISTS dot_events (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      empresa_id TEXT NOT NULL,
++      type TEXT NOT NULL,
++      severity TEXT NOT NULL,
++      title TEXT NOT NULL,
++      details TEXT NOT NULL,
++      created_at TEXT NOT NULL,
++      acknowledged_at TEXT
++    )`);
+     const severity = result.verification_status === 'confirmed' ? 'critical' : 'warning';
+     const eventTitle = result.verification_status === 'confirmed'
+       ? 'Reclamação confirmada pelo Dot Resolve'

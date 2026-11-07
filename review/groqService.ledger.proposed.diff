@@ -1,0 +1,147 @@
+diff --git a/groqService.ts b/review/groqService.ledger.proposed.ts.txt
+index 4168d95..2028a64 100644
+--- a/groqService.ts
++++ b/review/groqService.ledger.proposed.ts.txt
+@@ -35,6 +35,10 @@ export type AiCallResult = {
+   tokens: number;
+   /** Modelo realmente utilizado na chamada (nunca um valor presumido). */
+   model: string;
++  /** Tokens de entrada (prompt), quando o provedor informa; `null` quando não sabe. */
++  input_tokens: number | null;
++  /** Tokens de saída (resposta), quando o provedor informa; `null` quando não sabe. */
++  output_tokens: number | null;
+ };
+ 
+ /** Modelo padrão configurado para o provedor. */
+@@ -271,7 +275,7 @@ function shouldFailover(status: number, body: string): boolean {
+   );
+ }
+ 
+-type ProviderRaw = { text: string; tokens: number };
++type ProviderRaw = { text: string; tokens: number; inputTokens?: number | null; outputTokens?: number | null };
+ 
+ async function callGroq(
+   system: string,
+@@ -315,10 +319,19 @@ async function callGroq(
+   const text = data?.choices?.[0]?.message?.content;
+   if (!text) throw new Error('Groq retornou resposta vazia');
+   const usage = data?.usage;
++  // Groq informa prompt_tokens/completion_tokens/total_tokens. A soma real é
++  // preferida ao total reportado, que é opcional; quando nada é informado, cai
++  // para a estimativa por caracteres.
++  const input = Number(usage?.prompt_tokens);
++  const output = Number(usage?.completion_tokens);
++  const total = Number(usage?.total_tokens);
++  const inputTok = Number.isFinite(input) && input >= 0 ? Math.round(input) : null;
++  const outputTok = Number.isFinite(output) && output >= 0 ? Math.round(output) : null;
+   const tokens =
+-    Number(usage?.total_tokens) ||
++    (Number.isFinite(total) && total > 0 ? Math.round(total) : 0) ||
++    ((inputTok ?? 0) + (outputTok ?? 0)) ||
+     estimateTokens(system, user, String(text));
+-  return { text: String(text).trim(), tokens };
++  return { text: String(text).trim(), tokens, inputTokens: inputTok, outputTokens: outputTok };
+ }
+ 
+ async function callGemini(
+@@ -363,11 +376,16 @@ async function callGemini(
+     data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') || '';
+   if (!text.trim()) throw new Error('Gemini retornou resposta vazia');
+   const meta = data?.usageMetadata;
++  const input = Number(meta?.promptTokenCount);
++  const output = Number(meta?.candidatesTokenCount);
++  const total = Number(meta?.totalTokenCount);
++  const inputTok = Number.isFinite(input) && input >= 0 ? Math.round(input) : null;
++  const outputTok = Number.isFinite(output) && output >= 0 ? Math.round(output) : null;
+   const tokens =
+-    Number(meta?.totalTokenCount) ||
+-    Number(meta?.promptTokenCount || 0) + Number(meta?.candidatesTokenCount || 0) ||
++    (Number.isFinite(total) && total > 0 ? Math.round(total) : 0) ||
++    ((inputTok ?? 0) + (outputTok ?? 0)) ||
+     estimateTokens(system, user, text);
+-  return { text: text.trim(), tokens };
++  return { text: text.trim(), tokens, inputTokens: inputTok, outputTokens: outputTok };
+ }
+ 
+ async function invokeProvider(
+@@ -383,12 +401,30 @@ async function invokeProvider(
+     : callGemini(system, user, maxTokens, temperature, requestedModel);
+ }
+ 
+-export async function callAI(
++/**
++ * Indireção deliberada: `callAI` delega para este ponto mutável.
++ *
++ * Os módulos são ESM com namespace imutável, então um teste não consegue
++ * substituir `callAI` diretamente. Esta referência permite instalar um
++ * provedor simulado (`setCallAIImpl`) sem chamada de rede e sem consumo de
++ * crédito — usada por `tests/dotChatLedger.http.test.ts`.
++ */
++let callAIImpl: typeof callAIReal | null = null;
++
++export function setCallAIImpl(impl: typeof callAIReal | null): void {
++  // Injecao EXCLUSIVA de teste: em producao o provedor real e sempre usado.
++  if (process.env.NODE_ENV !== 'test') {
++    throw new Error('setCallAIImpl e exclusivo de ambiente de teste.');
++  }
++  callAIImpl = impl;
++}
++
++async function callAIReal(
+   system: string,
+   user: string,
+   maxTokens = 180,
+   temperature = 0.6,
+-  opts?: { empresaId?: string | null; tipo?: string; feature?: string; model?: string }
++  opts?: { empresaId?: string | null; tipo?: string; feature?: string; model?: string; skipUsageRecord?: boolean }
+ ): Promise<AiCallResult> {
+   const order = buildAttemptOrder();
+   if (!order.length) {
+@@ -409,7 +445,11 @@ export async function callAI(
+       markSuccess(provider, ms);
+       if (i > 0) console.warn(`[IA] Fallback: ${provider} (${ms}ms)`);
+ 
+-      if (opts?.empresaId || opts?.tipo || opts?.feature) {
++      // O fluxo do Dot (reserva durável + finalize no ledger único) passa
++      // `skipUsageRecord: true`: o consumo é gravado UMA vez, em `ai_usage`, com
++      // tokens de entrada/saída reais. Demais consumidores mantêm a contabilidade
++      // direta por aqui.
++      if (!opts?.skipUsageRecord && (opts?.empresaId || opts?.tipo || opts?.feature)) {
+         try {
+           await recordAiUsage(getDb(), {
+             empresaId: opts.empresaId,
+@@ -417,13 +457,15 @@ export async function callAI(
+             tokens: raw.tokens,
+             provider,
+             feature: opts.feature || null,
++            inputTokens: raw.inputTokens ?? null,
++            outputTokens: raw.outputTokens ?? null,
+           });
+         } catch {
+           /* */
+         }
+       }
+ 
+-      return { text: raw.text, provider, latency_ms: ms, tokens: raw.tokens, model: usedModel };
++      return { text: raw.text, provider, latency_ms: ms, tokens: raw.tokens, model: usedModel, input_tokens: raw.inputTokens ?? null, output_tokens: raw.outputTokens ?? null };
+     } catch (e: any) {
+       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
+       markFail(provider, e, ms);
+@@ -434,6 +476,17 @@ export async function callAI(
+ 
+   throw lastError || new Error('Falha em todos os providers de IA');
+ }
++export async function callAI(
++  system: string,
++  user: string,
++  maxTokens = 180,
++  temperature = 0.6,
++  opts?: { empresaId?: string | null; tipo?: string; feature?: string; model?: string; skipUsageRecord?: boolean }
++): Promise<AiCallResult> {
++  if (callAIImpl) return callAIImpl(system, user, maxTokens, temperature, opts);
++  return callAIReal(system, user, maxTokens, temperature, opts);
++}
++
+ 
+ async function callLLM(
+   system: string,

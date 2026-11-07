@@ -1,0 +1,29 @@
+diff --git a/lib/retryQueue.ts b/review/retryQueue.ledger.proposed.ts.txt
+index d2b9fba..c3903f2 100644
+--- a/lib/retryQueue.ts
++++ b/review/retryQueue.ledger.proposed.ts.txt
+@@ -290,6 +290,16 @@ export async function retryQueueStats(db: Database = getDb()) {
+ }
+ 
+ let workerStarted = false;
++let retryTimer: NodeJS.Timeout | null = null;
++
++/** Para o worker de retry (encerramento gracioso). Idempotente. */
++export function stopRetryWorker(): void {
++  if (retryTimer) {
++    clearInterval(retryTimer);
++    retryTimer = null;
++  }
++  workerStarted = false;
++}
+ 
+ export function startRetryWorker() {
+   if (workerStarted) return;
+@@ -311,5 +321,6 @@ export function startRetryWorker() {
+   };
+ 
+   tick();
+-  setInterval(tick, interval);
++  retryTimer = setInterval(tick, interval);
++  retryTimer.unref();
+ }

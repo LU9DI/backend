@@ -1,0 +1,88 @@
+diff --git a/lib/migrations.ts b/review/migrations.ledger.proposed.ts.txt
+index e2768a1..f8c6b14 100644
+--- a/lib/migrations.ts
++++ b/review/migrations.ledger.proposed.ts.txt
+@@ -671,6 +671,75 @@ async function migrateDotActionSchema(db: Database | PgDatabase): Promise<void>
+   );
+ }
+ 
++/**
++ * Ledger durável do orçamento do Filtra Dot (`services/dotLedger.ts`).
++ *
++ * A reserva vive no banco porque a versão em memória não sobrevivia a
++ * restart nem era vista por outra instância. `ai_usage_id` é único: um
++ * consumo real pertence a exatamente uma reserva, o que torna a finalização
++ * idempotente também no nível do banco.
++ */
++async function migrateDotBudgetLedger(db: Database | PgDatabase): Promise<void> {
++  db = db as Database;
++  await createTableIfMissing(
++    db,
++    'dot_budget_reservations',
++    `CREATE TABLE IF NOT EXISTS dot_budget_reservations (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      empresa_id TEXT NOT NULL,
++      feature TEXT NOT NULL DEFAULT 'dot',
++      plan TEXT NOT NULL,
++      status TEXT NOT NULL DEFAULT 'pending',
++      tokens_reserved INTEGER NOT NULL DEFAULT 0,
++      tokens_real INTEGER,
++      tokens_estimated INTEGER,
++      provider TEXT,
++      ambiguous INTEGER NOT NULL DEFAULT 0,
++      ambiguous_reason TEXT,
++      ai_usage_id INTEGER,
++      execution_ref TEXT,
++      sent_at TEXT,
++      created_at TEXT NOT NULL,
++      updated_at TEXT NOT NULL,
++      expires_at TEXT NOT NULL,
++      settled_at TEXT
++    )`,
++  );
++  await createIndexIfMissing(
++    db,
++    'dot_budget_reservations',
++    'idx_dot_budget_reservations_empresa',
++    'CREATE INDEX IF NOT EXISTS idx_dot_budget_reservations_empresa ON dot_budget_reservations(empresa_id, status, created_at)',
++  );
++  await createIndexIfMissing(
++    db,
++    'dot_budget_reservations',
++    'idx_dot_budget_reservations_exec',
++    'CREATE INDEX IF NOT EXISTS idx_dot_budget_reservations_exec ON dot_budget_reservations(empresa_id, execution_ref)',
++  );
++  await createIndexIfMissing(
++    db,
++    'dot_budget_reservations',
++    'ux_dot_budget_reservations_ai_usage',
++    'CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_budget_reservations_ai_usage ON dot_budget_reservations(ai_usage_id) WHERE ai_usage_id IS NOT NULL',
++  );
++  // Colunas do consumo por capacidade: bancos anteriores a este ciclo não as têm.
++  await addColumnIfMissing(db, 'ai_usage', 'provider', 'TEXT');
++  await addColumnIfMissing(db, 'ai_usage', 'feature', 'TEXT');
++  await createIndexIfMissing(
++    db,
++    'ai_usage',
++    'idx_ai_usage_feature',
++    'CREATE INDEX IF NOT EXISTS idx_ai_usage_feature ON ai_usage(empresa_id, feature, criado_em)',
++  );
++  // Distinção entre tokens de entrada/saída (o orçamento consome a soma).
++  await addColumnIfMissing(db, 'ai_usage', 'tokens_input', 'INTEGER');
++  await addColumnIfMissing(db, 'ai_usage', 'tokens_output', 'INTEGER');
++  // Marca comprovada de que a solicitação saiu para o provedor: reservas
++  // assim não são "abandonadas" pelo sweep (elas precisam de reconciliação).
++  await addColumnIfMissing(db, 'dot_budget_reservations', 'sent_at', 'TEXT');
++}
++
+ /**
+  * Sequência central de inicialização. Idempotente.
+  * Em PostgreSQL roda inteira sob o advisory lock global, em uma conexão
+@@ -686,6 +755,7 @@ export async function runCentralMigrations(db: Database | PgDatabase): Promise<v
+     await migrateAuthSchema(db);
+     await migrateMfaSchema(db);
+     await migrateDotActionSchema(db);
++    await migrateDotBudgetLedger(db);
+   };
+ 
+   if (isPgDatabase(db)) {

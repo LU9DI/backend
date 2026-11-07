@@ -1,0 +1,38 @@
+diff --git a/tests/dotActionConcurrency.pg.test.ts b/review/dotActionConcurrency.pg.test.proposed.ts.txt
+index d3de39f..edfd21a 100644
+--- a/tests/dotActionConcurrency.pg.test.ts
++++ b/review/dotActionConcurrency.pg.test.proposed.ts.txt
+@@ -5,7 +5,7 @@
+ import assert from 'node:assert/strict';
+ import crypto from 'node:crypto';
+ import { test } from 'node:test';
+-import { parseWorkerJson, runNodeScript } from './helpers/pg-test-utils.js';
++import { databaseUrl, parseWorkerJson, runNodeScript } from './helpers/pg-test-utils.js';
+ import { initDB, getDb, closeDB } from '../lib/db.js';
+ 
+ const PREPARE_WORKER = new URL('./helpers/prepare-dot-action.pg.ts', import.meta.url);
+@@ -13,12 +13,12 @@ const APPROVE_WORKER = new URL('./helpers/approve-dot-action.pg.ts', import.meta
+ const WORKER_TIMEOUT_MS = 60_000;
+ 
+ function workerEnv(): NodeJS.ProcessEnv {
+-  assert.ok(process.env.DATABASE_URL, 'DATABASE_URL de teste é obrigatória');
+-  return { DATABASE_URL: process.env.DATABASE_URL };
++  assert.ok(databaseUrl(), 'DATABASE_URL de teste é obrigatória');
++  return { DATABASE_URL: databaseUrl() };
+ }
+ 
+ test('duas instâncias PostgreSQL concorrentes retornam a mesma ação sem auditoria duplicada', async () => {
+-  assert.ok(process.env.DATABASE_URL, 'DATABASE_URL de teste é obrigatória');
++  assert.ok(databaseUrl(), 'DATABASE_URL de teste é obrigatória');
+   process.env.NODE_ENV = 'test';
+   await initDB();
+   const db = getDb();
+@@ -73,7 +73,7 @@ test('duas instâncias PostgreSQL concorrentes retornam a mesma ação sem audit
+ 
+ 
+ test('duas instâncias PostgreSQL não aprovam duas vezes a mesma ação', async () => {
+-  assert.ok(process.env.DATABASE_URL, 'DATABASE_URL de teste é obrigatória');
++  assert.ok(databaseUrl(), 'DATABASE_URL de teste é obrigatória');
+   process.env.NODE_ENV = 'test';
+   await initDB();
+   const db = getDb();

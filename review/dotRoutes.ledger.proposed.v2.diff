@@ -1,0 +1,43 @@
+diff --git a/review/dotRoutes.ledger.proposed.ts.txt b/review/dotRoutes.ledger.proposed.v2.ts.txt
+index 9628fb7..1c30291 100644
+--- a/review/dotRoutes.ledger.proposed.ts.txt
++++ b/review/dotRoutes.ledger.proposed.v2.ts.txt
+@@ -185,30 +185,7 @@ function buildConversation(context: string, history: ChatItem[], message: string
+ 
+ // Regra única de entrada no Dot (auth + assinatura/trial + plano Rei/Corporativo).
+ // A mesma função é usada por /api/dot/*, /api/dot/agent/* e pelas permissões.
+-/**
+- * Instância do Express usada por `resolveDotAccess`. O gancho `filtra.test.auth`
+- * é lido SOMENTE quando `NODE_ENV === 'test'`; em produção é inerte.
+- */
+-let routesApp: { get: (key: string) => unknown } | null = null;
+-
+ async function resolveDotAccess(req: Request): Promise<DotAccess> {
+-  const testAuth = process.env.NODE_ENV === 'test'
+-    ? ((routesApp?.get('filtra.test.auth') ?? null) as
+-        | { empresaId: string; plan: string; userId: string | null; demo?: boolean }
+-        | null)
+-    : null;
+-  if (testAuth) {
+-    const plan = normalizePlan(testAuth.plan);
+-    return {
+-      allowed: true,
+-      demo: Boolean(testAuth.demo),
+-      empresaId: testAuth.empresaId,
+-      plan,
+-      planLabel: plan ? planLabel(plan) : null,
+-      planIdentified: plan !== null,
+-      userId: testAuth.userId,
+-    };
+-  }
+   const gate = await resolveDotGate(req);
+   return {
+     allowed: gate.allowed,
+@@ -291,7 +268,6 @@ async function settleDotCallFailure(params: {
+ }
+ 
+ export function mountDotRoutes(app: Express) {
+-  routesApp = app as unknown as { get: (key: string) => unknown };
+   // CSRF dedicado para mutações de empresa do Dot. O header é exigido antes
+   // de qualquer autenticação/permissão: um POST cross-site não consegue
+   // definir header customizado, mesmo com cookie SameSite=None em produção.

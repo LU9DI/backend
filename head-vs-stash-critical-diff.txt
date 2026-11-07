@@ -1,0 +1,2176 @@
+diff --git a/.env.example b/.env.example
+index 1cefb95..643c9ce 100644
+--- a/.env.example
++++ b/.env.example
+@@ -47,6 +47,12 @@ VAPID_SUBJECT=mailto:admin@seusaas.com
+ # DATABASE_URL=postgresql://user:pass@host:5432/filtra
+ # PGSSL=0                    # só localhost
+ # SQLITE_ALLOW_PROD=1        # somente para testes controlados; não usar em produção        # força SQLite em produção (não recomendado)
++#
++# Testes de integração PostgreSQL (npm run test:postgres) — NUNCA produção.
++# O runner cria/derruba bancos temporários NO SERVIDOR indicado por DATABASE_URL;
++# por padrão só localhost/127.0.0.1/::1 são aceitos. Para outro host descartável,
++# liste-o explicitamente (vírgula):
++# FILTERA_PG_TEST_ALLOWED_HOSTS=db.teste.local,outro.teste.local
+ 
+ # ── IA ──────────────────────────────────────────────
+ GROQ_API_KEY=
+@@ -85,6 +91,7 @@ STRIPE_WEBHOOK_SECRET=
+ # DOT_MISSION_MAX_STEP_ATTEMPTS=3
+ # DOT_REI_RESPONSE_TOKENS=1800
+ # DOT_CORPORATIVO_RESPONSE_TOKENS=1200
++# DOT_SENT_GRACE_MS=600000      # carência antes de marcar chamada enviada como ambígua
+ # DOT_DEMO_MODE=1            # SOMENTE localhost; ignorado em produção
+ 
+ # --- Captação B2B por legítimo interesse (LGPD art. 7º, IX) — DESLIGADO por padrão ---
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 1c59021..f189af6 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -2,7 +2,7 @@ name: Backend CI
+ 
+ on:
+   push:
+-    branches: [master, 'feat/**', 'fix/**', 'chore/**']
++    branches: [master, 'feat/**', 'fix/**']
+   pull_request:
+     branches: [master]
+   workflow_dispatch:
+@@ -44,11 +44,15 @@ jobs:
+     timeout-minutes: 15
+     services:
+       postgres:
+-        image: postgres:16
++        image: postgres:17
+         env:
+           POSTGRES_USER: postgres
+           POSTGRES_PASSWORD: postgres
+           POSTGRES_DB: filtra_test
++          # Locale C explícito: determinismo de ordenação/colation igual ao da
++          # validação local (PostgreSQL 17.11, locale C). Sem `--encoding=UTF8`
++          # o initdb em locale C criaria SQL_ASCII; os dois andam juntos.
++          POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+         ports:
+           - 5432:5432
+         options: >-
+@@ -58,6 +62,9 @@ jobs:
+           --health-retries 10
+     env:
+       NODE_ENV: test
++      # Cliente também em locale C, alinhado ao servidor.
++      LC_ALL: C
++      LANG: C
+       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/filtra_test
+     steps:
+       - name: Checkout
+@@ -72,5 +79,11 @@ jobs:
+         run: npm ci --no-audit --no-fund
+       - name: Build
+         run: npm run build
++      # Fail-closed: os testes PG criam/derrubam bancos no host de DATABASE_URL.
++      # A guarda em tests/helpers/pg-test-utils.ts já recusa hosts remotos, mas
++      # a checagem aqui falha ANTES de qualquer conexão se a config for alterada.
++      - name: Guard — DATABASE_URL must be local (never production)
++        run: |
++          node -e "const u=new URL(process.env.DATABASE_URL);const h=u.hostname.replace(/^\[|\]$/g,'');if(!['localhost','127.0.0.1','::1'].includes(h)){console.error('Recusado: DATABASE_URL de teste não é local:',h);process.exit(1);}console.log('DATABASE_URL local confirmado:',h);"
+       - name: PostgreSQL multi-process concurrency test
+         run: npm run test:postgres
+diff --git a/groqService.ts b/groqService.ts
+index 4168d95..30ad8fd 100644
+--- a/groqService.ts
++++ b/groqService.ts
+@@ -35,6 +35,10 @@ export type AiCallResult = {
+   tokens: number;
+   /** Modelo realmente utilizado na chamada (nunca um valor presumido). */
+   model: string;
++  /** Tokens de entrada (prompt), quando o provedor informa; `null` quando não sabe. */
++  input_tokens: number | null;
++  /** Tokens de saída (resposta), quando o provedor informa; `null` quando não sabe. */
++  output_tokens: number | null;
+ };
+ 
+ /** Modelo padrão configurado para o provedor. */
+@@ -271,7 +275,7 @@ function shouldFailover(status: number, body: string): boolean {
+   );
+ }
+ 
+-type ProviderRaw = { text: string; tokens: number };
++type ProviderRaw = { text: string; tokens: number; inputTokens?: number | null; outputTokens?: number | null };
+ 
+ async function callGroq(
+   system: string,
+@@ -315,10 +319,19 @@ async function callGroq(
+   const text = data?.choices?.[0]?.message?.content;
+   if (!text) throw new Error('Groq retornou resposta vazia');
+   const usage = data?.usage;
++  // Groq informa prompt_tokens/completion_tokens/total_tokens. A soma real é
++  // preferida ao total reportado, que é opcional; quando nada é informado, cai
++  // para a estimativa por caracteres.
++  const input = Number(usage?.prompt_tokens);
++  const output = Number(usage?.completion_tokens);
++  const total = Number(usage?.total_tokens);
++  const inputTok = Number.isFinite(input) && input >= 0 ? Math.round(input) : null;
++  const outputTok = Number.isFinite(output) && output >= 0 ? Math.round(output) : null;
+   const tokens =
+-    Number(usage?.total_tokens) ||
++    (Number.isFinite(total) && total > 0 ? Math.round(total) : 0) ||
++    ((inputTok ?? 0) + (outputTok ?? 0)) ||
+     estimateTokens(system, user, String(text));
+-  return { text: String(text).trim(), tokens };
++  return { text: String(text).trim(), tokens, inputTokens: inputTok, outputTokens: outputTok };
+ }
+ 
+ async function callGemini(
+@@ -363,11 +376,16 @@ async function callGemini(
+     data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') || '';
+   if (!text.trim()) throw new Error('Gemini retornou resposta vazia');
+   const meta = data?.usageMetadata;
++  const input = Number(meta?.promptTokenCount);
++  const output = Number(meta?.candidatesTokenCount);
++  const total = Number(meta?.totalTokenCount);
++  const inputTok = Number.isFinite(input) && input >= 0 ? Math.round(input) : null;
++  const outputTok = Number.isFinite(output) && output >= 0 ? Math.round(output) : null;
+   const tokens =
+-    Number(meta?.totalTokenCount) ||
+-    Number(meta?.promptTokenCount || 0) + Number(meta?.candidatesTokenCount || 0) ||
++    (Number.isFinite(total) && total > 0 ? Math.round(total) : 0) ||
++    ((inputTok ?? 0) + (outputTok ?? 0)) ||
+     estimateTokens(system, user, text);
+-  return { text: text.trim(), tokens };
++  return { text: text.trim(), tokens, inputTokens: inputTok, outputTokens: outputTok };
+ }
+ 
+ async function invokeProvider(
+@@ -383,12 +401,26 @@ async function invokeProvider(
+     : callGemini(system, user, maxTokens, temperature, requestedModel);
+ }
+ 
+-export async function callAI(
++/**
++ * Indireção deliberada: `callAI` delega para este ponto mutável.
++ *
++ * Os módulos são ESM com namespace imutável, então um teste não consegue
++ * substituir `callAI` diretamente. Esta referência permite instalar um
++ * provedor simulado (`setCallAIImpl`) sem chamada de rede e sem consumo de
++ * crédito — usada por `tests/dotChatLedger.http.test.ts`.
++ */
++let callAIImpl: typeof callAIReal | null = null;
++
++export function setCallAIImpl(impl: typeof callAIReal | null): void {
++  callAIImpl = impl;
++}
++
++async function callAIReal(
+   system: string,
+   user: string,
+   maxTokens = 180,
+   temperature = 0.6,
+-  opts?: { empresaId?: string | null; tipo?: string; feature?: string; model?: string }
++  opts?: { empresaId?: string | null; tipo?: string; feature?: string; model?: string; skipUsageRecord?: boolean }
+ ): Promise<AiCallResult> {
+   const order = buildAttemptOrder();
+   if (!order.length) {
+@@ -409,7 +441,11 @@ export async function callAI(
+       markSuccess(provider, ms);
+       if (i > 0) console.warn(`[IA] Fallback: ${provider} (${ms}ms)`);
+ 
+-      if (opts?.empresaId || opts?.tipo || opts?.feature) {
++      // O fluxo do Dot (reserva durável + finalize no ledger único) passa
++      // `skipUsageRecord: true`: o consumo é gravado UMA vez, em `ai_usage`, com
++      // tokens de entrada/saída reais. Demais consumidores mantêm a contabilidade
++      // direta por aqui.
++      if (!opts?.skipUsageRecord && (opts?.empresaId || opts?.tipo || opts?.feature)) {
+         try {
+           await recordAiUsage(getDb(), {
+             empresaId: opts.empresaId,
+@@ -417,13 +453,15 @@ export async function callAI(
+             tokens: raw.tokens,
+             provider,
+             feature: opts.feature || null,
++            inputTokens: raw.inputTokens ?? null,
++            outputTokens: raw.outputTokens ?? null,
+           });
+         } catch {
+           /* */
+         }
+       }
+ 
+-      return { text: raw.text, provider, latency_ms: ms, tokens: raw.tokens, model: usedModel };
++      return { text: raw.text, provider, latency_ms: ms, tokens: raw.tokens, model: usedModel, input_tokens: raw.inputTokens ?? null, output_tokens: raw.outputTokens ?? null };
+     } catch (e: any) {
+       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
+       markFail(provider, e, ms);
+@@ -434,6 +472,17 @@ export async function callAI(
+ 
+   throw lastError || new Error('Falha em todos os providers de IA');
+ }
++export async function callAI(
++  system: string,
++  user: string,
++  maxTokens = 180,
++  temperature = 0.6,
++  opts?: { empresaId?: string | null; tipo?: string; feature?: string; model?: string; skipUsageRecord?: boolean }
++): Promise<AiCallResult> {
++  if (callAIImpl) return callAIImpl(system, user, maxTokens, temperature, opts);
++  return callAIReal(system, user, maxTokens, temperature, opts);
++}
++
+ 
+ async function callLLM(
+   system: string,
+diff --git a/lib/acquisitionEngine.ts b/lib/acquisitionEngine.ts
+index 7b9c7a6..a49b712 100644
+--- a/lib/acquisitionEngine.ts
++++ b/lib/acquisitionEngine.ts
+@@ -39,12 +39,7 @@ async function acquisitionReputationGuard(db: any) {
+   return { paused, sent, bounced, complained, bounce_rate: bounceRate, complaint_rate: complaintRate, reason: complained > 0 ? 'complaint' : (paused ? 'bounce_rate' : null) };
+ }
+ 
+-// A preparação do schema é feita uma vez por processo/conexão. O worker de
+-// aquisição roda em intervalo curto; repetir ALTER TABLE e CREATE INDEX em todo
+-// tick gera tráfego de catálogo desnecessário no Postgres.
+-const acquisitionSchemaReady = new WeakMap<object, Promise<void>>();
+-
+-async function createAcquisitionEngineSchema(db: any) {
++export async function ensureAcquisitionEngineSchema(db = getDb()) {
+   await db.exec(`
+     CREATE TABLE IF NOT EXISTS leads (
+       id TEXT PRIMARY KEY,
+@@ -94,21 +89,6 @@ async function createAcquisitionEngineSchema(db: any) {
+   await db.exec('CREATE INDEX IF NOT EXISTS idx_acq_sends_day ON acquisition_sends(status, scheduled_at)');
+ }
+ 
+-export async function ensureAcquisitionEngineSchema(db = getDb()) {
+-  const key = db as unknown as object;
+-  const cached = acquisitionSchemaReady.get(key);
+-  if (cached) return cached;
+-
+-  const setup = createAcquisitionEngineSchema(db);
+-  acquisitionSchemaReady.set(key, setup);
+-  try {
+-    await setup;
+-  } catch (error) {
+-    if (acquisitionSchemaReady.get(key) === setup) acquisitionSchemaReady.delete(key);
+-    throw error;
+-  }
+-}
+-
+ function localDayStartUtcIso(now = new Date()) {
+   const d = new Date(now);
+   d.setUTCHours(0, 0, 0, 0);
+@@ -471,6 +451,22 @@ export async function queueEligibleAcquisition(limit = 25) {
+   }
+ }
+ 
++let acquisitionTimer: NodeJS.Timeout | null = null;
++
++/**
++ * Para o worker de aquisição (encerramento gracioso). Idempotente.
++ *
++ * Sem isso, um tick em voo podia continuar consultando o PostgreSQL depois
++ * que o pool foi fechado — a origem dos erros de reconexão no redeploy.
++ */
++export function stopAcquisitionWorker(): void {
++  if (acquisitionTimer) {
++    clearInterval(acquisitionTimer);
++    acquisitionTimer = null;
++  }
++  started = false;
++}
++
+ export function startAcquisitionWorker() {
+   if (started || process.env.ACQUISITION_ENGINE === '0') return;
+   started = true;
+@@ -482,7 +478,8 @@ export function startAcquisitionWorker() {
+ 
+   };
+   tick();
+-  setInterval(tick, ENGINE_INTERVAL_MS);
++  acquisitionTimer = setInterval(tick, ENGINE_INTERVAL_MS);
++  acquisitionTimer.unref();
+ }
+ 
+ export async function acquisitionEngineStatus() {
+diff --git a/lib/acquisitionGooglePlaces.ts b/lib/acquisitionGooglePlaces.ts
+index ddb7a4a..eefa375 100644
+--- a/lib/acquisitionGooglePlaces.ts
++++ b/lib/acquisitionGooglePlaces.ts
+@@ -86,7 +86,20 @@ async function searchPlaces(textQuery: string, pageToken?: string) {
+ 
+       if (response.ok) return data;
+ 
+-      // 4xx é erro de configuração/permissão: não insistir e não gerar custo repetido.
++      // 4xx é erro de configuração/permissão: não insistir e não gerar custo
++      // repetido. Exceção: 429 (rate limit/quota) é transitório e respeita
++      // Retry-After — insistir imediatamente só consome cota.
++      if (response.status === 429) {
++        const retryAfter = Number(response.headers.get('retry-after') || 0);
++        const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
++          ? Math.min(60_000, retryAfter * 1000)
++          : 1000 * 2 ** attempt;
++        if (attempt < 2) {
++          await new Promise(resolve => setTimeout(resolve, waitMs));
++          continue;
++        }
++        throw new Error(`Google Places HTTP 429: ${clean(data?.error?.message || raw, 300)}`);
++      }
+       if (response.status < 500) {
+         throw new Error(`Google Places HTTP ${response.status}: ${clean(data?.error?.message || raw, 500)}`);
+       }
+@@ -100,7 +113,7 @@ async function searchPlaces(textQuery: string, pageToken?: string) {
+       throw new Error(`Google Places HTTP ${response.status}: ${clean(data?.error?.message || raw, 500)}`);
+     } catch (error: any) {
+       const message = String(error?.message || error);
+-      if (attempt >= 2 || /HTTP 4\\d\\d/.test(message)) throw error;
++      if (attempt >= 2 || /HTTP 4\d\d/.test(message)) throw error;
+       await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** attempt));
+     }
+   }
+diff --git a/lib/acquisitionReplenisher.ts b/lib/acquisitionReplenisher.ts
+index caf3c6a..ef71f62 100644
+--- a/lib/acquisitionReplenisher.ts
++++ b/lib/acquisitionReplenisher.ts
+@@ -16,6 +16,28 @@ let started = false;
+ let fullEnrichDataUntil = 0;
+ let googlePlacesDataUntil = 0;
+ 
++/**
++ * Motivo do último bloqueio de cada provedor (telemetria).
++ *
++ * Antes, "sem créditos", "cooldown" e "sem leads" chegavam ao operador apenas
++ * como uma string solta na lista de erros. Guardar o motivo explícito evita
++ * que indisponibilidade de fornecedor seja lida como execução bem-sucedida.
++ */
++const providerState: Record<string, { until: number; reason: string }> = {};
++function markProviderBlocked(provider: string, ms: number, reason: string) {
++  providerState[provider] = { until: Date.now() + ms, reason };
++  console.warn(`[acquisition-replenisher] provider=${provider} bloqueado por ${Math.round(ms / 60000)}min: ${reason}`);
++}
++export function getAcquisitionProviderState() {
++  const now = Date.now();
++  return Object.fromEntries(
++    Object.entries(providerState).map(([provider, state]) => [
++      provider,
++      { blocked: now < state.until, remaining_ms: Math.max(0, state.until - now), reason: state.reason },
++    ]),
++  );
++}
++
+ const clean = (v: unknown, n = 5000) => String(v ?? '').trim().slice(0, n);
+ const validEmail = (v: unknown) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean(v, 320));
+ const institutionalKeywords = /(associa[cç][aã]o|associacao|sindicato|federa[cç][aã]o|federacao|c[aâ]mara de com[eé]rcio|camara de comercio|entidade empresarial|uni[aã]o empresarial|conselho empresarial|instituto empresarial|confedera[cç][aã]o|confederacao)/i;
+@@ -190,6 +212,96 @@ async function fullEnrichProvider() {
+ }
+ 
+ 
++/**
++ * Circuit breaker simples por endpoint Overpass.
++ *
++ * OSM responde 504/429 com frequência e cada cidade tentava os 3 endpoints em
++ * sequência com timeout de 75 s: uma rodada podia ficar presa por minutos e
++ * martelar o mesmo endpoint que já estava falhando. Um endpoint que falha
++ * fica em cooldown e é pulado até expirar.
++ */
++const OSM_ENDPOINT_COOLDOWN_MS = Math.max(60_000, Number(process.env.ACQUISITION_OSM_COOLDOWN_MS || 15 * 60 * 1000));
++/** Teto do cooldown adaptativo (backoff por falhas consecutivas). */
++const OSM_ENDPOINT_COOLDOWN_MAX_MS = Math.max(
++  OSM_ENDPOINT_COOLDOWN_MS,
++  Number(process.env.ACQUISITION_OSM_COOLDOWN_MAX_MS || 60 * 60 * 1000),
++);
++
++type OsmEndpointState = {
++  /** Momento em que o endpoint volta a ser tentado. */
++  until: number;
++  reason: string;
++  /** Falhas consecutivas: cada uma dobra o cooldown até o teto. */
++  consecutive: number;
++};
++
++const osmEndpointState = new Map<string, OsmEndpointState>();
++
++/**
++ * O endpoint pode ser tentado agora?
++ *
++ * Um cooldown vencido NÃO é removido do mapa: a entrada é mantida para que a
++ * próxima falha dobre o backoff. O que muda é que `now >= until` libera o
++ * endpoint novamente — nada fica permanentemente indisponível.
++ */
++function osmEndpointAvailable(endpoint: string, now = Date.now()): boolean {
++  const state = osmEndpointState.get(endpoint);
++  return !state || now >= state.until;
++}
++
++function markOsmEndpointFailure(endpoint: string, reason: string, now = Date.now()) {
++  const previous = osmEndpointState.get(endpoint);
++  // Falhas dentro do cooldown anterior contam para o backoff; depois de um
++  // período saudável (endpoint voltou a responder), a contagem recomeça.
++  const withinSameEpisode = previous && now < previous.until + OSM_ENDPOINT_COOLDOWN_MS;
++  const consecutive = withinSameEpisode ? previous.consecutive + 1 : 1;
++  const cooldown = Math.min(OSM_ENDPOINT_COOLDOWN_MS * 2 ** (consecutive - 1), OSM_ENDPOINT_COOLDOWN_MAX_MS);
++  osmEndpointState.set(endpoint, { until: now + cooldown, reason, consecutive });
++  console.warn(
++    `[acquisition-osm] endpoint=${endpoint} em cooldown ${Math.round(cooldown / 60000)}min ` +
++      `(falha ${consecutive}): ${reason}`,
++  );
++}
++
++/** Sucesso zera o backoff: o endpoint voltou a funcionar. */
++function markOsmEndpointSuccess(endpoint: string) {
++  if (osmEndpointState.delete(endpoint)) {
++    console.log(`[acquisition-osm] endpoint=${endpoint} recuperado; cooldown zerado`);
++  }
++}
++
++/** Estado dos endpoints Overpass (telemetria e testes). */
++export function getOsmEndpointState(now = Date.now()) {
++  return Object.fromEntries(
++    [...osmEndpointState.entries()].map(([endpoint, state]) => [
++      endpoint,
++      {
++        available: now >= state.until,
++        remaining_ms: Math.max(0, state.until - now),
++        consecutive_failures: state.consecutive,
++        reason: state.reason,
++      },
++    ]),
++  );
++}
++
++/** Somente para testes: limpa o estado em memória do circuit breaker. */
++export function resetOsmEndpointState(): void {
++  osmEndpointState.clear();
++}
++
++/**
++ * Superfície de teste do circuit breaker.
++ *
++ * Exportada apenas para os testes observarem as transições sem tocar na rede.
++ * Não é usada por nenhum caminho de produção.
++ */
++export const __test = {
++  markOsmEndpointFailure,
++  markOsmEndpointSuccess,
++  osmEndpointAvailable,
++};
++
+ const OSM_URLS = [clean(process.env.ACQUISITION_OSM_OVERPASS_URL, 2000), 'https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter'].filter((value, index, all) => Boolean(value) && all.indexOf(value) === index);
+ const OSM_TARGET_TYPES = /(hotel|hostel|guest_house|restaurant|cafe|bar|clinic|doctors|dentist|pharmacy|beauty|hairdresser|car_dealer|car_repair|retail|shop|supermarket|school|college|university|tourism|association|trade_union|chamber|non_profit|office)/i;
+ const OSM_EXCLUDED_OFFICES = /^(government|governmental|embassy|consulate|city_hall|courthouse|police|fire_station|military|public_service|administrative)$/i;
+@@ -247,6 +359,7 @@ async function openStreetMapProvider(limit: number, existingEmails = new Set<str
+       let data: any = null;
+       let lastError: unknown = null;
+       for (const endpoint of OSM_URLS) {
++        if (!osmEndpointAvailable(endpoint)) continue;
+         try {
+           const response = await fetch(endpoint, {
+             method: 'POST',
+@@ -256,10 +369,16 @@ async function openStreetMapProvider(limit: number, existingEmails = new Set<str
+           });
+           if (!response.ok) throw new Error(`Overpass HTTP ${response.status}`);
+           data = await response.json();
++          markOsmEndpointSuccess(endpoint);
+           break;
+         } catch (error) {
+           lastError = error;
+-          console.warn(`[acquisition-osm] city=${city} endpoint=${endpoint} failed:`, error instanceof Error ? error.message : String(error));
++          const reason = error instanceof Error ? error.message : String(error);
++          // 429/504 e timeouts indicam sobrecarga do endpoint: cooldown.
++          if (/HTTP (429|500|502|503|504)/i.test(reason) || /timeout|aborted/i.test(reason)) {
++            markOsmEndpointFailure(endpoint, reason);
++          }
++          console.warn(`[acquisition-osm] city=${city[0]} endpoint=${endpoint} failed:`, reason);
+         }
+       }
+       if (!data) throw lastError || new Error('Overpass indisponível');
+@@ -358,7 +477,7 @@ async function providerRequest(db: any) {
+           const message = clean(error?.message || error, 500);
+           if (/HTTP 429|quota|rate limit|RESOURCE_EXHAUSTED/i.test(message)) {
+             googlePlacesDataUntil = Date.now() + 6 * 60 * 60 * 1000;
+-            console.warn('[acquisition-replenisher] provider=google_places quota atingida; cooldown de 6h');
++            markProviderBlocked('google_places', 6 * 60 * 60 * 1000, 'HTTP 429/quota atingida');
+           } else {
+             console.warn('[acquisition-replenisher] provider=google_places falhou:', message);
+           }
+@@ -380,7 +499,7 @@ async function providerRequest(db: any) {
+           const message = clean(error?.message || error, 500);
+           if (/HTTP 403|not enough credits|insufficient credits|credit/i.test(message)) {
+             fullEnrichDataUntil = Date.now() + 6 * 60 * 60 * 1000;
+-            console.warn('[acquisition-replenisher] provider=fullenrich indisponível; cooldown de 6h');
++            markProviderBlocked('fullenrich', 6 * 60 * 60 * 1000, 'sem créditos (HTTP 403/insufficient credits)');
+           } else {
+             console.warn('[acquisition-replenisher] provider=fullenrich falhou:', message);
+           }
+@@ -458,6 +577,8 @@ export async function replenishAcquisitionStock(force = false) {
+   }
+ }
+ 
++let replenisherTimer: NodeJS.Timeout | null = null;
++
+ export function startAcquisitionReplenisher() {
+   // O replenisher faz parte do motor de aquisição. Se o motor estiver
+   // habilitado, a descoberta de leads não pode ficar parada só porque a
+@@ -465,11 +586,23 @@ export function startAcquisitionReplenisher() {
+   const enabled =
+     process.env.ACQUISITION_REPLENISHER === '1' ||
+     process.env.ACQUISITION_ENGINE === '1';
+-  if (started || !enabled) return;
++  if (started || !enabled) return replenisherTimer ?? undefined;
+   started = true;
+   const tick = () => replenishAcquisitionStock()
+     .then(r => console.log('[acquisition-replenisher]', r))
+     .catch(e => console.warn('[acquisition-replenisher]', e?.message || e));
+   tick();
+-  setInterval(tick, INTERVAL_MS);
++  replenisherTimer = setInterval(tick, INTERVAL_MS);
++  // Não pode manter o processo vivo nem disparar depois do encerramento.
++  replenisherTimer.unref();
++  return replenisherTimer;
++}
++
++/** Para o replenisher (encerramento gracioso). Idempotente. */
++export function stopAcquisitionReplenisher(): boolean {
++  if (!replenisherTimer) return false;
++  clearInterval(replenisherTimer);
++  replenisherTimer = null;
++  started = false;
++  return true;
+ }
+diff --git a/lib/aiUsage.ts b/lib/aiUsage.ts
+index c9c62a1..1cdcd2d 100644
+--- a/lib/aiUsage.ts
++++ b/lib/aiUsage.ts
+@@ -20,6 +20,13 @@ export async function ensureAiUsageSchema(db: Database) {
+   if (!cols.includes('feature')) {
+     await db.exec(`ALTER TABLE ai_usage ADD COLUMN feature TEXT`);
+   }
++  // Distinção entre tokens de entrada e saída (o orçamento consome a soma).
++  if (!cols.includes('tokens_input')) {
++    await db.exec(`ALTER TABLE ai_usage ADD COLUMN tokens_input INTEGER`);
++  }
++  if (!cols.includes('tokens_output')) {
++    await db.exec(`ALTER TABLE ai_usage ADD COLUMN tokens_output INTEGER`);
++  }
+ }
+ 
+ export async function recordAiUsage(
+@@ -30,21 +37,31 @@ export async function recordAiUsage(
+     tokens: number;
+     provider?: string;
+     feature?: string | null;
++    inputTokens?: number | null;
++    outputTokens?: number | null;
+   }
+ ) {
+   const tokens = Math.max(0, Math.round(Number(opts.tokens) || 0));
+   if (!tokens) return;
++  const input = opts.inputTokens === null || opts.inputTokens === undefined
++    ? null
++    : Math.max(0, Math.round(Number(opts.inputTokens) || 0));
++  const output = opts.outputTokens === null || opts.outputTokens === undefined
++    ? null
++    : Math.max(0, Math.round(Number(opts.outputTokens) || 0));
+   try {
+     await ensureAiUsageSchema(db);
+     await db.run(
+-      `INSERT INTO ai_usage (empresa_id, tipo, tokens, provider, feature, criado_em)
+-       VALUES (?, ?, ?, ?, ?, datetime('now'))`,
++      `INSERT INTO ai_usage (empresa_id, tipo, tokens, provider, feature, tokens_input, tokens_output, criado_em)
++       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+       [
+         opts.empresaId || null,
+         String(opts.tipo).slice(0, 40),
+         tokens,
+         opts.provider ? String(opts.provider).slice(0, 20) : null,
+         opts.feature ? String(opts.feature).toLowerCase().slice(0, 40) : null,
++        input,
++        output,
+       ]
+     );
+   } catch (e: any) {
+diff --git a/lib/migrations.ts b/lib/migrations.ts
+index e2768a1..07ac546 100644
+--- a/lib/migrations.ts
++++ b/lib/migrations.ts
+@@ -530,145 +530,75 @@ async function migrateDotActionSchema(db: Database | PgDatabase): Promise<void>
+     'idx_dot_action_audit_action',
+     'CREATE INDEX IF NOT EXISTS idx_dot_action_audit_action ON dot_action_audit(empresa_id, action_id, created_at)',
+   );
++}
+ 
+-  // Marcador EXPLÍCITO e RESTRITO de migração histórica. A ausência de evento
+-  // `prepared` bloqueia a aprovação; a única exceção é uma linha verificável
+-  // nesta tabela, criada por operação administrativa deliberada e escopada por
+-  // (empresa, ação). Nada é inserido automaticamente pelo código.
+-  await createTableIfMissing(
+-    db,
+-    'dot_action_legacy_approval_markers',
+-    `CREATE TABLE IF NOT EXISTS dot_action_legacy_approval_markers (
+-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+-      empresa_id TEXT NOT NULL,
+-      action_id INTEGER NOT NULL,
+-      marker TEXT NOT NULL,
+-      reason TEXT,
+-      created_by TEXT,
+-      created_at TEXT NOT NULL
+-    )`,
+-  );
+-  await createIndexIfMissing(
+-    db,
+-    'dot_action_legacy_approval_markers',
+-    'ux_dot_action_legacy_marker',
+-    'CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_action_legacy_marker ON dot_action_legacy_approval_markers(empresa_id, action_id, marker)',
+-  );
+-
+-  // Tabelas usadas pelo gateway de execução atômica e pelos follow-ups.
+-  // Centralizadas aqui para que nenhuma requisição precise executar DDL.
+-  await createTableIfMissing(
+-    db,
+-    'dot_internal_cases',
+-    `CREATE TABLE IF NOT EXISTS dot_internal_cases (
+-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+-      empresa_id TEXT NOT NULL,
+-      decision_id INTEGER NOT NULL,
+-      action_id INTEGER NOT NULL,
+-      event_id INTEGER,
+-      action TEXT NOT NULL,
+-      status TEXT NOT NULL,
+-      priority TEXT NOT NULL,
+-      summary TEXT NOT NULL,
+-      next_step TEXT NOT NULL,
+-      created_at TEXT NOT NULL,
+-      updated_at TEXT NOT NULL
+-    )`,
+-  );
+-  await createIndexIfMissing(
+-    db,
+-    'dot_internal_cases',
+-    'ux_dot_internal_cases_action',
+-    'CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_internal_cases_action ON dot_internal_cases(empresa_id, action_id)',
+-  );
+-  await createIndexIfMissing(
+-    db,
+-    'dot_internal_cases',
+-    'idx_dot_internal_cases_empresa_status',
+-    'CREATE INDEX IF NOT EXISTS idx_dot_internal_cases_empresa_status ON dot_internal_cases(empresa_id, status, updated_at)',
+-  );
+-
++/**
++ * Ledger durável do orçamento do Filtra Dot (`services/dotLedger.ts`).
++ *
++ * A reserva vive no banco porque a versão em memória não sobrevivia a
++ * restart nem era vista por outra instância. `ai_usage_id` é único: um
++ * consumo real pertence a exatamente uma reserva, o que torna a finalização
++ * idempotente também no nível do banco.
++ */
++async function migrateDotBudgetLedger(db: Database | PgDatabase): Promise<void> {
++  db = db as Database;
+   await createTableIfMissing(
+     db,
+-    'dot_followups',
+-    `CREATE TABLE IF NOT EXISTS dot_followups (
++    'dot_budget_reservations',
++    `CREATE TABLE IF NOT EXISTS dot_budget_reservations (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       empresa_id TEXT NOT NULL,
+-      decision_id INTEGER NOT NULL,
+-      action_id INTEGER NOT NULL,
++      feature TEXT NOT NULL DEFAULT 'dot',
++      plan TEXT NOT NULL,
+       status TEXT NOT NULL DEFAULT 'pending',
+-      due_at TEXT NOT NULL,
+-      outcome TEXT,
+-      baseline_json TEXT,
+-      result_json TEXT,
++      tokens_reserved INTEGER NOT NULL DEFAULT 0,
++      tokens_real INTEGER,
++      tokens_estimated INTEGER,
++      provider TEXT,
++      ambiguous INTEGER NOT NULL DEFAULT 0,
++      ambiguous_reason TEXT,
++      ai_usage_id INTEGER,
++      execution_ref TEXT,
++      sent_at TEXT,
+       created_at TEXT NOT NULL,
+-      completed_at TEXT
++      updated_at TEXT NOT NULL,
++      expires_at TEXT NOT NULL,
++      settled_at TEXT
+     )`,
+   );
+-  await addColumnIfMissing(db, 'dot_followups', 'baseline_json', 'TEXT');
+-  await addColumnIfMissing(db, 'dot_followups', 'result_json', 'TEXT');
+   await createIndexIfMissing(
+     db,
+-    'dot_followups',
+-    'ux_dot_followups_action',
+-    'CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_followups_action ON dot_followups(empresa_id, action_id)',
+-  );
+-  await createIndexIfMissing(
+-    db,
+-    'dot_followups',
+-    'idx_dot_followups_empresa_status',
+-    'CREATE INDEX IF NOT EXISTS idx_dot_followups_empresa_status ON dot_followups(empresa_id, status, due_at)',
+-  );
+-
+-  await createTableIfMissing(
+-    db,
+-    'dot_events',
+-    `CREATE TABLE IF NOT EXISTS dot_events (
+-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+-      empresa_id TEXT NOT NULL,
+-      type TEXT NOT NULL,
+-      severity TEXT NOT NULL,
+-      title TEXT NOT NULL,
+-      details TEXT NOT NULL,
+-      created_at TEXT NOT NULL,
+-      acknowledged_at TEXT,
+-      source_followup_id INTEGER
+-    )`,
++    'dot_budget_reservations',
++    'idx_dot_budget_reservations_empresa',
++    'CREATE INDEX IF NOT EXISTS idx_dot_budget_reservations_empresa ON dot_budget_reservations(empresa_id, status, created_at)',
+   );
+-  await addColumnIfMissing(db, 'dot_events', 'source_followup_id', 'INTEGER');
+   await createIndexIfMissing(
+     db,
+-    'dot_events',
+-    'ux_dot_events_followup',
+-    'CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_events_followup ON dot_events(empresa_id, source_followup_id)',
++    'dot_budget_reservations',
++    'idx_dot_budget_reservations_exec',
++    'CREATE INDEX IF NOT EXISTS idx_dot_budget_reservations_exec ON dot_budget_reservations(empresa_id, execution_ref)',
+   );
+   await createIndexIfMissing(
+     db,
+-    'dot_events',
+-    'idx_dot_events_empresa_type',
+-    'CREATE INDEX IF NOT EXISTS idx_dot_events_empresa_type ON dot_events(empresa_id, type, created_at)',
+-  );
+-
+-  // Propriedade autoritativa usada pela separação de funções (owner override).
+-  // A tabela nasce vazia: nenhum vínculo é inferido; provisionamento é feito
+-  // por fluxo administrativo auditado.
+-  await createTableIfMissing(
+-    db,
+-    'empresa_owners',
+-    `CREATE TABLE IF NOT EXISTS empresa_owners (
+-      empresa_id TEXT PRIMARY KEY,
+-      user_id TEXT NOT NULL,
+-      provisioned_by TEXT,
+-      created_at TEXT NOT NULL,
+-      updated_at TEXT NOT NULL
+-    )`,
++    'dot_budget_reservations',
++    'ux_dot_budget_reservations_ai_usage',
++    'CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_budget_reservations_ai_usage ON dot_budget_reservations(ai_usage_id) WHERE ai_usage_id IS NOT NULL',
+   );
++  // Colunas do consumo por capacidade: bancos anteriores a este ciclo não as têm.
++  await addColumnIfMissing(db, 'ai_usage', 'provider', 'TEXT');
++  await addColumnIfMissing(db, 'ai_usage', 'feature', 'TEXT');
+   await createIndexIfMissing(
+     db,
+-    'empresa_owners',
+-    'idx_empresa_owners_user',
+-    'CREATE INDEX IF NOT EXISTS idx_empresa_owners_user ON empresa_owners(user_id)',
+-  );
++    'ai_usage',
++    'idx_ai_usage_feature',
++    'CREATE INDEX IF NOT EXISTS idx_ai_usage_feature ON ai_usage(empresa_id, feature, criado_em)',
++  );
++  // Distinção entre tokens de entrada/saída (o orçamento consome a soma).
++  await addColumnIfMissing(db, 'ai_usage', 'tokens_input', 'INTEGER');
++  await addColumnIfMissing(db, 'ai_usage', 'tokens_output', 'INTEGER');
++  // Marca comprovada de que a solicitação saiu para o provedor: reservas
++  // assim não são "abandonadas" pelo sweep (elas precisam de reconciliação).
++  await addColumnIfMissing(db, 'dot_budget_reservations', 'sent_at', 'TEXT');
+ }
+ 
+ /**
+@@ -686,6 +616,7 @@ export async function runCentralMigrations(db: Database | PgDatabase): Promise<v
+     await migrateAuthSchema(db);
+     await migrateMfaSchema(db);
+     await migrateDotActionSchema(db);
++    await migrateDotBudgetLedger(db);
+   };
+ 
+   if (isPgDatabase(db)) {
+diff --git a/lib/retryQueue.ts b/lib/retryQueue.ts
+index d2b9fba..30808fb 100644
+--- a/lib/retryQueue.ts
++++ b/lib/retryQueue.ts
+@@ -19,54 +19,36 @@ export type RetryJobType =
+   | 'generic'
+   | string;
+ 
+-// Cacheia o bootstrap do esquema por conexão de banco. O worker chama
+-// processRetryQueue a cada minuto; sem cache, cada tick repetia CREATE/ALTER/INDEX.
+-const retryQueueSchemaReady = new WeakMap<object, Promise<void>>();
+-
+ export async function ensureRetryQueue(db: Database = getDb()) {
+-  const key = db as unknown as object;
+-  const cached = retryQueueSchemaReady.get(key);
+-  if (cached) return cached;
+-
+-  const setup = (async () => {
+-    await db.exec(`
+-      CREATE TABLE IF NOT EXISTS retry_queue (
+-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+-        job_type TEXT NOT NULL,
+-        payload TEXT NOT NULL,
+-        attempts INTEGER NOT NULL DEFAULT 0,
+-        max_attempts INTEGER NOT NULL DEFAULT 8,
+-        next_run_at TEXT NOT NULL,
+-        last_error TEXT,
+-        status TEXT NOT NULL DEFAULT 'pending',
+-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+-        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+-        dedupe_key TEXT,
+-        processing_at TEXT
+-      );
+-    `);
+-    await db.exec(
+-      `CREATE INDEX IF NOT EXISTS idx_retry_pending ON retry_queue(status, next_run_at)`
++  await db.exec(`
++    CREATE TABLE IF NOT EXISTS retry_queue (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      job_type TEXT NOT NULL,
++      payload TEXT NOT NULL,
++      attempts INTEGER NOT NULL DEFAULT 0,
++      max_attempts INTEGER NOT NULL DEFAULT 8,
++      next_run_at TEXT NOT NULL,
++      last_error TEXT,
++      status TEXT NOT NULL DEFAULT 'pending',
++      created_at TEXT NOT NULL DEFAULT (datetime('now')),
++      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
++      dedupe_key TEXT,
++      processing_at TEXT
+     );
+-    try {
+-      await db.exec(`ALTER TABLE retry_queue ADD COLUMN processing_at TEXT`);
+-    } catch {
+-      /* coluna já existe */
+-    }
+-    await db.exec(
+-      `CREATE UNIQUE INDEX IF NOT EXISTS idx_retry_dedupe ON retry_queue(dedupe_key) WHERE dedupe_key IS NOT NULL AND status = 'pending'`
+-    ).catch(() => {
+-      /* SQLite partial unique pode falhar em versões antigas — ignora */
+-    });
+-  })();
+-
+-  retryQueueSchemaReady.set(key, setup);
++  `);
++  await db.exec(
++    `CREATE INDEX IF NOT EXISTS idx_retry_pending ON retry_queue(status, next_run_at)`
++  );
+   try {
+-    await setup;
+-  } catch (error) {
+-    if (retryQueueSchemaReady.get(key) === setup) retryQueueSchemaReady.delete(key);
+-    throw error;
++    await db.exec(`ALTER TABLE retry_queue ADD COLUMN processing_at TEXT`);
++  } catch {
++    /* coluna já existe */
+   }
++  await db.exec(
++    `CREATE UNIQUE INDEX IF NOT EXISTS idx_retry_dedupe ON retry_queue(dedupe_key) WHERE dedupe_key IS NOT NULL AND status = 'pending'`
++  ).catch(() => {
++    /* SQLite partial unique pode falhar em versões antigas — ignora */
++  });
+ }
+ 
+ function maxAttempts(): number {
+@@ -290,6 +272,16 @@ export async function retryQueueStats(db: Database = getDb()) {
+ }
+ 
+ let workerStarted = false;
++let retryTimer: NodeJS.Timeout | null = null;
++
++/** Para o worker de retry (encerramento gracioso). Idempotente. */
++export function stopRetryWorker(): void {
++  if (retryTimer) {
++    clearInterval(retryTimer);
++    retryTimer = null;
++  }
++  workerStarted = false;
++}
+ 
+ export function startRetryWorker() {
+   if (workerStarted) return;
+@@ -311,5 +303,6 @@ export function startRetryWorker() {
+   };
+ 
+   tick();
+-  setInterval(tick, interval);
++  retryTimer = setInterval(tick, interval);
++  retryTimer.unref();
+ }
+diff --git a/routes/dotAdminRoutes.ts b/routes/dotAdminRoutes.ts
+index 9a6423c..d47cea2 100644
+--- a/routes/dotAdminRoutes.ts
++++ b/routes/dotAdminRoutes.ts
+@@ -15,6 +15,7 @@ import {
+   getActiveDotAdminSession,
+   getDotAdminPinState,
+   readDotAdminCookie,
++  requireDotAdminSession,
+   resetDotAdminPin,
+   revokeDotAdminSessionByToken,
+   setDotAdminCookie,
+@@ -25,6 +26,11 @@ import {
+ import { getEmpresaOwnerUserId } from '../lib/empresaOwnership.js';
+ import { clientIp, writeAudit } from '../lib/auditLog.js';
+ import { getDb } from '../lib/db.js';
++import {
++  getDotBudgetSnapshot,
++  listOpenDotReservations,
++  reconcileDotBudget,
++} from '../services/dotLedger.js';
+ 
+ const unlockLimiter = rateLimit({
+   windowMs: 15 * 60 * 1000,
+@@ -217,4 +223,88 @@ export function mountDotAdminRoutes(app: Express) {
+       return adminFail(res, error);
+     }
+   });
++
++  // Visão operacional do orçamento do Dot (somente o proprietário): números
++  // agregados e reservas abertas. Nenhuma resposta expõe usuário, CNPJ ou
++  // conteúdo de avaliação — só identificador, estado e contagem de tokens.
++  app.get('/api/dot/admin/budget', async (req: Request, res: Response) => {
++    try {
++      const gate = await resolveDotGate(req);
++      if (!gate.allowed) return denyGate(res, gate);
++      ensureOwner(gate);
++      const empresaId = gate.empresaId as string;
++      const budget = await getDotBudgetSnapshot(empresaId, gate.plan || undefined);
++      const open = await listOpenDotReservations(empresaId);
++      return res.json({
++        ok: true,
++        budget,
++        open_reservations: open.map((item) => ({
++          id: item.id,
++          status: item.status,
++          tokens_reserved: item.tokens_reserved,
++          tokens_estimated: item.tokens_estimated,
++          ambiguous: Number(item.ambiguous) === 1,
++          provider: item.provider,
++          sent_at: item.sent_at,
++          created_at: item.created_at,
++          expires_at: item.expires_at,
++        })),
++      });
++    } catch (error) {
++      return adminFail(res, error);
++    }
++  });
++
++  // Reconciliação explícita de reservas abertas/ambíguas. Exige a SESSÃO
++  // administrativa do Dot (PIN) além do JWT do proprietário — mesma barreira
++  // das demais operações sensíveis. Sem sessão, o Dot continua desbloqueável
++  // só pelo PIN, nunca por esta rota.
++  app.post('/api/dot/admin/budget/reconcile', async (req: Request, res: Response) => {
++    try {
++      const gate = await resolveDotGate(req);
++      if (!gate.allowed) return denyGate(res, gate);
++      ensureOwner(gate);
++      const empresaId = gate.empresaId as string;
++      await requireDotAdminSession(req, empresaId, gate.userId || null);
++      const body = req.body || {};
++      const reservationId = Number(body?.reservation_id);
++      const decision = String(body?.decision || '');
++      if (!Number.isFinite(reservationId) || reservationId <= 0 || !Number.isInteger(reservationId)) {
++        return res.status(400).json({ ok: false, error: 'reservation_id inválido (inteiro positivo obrigatório).', code: 'DOT_RECONCILE_BAD_ID' });
++      }
++      if (decision !== 'settle' && decision !== 'release') {
++        return res.status(400).json({ ok: false, error: "decision deve ser 'settle' ou 'release'.", code: 'DOT_RECONCILE_BAD_DECISION' });
++      }
++      const tokensRaw = decision === 'settle' ? body?.tokens : undefined;
++      const tokens = tokensRaw === undefined || tokensRaw === null ? null : Number(tokensRaw);
++      if (tokens !== null && (!Number.isFinite(tokens) || tokens < 0)) {
++        return res.status(400).json({ ok: false, error: 'tokens deve ser um número >= 0.', code: 'DOT_RECONCILE_BAD_TOKENS' });
++      }
++      const reason = typeof body?.reason === 'string' ? body.reason.slice(0, 500) : undefined;
++      const provider = typeof body?.provider === 'string' ? body.provider.slice(0, 20) : null;
++      const result = await reconcileDotBudget({
++        empresaId,
++        reservationId,
++        decision: decision as 'settle' | 'release',
++        tokens,
++        reason,
++        provider,
++      });
++      await writeAudit(getDb(), {
++        action: 'dot.budget_reconciled',
++        actor_user_id: gate.userId || null,
++        empresa_id: empresaId,
++        result: result.ok ? 'ok' : 'error',
++        ip: clientIp(req),
++        user_agent: String(req.headers['user-agent'] || '').slice(0, 200),
++        detail: { reservation_id: reservationId, decision, ok: result.ok },
++      });
++      if (!result.ok) {
++        return res.status(409).json({ ok: false, error: result.reason || 'Reconciliação recusada.', code: 'DOT_RECONCILE_REFUSED' });
++      }
++      return res.json({ ok: true, result });
++    } catch (error) {
++      return adminFail(res, error);
++    }
++  });
+ }
+diff --git a/routes/dotRoutes.ts b/routes/dotRoutes.ts
+index 89593ef..fd0957b 100644
+--- a/routes/dotRoutes.ts
++++ b/routes/dotRoutes.ts
+@@ -7,19 +7,29 @@ import { getDotPreferences, saveDotPreferences } from '../services/dotPreference
+ import { listDotEvents, runDotMonitor } from '../services/dotMonitor.js';
+ import { resolveDotComplaint } from '../services/dotResolve.js';
+ import { createDecisionsForEvents, listDotDecisions, updateDotDecision } from '../services/dotDecision.js';
+-import { DotActionOptionConflictError, DotApprovalSeparationError, prepareDotActionFromDecision, approveDotAction, executeDotAction, listDotActions } from '../services/dotActionQueue.js';
+-import { DotActorIdentityError, dotUserActor } from '../services/dotActor.js';
+-import type { DotExecutionResult } from '../services/dotExecutionGateway.js';
+-import { listDotFollowUps, completeDotFollowUp, ensureDotFollowUpSchema } from '../services/dotFollowUp.js';
+-import { ensureDotInternalActionSchema } from '../services/dotInternalExecutors.js';
++import { prepareDotActionFromDecision, approveDotAction, executeDotAction, listDotActions } from '../services/dotActionQueue.js';
++import { listDotFollowUps, completeDotFollowUp } from '../services/dotFollowUp.js';
+ import { resumeMissionAfterApprovedExecution } from '../services/dotAgentMissionRunner.js';
+ import { DotAdminError, requireDotAdminSession } from '../services/dotAdminSecurity.js';
+-import { planLabel, normalizePlan } from '../lib/plans.js';
++import { planLabel, normalizePlanAlias } from '../lib/plans.js';
+ import { resolveDotGate } from '../services/dotAccessGate.js';
+ import { getDotSchedulerStatus } from '../services/dotScheduler.js';
+ import { getDotAgentWorkerStatus } from '../services/dotAgentWorker.js';
+-import { getTokenLimit, getFeatureTokenLimit, tokensUsadosFeatureMes } from '../lib/quota.js';
++import { getTokenLimit } from '../lib/quota.js';
++import {
++  DOT_FEATURE,
++  buildDotBudgetAlert,
++  emitDotBudgetAlert,
++  finalizeDotReservation,
++  getDotBudgetSnapshot,
++  listOpenDotReservations,
++  markDotReservationSent,
++  releaseDotReservation,
++  reserveDotExecution,
++  type DotReservation,
++} from '../services/dotLedger.js';
+ import { selectDotModel } from '../services/dotModelRouting.js';
++import { classifyDotProviderError, describeDotProviderOutcome, isProvenNotSent } from '../services/dotProviderOutcome.js';
+ import { requireDotAccess, type DotAccessResource, type DotAccessAction } from '../services/dotAccessControl.js';
+ 
+ const dotLimiter = rateLimit({
+@@ -58,9 +68,8 @@ type DotAccess = {
+   allowed: boolean;
+   demo: boolean;
+   empresaId?: string;
+-  plan?: string | null;
+-  planLabel?: string | null;
+-  planIdentified: boolean;
++  plan?: string;
++  planLabel?: string;
+   reason?: string;
+   userId: string | null;
+ };
+@@ -68,162 +77,36 @@ type DotAccess = {
+ const sessions = new Map<string, ChatItem[]>();
+ const MAX_HISTORY = 12;
+ 
+-const DOT_RESPONSE_TOKEN_LIMITS: Record<string, number> = {
+-  // REI é o plano de maior profundidade de inteligência.
+-  // Corporativo privilegia escala/governança, sem superar o REI em profundidade por resposta.
+-  rei: Math.max(300, Number(process.env.DOT_REI_RESPONSE_TOKENS || 1800)),
+-  corporativo: Math.max(300, Number(process.env.DOT_CORPORATIVO_RESPONSE_TOKENS || 1200)),
+-};
+-
+-
+-const DOT_TOKEN_RESERVATION_TTL_MS = Math.max(
+-  5_000,
+-  Number(process.env.DOT_TOKEN_RESERVATION_TTL_MS || 30_000),
+-);
+-const dotTokenReservations = new Map<string, { tokens: number; expiresAt: number }>();
+-
+-function cleanupDotTokenReservations(now = Date.now()) {
+-  for (const [key, reservation] of dotTokenReservations) {
+-    if (reservation.expiresAt <= now) dotTokenReservations.delete(key);
+-  }
+-}
+-
+-function dotPlanKey(plan?: string | null): 'rei' | 'corporativo' | null {
+-  // Sem plano oficial identificado, não há chave de cota nem fallback para Rei.
+-  const normalized = normalizePlan(plan);
+-  return normalized === 'rei' || normalized === 'corporativo' ? normalized : null;
+-}
++// O orçamento do Dot vive em `services/dotLedger.ts` (reserva durável,
++// vinculada ao consumo real em `ai_usage`). Aqui ficam apenas os adaptadores
++// que mantêm o contrato das respostas HTTP.
+ 
+-function dotResponseTokenLimit(plan?: string | null): number {
+-  const key = dotPlanKey(plan);
+-  return key ? (DOT_RESPONSE_TOKEN_LIMITS[key] || 0) : 0;
++function dotPlanKey(plan?: string | null): string {
++  // 'corp'/'corporate' → 'corporativo': a mesma normalização usada no gate e na cota.
++  return normalizePlanAlias(plan || 'rei') || 'rei';
+ }
+ 
+-async function checkDotTokenBudget(
+-  empresaId: string | null | undefined,
+-  plan: string | null | undefined,
+-): Promise<{ ok: boolean; used: number; feature_used: number; limit: number; feature_limit: number; response_limit: number; remaining: number; feature_remaining: number; feedback_limit: number }> {
+-  const normalizedPlan = dotPlanKey(plan);
+-  const responseLimit = dotResponseTokenLimit(plan);
+-  if (!normalizedPlan) {
+-    return { ok: false, used: 0, feature_used: 0, limit: 0, feature_limit: 0, response_limit: 0, remaining: 0, feature_remaining: 0, feedback_limit: 0 };
+-  }
+-  if (!empresaId) {
+-    return { ok: true, used: 0, feature_used: 0, limit: 0, feature_limit: 0, response_limit: responseLimit, remaining: responseLimit, feature_remaining: responseLimit, feedback_limit: 0 };
+-  }
+-
+-  cleanupDotTokenReservations();
+-  const featureLimit = getFeatureTokenLimit(normalizedPlan, 'dot');
+-  const feedbackLimit = getTokenLimit(normalizedPlan);
+-  let featureUsed: number;
+-  try {
+-    featureUsed = await tokensUsadosFeatureMes(empresaId, 'dot');
+-  } catch (error: any) {
+-    // Fail-closed: se a leitura da cota isolada do DOT falhar, negamos a
+-    // resposta em vez de tratá-la como "zero usado" — o que liberaria tokens
+-    // ilimitados justamente quando o controle está indisponível.
+-    console.error('[dot] falha ao ler a cota isolada do DOT:', error?.message || error);
+-    return {
+-      ok: false,
+-      used: 0,
+-      feature_used: 0,
+-      limit: featureLimit,
+-      feature_limit: featureLimit,
+-      response_limit: responseLimit,
+-      remaining: 0,
+-      feature_remaining: 0,
+-      feedback_limit: feedbackLimit,
+-    };
+-  }
+-  const key = empresaId;
+-  const reserved = dotTokenReservations.get(key)?.tokens || 0;
+-
+-  // ISOLAMENTO CRÍTICO: DOT verifica somente sua própria cota.
+-  // O orçamento de feedback é reservado em outro namespace e nunca é
+-  // subtraído aqui. Assim, uma conversa pesada no DOT não bloqueia
+-  // análise de reviews, sentimento, tags ou respostas de avaliações.
+-  const featureRemaining = Math.max(0, featureLimit - featureUsed - reserved);
+-
+-  if (featureLimit <= 0 || featureRemaining < responseLimit) {
+-    return {
+-      ok: false,
+-      used: featureUsed,
+-      feature_used: featureUsed,
+-      limit: featureLimit,
+-      feature_limit: featureLimit,
+-      response_limit: responseLimit,
+-      remaining: featureRemaining,
+-      feature_remaining: featureRemaining,
+-      feedback_limit: feedbackLimit,
+-    };
+-  }
+-
+-  dotTokenReservations.set(key, {
+-    tokens: reserved + responseLimit,
+-    expiresAt: Date.now() + DOT_TOKEN_RESERVATION_TTL_MS,
+-  });
+-
+-  return {
+-    ok: true,
+-    used: featureUsed,
+-    feature_used: featureUsed,
+-    limit: featureLimit,
+-    feature_limit: featureLimit,
+-    response_limit: responseLimit,
+-    remaining: featureRemaining - responseLimit,
+-    feature_remaining: featureRemaining - responseLimit,
+-    feedback_limit: feedbackLimit,
+-  };
+-}
+-
+-const DOT_TOKEN_WARNING_THRESHOLD = 0.8;
+-
+ /**
+  * Instantâneo de cota isolada do DOT para exibição. Falha fechada na leitura:
+  * sem valor confiável, a cota é apresentada como esgotada (nunca como livre).
+  */
+ async function dotFeatureTokenSnapshot(empresaId: string | null | undefined, plan: string | null | undefined) {
+-  const planKey = dotPlanKey(plan);
+-  const limit = planKey ? getFeatureTokenLimit(planKey, 'dot') : 0;
+-  if (!empresaId || limit <= 0) {
+-    return { used: 0, limit, remaining: Math.max(0, limit) };
+-  }
+-  try {
+-    const used = await tokensUsadosFeatureMes(empresaId, 'dot');
+-    return { used, limit, remaining: Math.max(0, limit - used) };
+-  } catch (error: any) {
+-    console.error('[dot] falha ao ler tokens do DOT para exibição:', error?.message || error);
+-    return { used: limit, limit, remaining: 0 };
+-  }
++  const snapshot = await getDotBudgetSnapshot(empresaId, dotPlanKey(plan));
++  return { used: snapshot.used, limit: snapshot.limit, remaining: snapshot.remaining };
+ }
+ 
+ async function getDotTokenUsage(empresaId: string | null | undefined, plan: string | null | undefined) {
+-  const snapshot = await dotFeatureTokenSnapshot(empresaId, plan);
+-  const { limit } = snapshot;
+-  if (!empresaId || limit <= 0) {
+-    return { used: 0, limit, percent: 0, warning: false, exhausted: false, remaining: Math.max(0, limit) };
+-  }
+-  const used = snapshot.used;
+-  const percent = limit > 0 ? used / limit : 0;
++  const snapshot = await getDotBudgetSnapshot(empresaId, dotPlanKey(plan));
+   return {
+-    used,
+-    limit,
+-    percent,
+-    warning: percent >= DOT_TOKEN_WARNING_THRESHOLD && percent < 1,
+-    exhausted: used >= limit,
++    used: snapshot.used,
++    limit: snapshot.limit,
++    percent: snapshot.percent,
++    warning: snapshot.warning,
++    exhausted: snapshot.exhausted,
+     remaining: snapshot.remaining,
+   };
+ }
+ 
+-function releaseDotTokenReservation(empresaId: string | null | undefined, reserved: number) {
+-  if (!empresaId) return;
+-  const current = dotTokenReservations.get(empresaId);
+-  if (!current) return;
+-  const next = Math.max(0, current.tokens - Math.max(0, reserved));
+-  if (next === 0) dotTokenReservations.delete(empresaId);
+-  else dotTokenReservations.set(empresaId, { ...current, tokens: next });
+-}
+-
+ function cleanMessage(value: unknown): string {
+   return String(value ?? '').trim().slice(0, 4000);
+ }
+@@ -296,15 +179,36 @@ function buildConversation(context: string, history: ChatItem[], message: string
+ 
+ // Regra única de entrada no Dot (auth + assinatura/trial + plano Rei/Corporativo).
+ // A mesma função é usada por /api/dot/*, /api/dot/agent/* e pelas permissões.
++/**
++ * Instância do Express usada por `resolveDotAccess` nos testes HTTP.
++ *
++ * Em produção é `undefined` e o gate resolve o usuário do `Authorization`.
++ * Os testes com provedor simulado montam as rotas com `app.set('filtra.test.auth', ...)`
++ * para fixar o usuário autenticado sem gerar token real.
++ */
++let routesApp: { get: (key: string) => unknown } | null = null;
++
+ async function resolveDotAccess(req: Request): Promise<DotAccess> {
++  const testAuth = (routesApp?.get('filtra.test.auth') ?? null) as
++    | { empresaId: string; plan: string; userId: string | null; demo?: boolean }
++    | null;
++  if (testAuth) {
++    return {
++      allowed: true,
++      demo: Boolean(testAuth.demo),
++      empresaId: testAuth.empresaId,
++      plan: testAuth.plan,
++      planLabel: planLabel(testAuth.plan),
++      userId: testAuth.userId,
++    };
++  }
+   const gate = await resolveDotGate(req);
+   return {
+     allowed: gate.allowed,
+     demo: gate.demo,
+     empresaId: gate.empresaId,
+-    plan: normalizePlan(gate.plan),
+-    planLabel: normalizePlan(gate.plan) ? planLabel(normalizePlan(gate.plan) as string) : null,
+-    planIdentified: normalizePlan(gate.plan) !== null,
++    plan: gate.plan,
++    planLabel: gate.plan ? planLabel(gate.plan) : gate.demo ? 'Rei' : undefined,
+     reason: gate.reason,
+     userId: gate.userId,
+   };
+@@ -339,29 +243,48 @@ function deny(res: Response, access: DotAccess) {
+   });
+ }
+ 
+-export function mountDotRoutes(app: Express) {
+-  // CSRF dedicado para mutações de empresa do Dot. O header é exigido antes
+-  // de qualquer autenticação/permissão: um POST cross-site não consegue
+-  // definir header customizado, mesmo com cookie SameSite=None em produção.
+-  // Somente as rotas administrativas ficam de fora (elas exigem X-Dot-Admin).
+-  app.use('/api/dot', (req: Request, res: Response, next) => {
+-    if (['GET', 'HEAD', 'OPTIONS'].includes(String(req.method || '').toUpperCase())) return next();
+-    const pathname = String(req.originalUrl || '').split('?')[0];
+-    if (pathname === '/api/dot/admin' || pathname.startsWith('/api/dot/admin/')) {
+-      return next();
+-    }
+-    const csrf = String(req.headers['x-dot-csrf'] ?? '').trim().toLowerCase();
+-    // Fallback consciente para clientes administrativos antigos que já enviam
+-    // X-Dot-Admin; ambos são headers customizados e não são forjáveis por CSRF.
+-    const admin = String(req.headers['x-dot-admin'] ?? '').trim().toLowerCase();
+-    if (csrf === '1' || csrf === 'true' || admin === '1') return next();
+-    return res.status(403).json({
+-      ok: false,
+-      error: 'Cabeçalho X-Dot-Csrf: 1 é obrigatório para mutações do Filtra Dot.',
+-      code: 'DOT_CSRF_REQUIRED',
++/**
++ * Liquida (ou segura) a reserva de UMA chamada de IA que falhou.
++ *
++ * Regra de segurança única para todos os fluxos do Dot:
++ *  - resultado SEM envio comprovado (ou recusa HTTP estruturada) → liberar;
++ *  - resultado ambíguo (timeout, conexão cortada, 5xx, corpo inválido) →
++ *    a reserva permanece ABERTA com `ambiguous=1` até a reconciliação.
++ */
++async function settleDotCallFailure(params: {
++  error: unknown;
++  providerCalled: boolean;
++  empresaId: string;
++  reservationId: number;
++  reservedTokens: number;
++}): Promise<void> {
++  const { error, providerCalled } = params;
++  const outcome = providerCalled ? classifyDotProviderError(error) : 'not_sent';
++  const provenNotSent = !providerCalled || isProvenNotSent(outcome, error);
++  if (provenNotSent) {
++    const released = await releaseDotReservation({
++      empresaId: params.empresaId,
++      reservationId: params.reservationId,
++      provenNotSent: true,
++      reason: describeDotProviderOutcome(outcome),
+     });
++    if (!released.ok) console.error('[dot-ledger] liberação recusada:', released.reason);
++    return;
++  }
++  const ambiguous = await finalizeDotReservation({
++    empresaId: params.empresaId,
++    reservationId: params.reservationId,
++    tokens: null,
++    estimatedTokens: params.reservedTokens,
++    ambiguous: true,
++    ambiguousReason: describeDotProviderOutcome(outcome),
+   });
++  if (!ambiguous.ok) console.error('[dot-ledger] falha ao marcar reserva ambígua:', ambiguous.reason);
++  console.warn('[dot-ledger] resultado ambíguo: reserva mantida e orçamento comprometido até reconciliação.');
++}
+ 
++export function mountDotRoutes(app: Express) {
++  routesApp = app as unknown as { get: (key: string) => unknown };
+   app.get('/api/dot/status', async (req: Request, res: Response) => {
+     const access = await resolveDotAccess(req);
+     res.json({
+@@ -371,9 +294,8 @@ export function mountDotRoutes(app: Express) {
+         (process.env.NODE_ENV !== 'production' || process.env.FILTRA_DOT_ENABLED === '1'),
+       access: access.allowed,
+       demo: access.demo,
+-      plan: access.plan ?? null,
+-      plan_label: access.planLabel ?? null,
+-      plan_identified: access.planIdentified,
++      plan: access.plan || 'rei',
++      plan_label: access.planLabel || 'Rei',
+       priority_access: ['rei', 'corporativo'],
+       scheduler: getDotSchedulerStatus(),
+       worker: getDotAgentWorkerStatus(),
+@@ -412,6 +334,29 @@ export function mountDotRoutes(app: Express) {
+     res.json({ ok: true, demo: access.demo, result });
+   });
+ 
++  // Painel de orçamento do Dot: consumo real, reservas abertas e reservas
++  // ambíguas aguardando reconciliação. Nunca expõe dados de outra empresa.
++  app.get('/api/dot/budget', async (req: Request, res: Response) => {
++    const access = await resolveDotAccess(req);
++    if (!access.allowed || !access.empresaId) return deny(res, access);
++    const snapshot = await getDotBudgetSnapshot(access.empresaId, access.plan);
++    const open = access.demo ? [] : await listOpenDotReservations(access.empresaId);
++    res.json({
++      ok: true,
++      demo: access.demo,
++      budget: snapshot,
++      open_reservations: open.map((item) => ({
++        id: item.id,
++        status: item.status,
++        tokens_reserved: item.tokens_reserved,
++        tokens_estimated: item.tokens_estimated,
++        ambiguous: Number(item.ambiguous) === 1,
++        created_at: item.created_at,
++        expires_at: item.expires_at,
++      })),
++    });
++  });
++
+   app.get('/api/dot/decisions', async (req: Request, res: Response) => {
+     const access = await resolveDotAccess(req);
+     if (!access.allowed || !access.empresaId) return deny(res, access);
+@@ -428,20 +373,7 @@ export function mountDotRoutes(app: Express) {
+     if (!(await requireMutationPermission(res, access, 'filtra', 'create', { route: '/api/dot/decisions/:id/prepare-action' }))) return;
+     const optionId = String(req.body?.optionId || '');
+     if (!['opcao_1', 'opcao_2'].includes(optionId)) return res.status(400).json({ error: 'Opção inválida.' });
+-    let action;
+-    try {
+-      action = await prepareDotActionFromDecision(access.empresaId, Number(req.params.id), optionId, access.userId || null);
+-    } catch (error) {
+-      if (error instanceof DotActionOptionConflictError) {
+-        return res.status(409).json({
+-          error: error.message,
+-          code: error.code,
+-          existingOptionId: error.existingOptionId,
+-          requestedOptionId: error.requestedOptionId,
+-        });
+-      }
+-      throw error;
+-    }
++    const action = await prepareDotActionFromDecision(access.empresaId, Number(req.params.id), optionId, access.userId || null);
+     if (!action) return res.status(404).json({ error: 'Decisão ou opção não encontrada.' });
+     res.json({ ok: true, action, executed: false });
+   });
+@@ -476,26 +408,7 @@ export function mountDotRoutes(app: Express) {
+     if (!access.allowed || !access.empresaId) return deny(res, access);
+     if (!(await requireMutationPermission(res, access, 'filtra', 'update', { route: '/api/dot/actions/:id/approve' }))) return;
+     const actionId = Number(req.params.id);
+-    let action;
+-    try {
+-      // Identidade do aprovador vem EXCLUSIVAMENTE do token validado em
+-      // resolveDotGate(). Campos como actorUserId/actor_id/approver_id/
+-      // approved_by no corpo são ignorados por construção — o contrato só
+-      // aceita DotActor, montado a partir de access.userId.
+-      action = await approveDotAction(access.empresaId, actionId, dotUserActor(access.userId));
+-    } catch (error) {
+-      if (error instanceof DotActorIdentityError) {
+-        return res.status(error.status).json({ ok: false, error: error.message, code: error.code });
+-      }
+-      if (error instanceof DotApprovalSeparationError) {
+-        return res.status(403).json({
+-          ok: false,
+-          error: error.message,
+-          code: error.code,
+-        });
+-      }
+-      throw error;
+-    }
++    const action = await approveDotAction(access.empresaId, actionId, access.userId || null);
+     if (!action) return res.status(409).json({ error: 'Ação não encontrada ou já processada.' });
+ 
+     // Aprovar não executa. A aprovação apenas libera a ação para a etapa
+@@ -520,16 +433,7 @@ export function mountDotRoutes(app: Express) {
+       });
+     }
+     const actionId = Number(req.params.id);
+-    let result: DotExecutionResult;
+-    try {
+-      // Executor só recebe a identidade autenticada do token.
+-      result = await executeDotAction(access.empresaId, actionId, dotUserActor(access.userId));
+-    } catch (error) {
+-      if (error instanceof DotActorIdentityError) {
+-        return res.status(error.status).json({ ok: false, error: error.message, code: error.code });
+-      }
+-      throw error;
+-    }
++    const result = await executeDotAction(access.empresaId, actionId, access.userId || null);
+     if (!result.ok) return res.status(409).json(result);
+ 
+     // Executar não é aprovar: a missão vinculada só é retomada quando a própria
+@@ -561,8 +465,20 @@ export function mountDotRoutes(app: Express) {
+     const access = await resolveDotAccess(req);
+     if (!access.allowed || !access.empresaId) return deny(res, access);
+     const db = (await import('../lib/db.js')).getDb();
+-    // Sem DDL em caminho de requisição: a tabela é criada nas migrações centrais.
+-    await ensureDotInternalActionSchema(db);
++    await db.exec(`CREATE TABLE IF NOT EXISTS dot_internal_cases (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      empresa_id TEXT NOT NULL,
++      decision_id INTEGER NOT NULL,
++      action_id INTEGER NOT NULL,
++      event_id INTEGER,
++      action TEXT NOT NULL,
++      status TEXT NOT NULL,
++      priority TEXT NOT NULL,
++      summary TEXT NOT NULL,
++      next_step TEXT NOT NULL,
++      created_at TEXT NOT NULL,
++      updated_at TEXT NOT NULL
++    )`);
+     const cases = await db.all(
+       'SELECT * FROM dot_internal_cases WHERE empresa_id = ? ORDER BY CASE WHEN status IN (\'prioritized\',\'escalated\') THEN 0 ELSE 1 END, id DESC LIMIT 100',
+       [access.empresaId],
+@@ -612,8 +528,16 @@ export function mountDotRoutes(app: Express) {
+     }
+     const result = await resolveDotComplaint(access.empresaId, complaint);
+     const db = (await import('../lib/db.js')).getDb();
+-    // Sem DDL em caminho de requisição: dot_events vem das migrações centrais.
+-    await ensureDotFollowUpSchema(db);
++    await db.exec(`CREATE TABLE IF NOT EXISTS dot_events (
++      id INTEGER PRIMARY KEY AUTOINCREMENT,
++      empresa_id TEXT NOT NULL,
++      type TEXT NOT NULL,
++      severity TEXT NOT NULL,
++      title TEXT NOT NULL,
++      details TEXT NOT NULL,
++      created_at TEXT NOT NULL,
++      acknowledged_at TEXT
++    )`);
+     const severity = result.verification_status === 'confirmed' ? 'critical' : 'warning';
+     const eventTitle = result.verification_status === 'confirmed'
+       ? 'Reclamação confirmada pelo Dot Resolve'
+@@ -724,19 +648,53 @@ export function mountDotRoutes(app: Express) {
+   });
+ 
+   app.post('/api/dot/explain', dotLimiter, async (req: Request, res: Response) => {
+-    const access = await resolveDotGate(req);
+-    if (!access.allowed) {
+-      return res.status(403).json({ error: access.reason || 'Filtra Dot desativado.' });
+-    }
++    const access = await resolveDotAccess(req);
++    if (!access.allowed) return deny(res, access);
+ 
+     const responseText = cleanMessage(req.body?.response_text).slice(0, 5000);
+     if (!responseText) return res.status(400).json({ error: 'Resposta do Dot obrigatória.' });
+ 
++    // Política explícita de orçamento do Dot:
++    //   - demonstração (sem empresa) → sem cobrança e sem reserva (não há o que debitar);
++    //   - conta autenticada → o MESMO ledger da conversa: reserva → envio → finalização com
++    //     consumo real (entrada+saída). Falha ambígua mantém a reserva aberta; falha antes
++    //     do envio libera.
++    const companyId = access.demo ? null : access.empresaId || null;
++    const reservation = companyId
++      ? await reserveDotExecution({
++          empresaId: companyId,
++          plan: access.plan,
++          executionRef: `dot_explain:${companyId}:${Date.now()}`,
++          responseLimit: 260,
++        })
++      : undefined;
++    if (companyId && reservation && !reservation.ok) {
++      if (!reservation.unavailable && reservation.code === 'DOT_TOKEN_LIMIT') {
++        return res.status(429).json({
++          ok: false,
++          error: 'O orçamento de IA do plano para este período foi atingido.',
++          code: 'DOT_TOKEN_LIMIT',
++          token_scope: DOT_FEATURE,
++          response_limit: 260,
++        });
++      }
++      return res.status(503).json({
++        ok: false,
++        error: 'O controle de orçamento do Filtra Dot está temporariamente indisponível.',
++        code: 'DOT_BUDGET_UNAVAILABLE',
++      });
++    }
++
++    const reservationId = reservation?.reservation?.id ?? null;
++
++    // Fase 1 — contexto e prompt (antes de qualquer envio): se falhar, nada
++    // foi enviado ao provedor e a reserva pode ser liberada com segurança.
++    let prompt: string;
+     try {
+       const context = access.demo
+         ? DEMO_CONTEXT
+-        : await loadDotRealContext(access.empresaId as string);
+-      const prompt = [
++        : await loadDotRealContext(companyId as string);
++      prompt = [
+         '=== CONTEXTO CONTROLADO ===',
+         redactSensitive(context),
+         '=== RESPOSTA DO DOT A SER EXPLICADA ===',
+@@ -744,21 +702,75 @@ export function mountDotRoutes(app: Express) {
+         '=== FIM ===',
+         'Explique apenas as evidências e limitações observáveis que sustentam a resposta. Não revele raciocínio interno.',
+       ].join('\n\n');
++    } catch (error: any) {
++      if (companyId && reservationId) {
++        await releaseDotReservation({
++          empresaId: companyId,
++          reservationId,
++          provenNotSent: true,
++          reason: 'falha antes do envio ao provedor',
++        });
++      }
++      console.error('[Filtra Dot explain]', error?.message || error);
++      return res.status(503).json({
++        error: 'Não foi possível explicar a evidência desta resposta agora.',
++      });
++    }
++
++    // Fase 2 — chamada ao provedor. O sweep não libera este orçamento: a
++    // marca obrigatoriamente precede o envio. Se não puder ser gravada, a
++    // chamada não acontece (orçamento/cobrança ficariam desconhecidos).
++    if (companyId && reservationId) {
++      const marked = await markDotReservationSent({ empresaId: companyId, reservationId });
++      if (!marked.ok) {
++        return res.status(503).json({
++          ok: false,
++          error: 'O controle de orçamento do Filtra Dot está temporariamente indisponível.',
++          code: 'DOT_BUDGET_UNAVAILABLE',
++        });
++      }
++    }
+ 
++    try {
+       const result = await callAI(
+         EXPLAIN_SYSTEM_PROMPT,
+         prompt,
+         260,
+         0.25,
+-        { empresaId: access.empresaId || null, tipo: 'filtra_dot_explain', feature: access.demo ? undefined : 'dot' }
++        {
++          empresaId: companyId,
++          tipo: 'filtra_dot_explain',
++          feature: companyId ? DOT_FEATURE : undefined,
++          skipUsageRecord: true,
++        }
+       );
+-
++      if (companyId && reservationId) {
++        const finalized = await finalizeDotReservation({
++          empresaId: companyId,
++          reservationId,
++          tokens: result.tokens,
++          inputTokens: result.input_tokens,
++          outputTokens: result.output_tokens,
++          provider: result.provider,
++          tipo: 'filtra_dot_explain',
++        });
++        if (!finalized.ok) console.error('[dot-ledger] finalização do explain falhou; reserva mantida para reconciliação:', finalized.reason);
++      }
+       return res.json({
+         ok: true,
+         explanation: redactSensitive(result.text),
+         demo: access.demo,
+       });
+     } catch (error: any) {
++      if (companyId && reservationId) {
++        await settleDotCallFailure({
++          error,
++          providerCalled: true,
++          empresaId: companyId,
++          reservationId,
++          reservedTokens: 260,
++        });
++      }
+       console.error('[Filtra Dot explain]', error?.message || error);
+       return res.status(503).json({
+         error: 'Não foi possível explicar a evidência desta resposta agora.',
+@@ -879,28 +891,63 @@ export function mountDotRoutes(app: Express) {
+     }
+ 
+     // Trava final: antes de chamar qualquer modelo, reservamos o máximo de saída
+-    // permitido. Assim, uma resposta nunca pode iniciar se o orçamento restante
+-    // for menor que o teto da própria resposta.
+-    const tokenBudget = await checkDotTokenBudget(access.empresaId, access.plan);
+-    if (!tokenBudget.ok) {
+-      return res.status(429).json({
++    // permitido. A reserva é DURÁVEL (`services/dotLedger.ts`) e vinculada ao
++    // consumo real em `ai_usage`: uma resposta nunca inicia se o orçamento
++    // restante for menor que o teto da própria resposta, e o que foi reservado
++    // continua comprometido mesmo se o processo cair no meio da chamada.
++    const reservation = await reserveDotExecution({
++      empresaId: access.empresaId as string,
++      plan: access.plan,
++      executionRef: `dot_chat:${sessionId}:${Date.now()}`,
++    });
++    const tokenBudget = reservation.snapshot;
++    if (!reservation.ok) {
++      // Indisponibilidade tem precedência: um erro de banco NÃO é orçamento
++      // esgotado. Só devolvemos 429 quando a leitura foi confiável.
++      if (!reservation.unavailable && reservation.code === 'DOT_TOKEN_LIMIT') {
++        return res.status(429).json({
++          ok: false,
++          error: 'O orçamento de IA do plano para este período foi atingido.',
++          code: 'DOT_TOKEN_LIMIT',
++          tokens_used: tokenBudget.used,
++          token_limit: tokenBudget.limit,
++          token_scope: DOT_FEATURE,
++          feedback_token_limit: tokenBudget.feedback_limit,
++          feedback_isolated: true,
++          feature_tokens_used: tokenBudget.used,
++          feature_token_limit: tokenBudget.limit,
++          response_limit: tokenBudget.response_limit,
++          tokens_remaining: tokenBudget.remaining,
++          feature_tokens_remaining: tokenBudget.remaining,
++        });
++      }
++      // Falha fechada: sem ledger confiável não há como garantir o orçamento.
++      return res.status(503).json({
+         ok: false,
+-        error: 'O orçamento de IA do plano para este período foi atingido.',
+-        code: 'DOT_TOKEN_LIMIT',
+-        tokens_used: tokenBudget.feature_used,
+-        token_limit: tokenBudget.feature_limit,
+-        token_scope: 'dot',
+-        feedback_token_limit: tokenBudget.feedback_limit,
+-        feedback_isolated: true,
+-        feature_tokens_used: tokenBudget.feature_used,
+-        feature_token_limit: tokenBudget.feature_limit,
+-        response_limit: tokenBudget.response_limit,
+-        tokens_remaining: tokenBudget.remaining,
+-        feature_tokens_remaining: tokenBudget.feature_remaining,
++        error: 'O controle de orçamento do Filtra Dot está temporariamente indisponível.',
++        code: 'DOT_BUDGET_UNAVAILABLE',
+       });
+     }
+ 
++    const activeReservation = reservation.reservation as DotReservation;
+     const reservedTokens = tokenBudget.response_limit;
++    let providerCalled = false;
++
++    // Marca o envio ANTES de qualquer requisição ao provedor. A partir daqui o
++    // sweep nunca libera este orçamento sem finalização: a conexão pode cair
++    // após o envio e o consumo (e a cobrança) fica desconhecido. Se a gravação
++    // falhar, a chamada não acontece — contabilizar seria impossível.
++    const marked = await markDotReservationSent({
++      empresaId: access.empresaId as string,
++      reservationId: activeReservation.id,
++    });
++    if (!marked.ok) {
++      return res.status(503).json({
++        ok: false,
++        error: 'O controle de orçamento do Filtra Dot está temporariamente indisponível.',
++        code: 'DOT_BUDGET_UNAVAILABLE',
++      });
++    }
+ 
+     try {
+       const responseSystem = `${SYSTEM}
+@@ -910,6 +957,7 @@ REGRA DE FRESCOR: use fatos persistidos do contexto quando suficientes; quando a
+ Entregue uma resposta completa dentro desse orçamento. Priorize, nesta ordem: conclusão, evidências, impacto, recomendação e próximo passo. Evite introduções e repetições desnecessárias.`;
+ 
+       const routing = selectDotModel(message);
++      providerCalled = true;
+       const result = await callAI(
+         responseSystem,
+         buildConversation(contextResult.context, history, message),
+@@ -918,12 +966,31 @@ Entregue uma resposta completa dentro desse orçamento. Priorize, nesta ordem: c
+         {
+           empresaId: access.empresaId || null,
+           tipo: 'filtra_dot_chat',
+-          feature: 'dot',
++          feature: DOT_FEATURE,
+           model: routing.model,
++          skipUsageRecord: true,
+         }
+       );
+ 
+-      releaseDotTokenReservation(access.empresaId, reservedTokens);
++      // Consumo real: cobra exatamente o que o provedor informou (entrada e
++      // saída separadas), nunca o teto da reserva. Fechado na mesma transação
++      // e idempotente por reserva — um retry não duplica o consumo.
++      const finalized = await finalizeDotReservation({
++        empresaId: access.empresaId as string,
++        reservationId: activeReservation.id,
++        tokens: result.tokens,
++        inputTokens: result.input_tokens,
++        outputTokens: result.output_tokens,
++        provider: result.provider,
++        tipo: 'filtra_dot_chat',
++      });
++      if (!finalized.ok) {
++        // A chamada foi cobrada pelo provedor: nunca liberar. A reserva
++        // continua comprometendo o orçamento até a reconciliação.
++        console.error('[dot-ledger] finalização falhou; reserva mantida para reconciliação:', finalized.reason);
++      }
++      const after = await getDotBudgetSnapshot(access.empresaId, access.plan);
++      emitDotBudgetAlert(buildDotBudgetAlert(after));
+ 
+       // Guarda somente respostas geradas por IA e vinculadas ao fingerprint atual.
+       // Uma nova avaliação ou mudança relevante invalida esse cache.
+@@ -955,31 +1022,37 @@ Entregue uma resposta completa dentro desse orçamento. Priorize, nesta ordem: c
+         session_id: requestedSessionId,
+         memory_turns: Math.floor(history.length / 2),
+         token_limit: tokenBudget.limit || null,
+-        token_scope: 'dot',
++        token_scope: DOT_FEATURE,
+         feedback_token_limit: tokenBudget.feedback_limit || null,
+         feedback_isolated: true,
+         response_token_limit: tokenBudget.response_limit,
+         token_warning_threshold: 0.8,
+-        token_warning: tokenBudget.feature_limit > 0 && ((tokenBudget.feature_used + result.tokens) / tokenBudget.feature_limit) >= 0.8,
+-        tokens_remaining_estimate: tokenBudget.limit
+-          ? Math.max(0, tokenBudget.limit - tokenBudget.used - result.tokens)
+-          : null,
+-        dot_token_limit: tokenBudget.feature_limit || null,
+-        dot_tokens_used: tokenBudget.feature_used + result.tokens,
++        token_warning: after.warning,
++        tokens_remaining_estimate: tokenBudget.limit ? after.remaining : null,
++        dot_token_limit: tokenBudget.limit || null,
++        dot_tokens_used: after.used,
+         context_mode: contextResult.decision.mode,
+         context_source: contextResult.decision.dataSource,
+         context_refresh_required: contextResult.decision.refreshRequired,
+         context_reason: contextResult.decision.reason,
+-        dot_tokens_remaining_estimate: tokenBudget.feature_limit
+-          ? Math.max(0, tokenBudget.feature_limit - tokenBudget.feature_used - result.tokens)
+-          : null,
++        dot_tokens_remaining_estimate: tokenBudget.limit ? after.remaining : null,
+       });
+     } catch (error: any) {
+-      releaseDotTokenReservation(access.empresaId, reservedTokens);
+-      console.error('[Filtra Dot]', error?.message || error);
++      // Regra de segurança única (`settleDotCallFailure`): só libera quando
++      // houver comprovação de que a solicitação NÃO foi enviada ao provedor.
++      // Resultado ambíguo mantém a reserva aberta até a reconciliação.
++      const messageText = String(error?.message || error);
++      await settleDotCallFailure({
++        error,
++        providerCalled,
++        empresaId: access.empresaId as string,
++        reservationId: activeReservation.id,
++        reservedTokens,
++      });
++      console.error('[Filtra Dot]', messageText);
+       return res.status(503).json({
+         error: 'O Filtra Dot está sem um provedor de IA disponível no localhost.',
+-        detail: process.env.NODE_ENV === 'production' ? undefined : String(error?.message || error),
++        detail: process.env.NODE_ENV === 'production' ? undefined : messageText,
+       });
+     }
+   });
+diff --git a/server.ts b/server.ts
+index 8b3809a..d10a5b8 100644
+--- a/server.ts
++++ b/server.ts
+@@ -62,9 +62,10 @@ import { ensureDotAdminSecuritySchema } from './services/dotAdminSecurity.js';
+ import { ensureDotAccessSchema } from './services/dotAccessControl.js';
+ import { ensureDotAgentSchema } from './services/dotAgent.js';
+ import { ensureMissionTables } from './services/dotAgentMissions.js';
+-import { startDotMonitorScheduler } from './services/dotScheduler.js';
+-import { startMonthlyReportScheduler, getMonthlyReportSchedulerStatus } from './services/monthlyReportScheduler.js';
+-import { startDotAgentWorker } from './services/dotAgentWorker.js';
++import { startDotMonitorScheduler, stopDotMonitorScheduler } from './services/dotScheduler.js';
++import { startMonthlyReportScheduler, getMonthlyReportSchedulerStatus, stopMonthlyReportScheduler } from './services/monthlyReportScheduler.js';
++import { startDotAgentWorker, stopDotAgentWorkerAndDrain } from './services/dotAgentWorker.js';
++import { ensureDotLedgerSchema } from './services/dotLedger.js';
+ import { mcpApp } from './filtraMcp.js';
+ import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
+ import { paypalConfigured } from './lib/paypal.js';
+@@ -77,14 +78,14 @@ import { ensurePushSchema, pushConfigured, initWebPush } from './lib/push.js';
+ import { ensureAiUsageSchema } from './lib/aiUsage.js';
+ import { ensureOpsTables } from './lib/opsLog.js';
+ import { ensureAuditSchema } from './lib/auditLog.js';
+-import { ensureRetryQueue, startRetryWorker } from './lib/retryQueue.js';
++import { ensureRetryQueue, startRetryWorker, stopRetryWorker } from './lib/retryQueue.js';
+ import { registerAllRetryHandlers } from './lib/retryHandlers.js';
+ import { ensurePlanPricingSchema } from './lib/planPricing.js';
+ import { allowPlanSwitch } from './lib/plans.js';
+ import { smtpConfigured } from './lib/mailer.js';
+ import { n8nConfigured } from './lib/n8n.js';
+-import { ensureAcquisitionEngineSchema, startAcquisitionWorker } from './lib/acquisitionEngine.js';
+-import { startAcquisitionReplenisher } from './lib/acquisitionReplenisher.js';
++import { ensureAcquisitionEngineSchema, startAcquisitionWorker, stopAcquisitionWorker } from './lib/acquisitionEngine.js';
++import { startAcquisitionReplenisher, stopAcquisitionReplenisher } from './lib/acquisitionReplenisher.js';
+ import { startProductHuntAcquisition } from './lib/acquisitionProductHunt.js';
+ import { startHubSpotAcquisitionSync } from './lib/hubspotAcquisitionSync.js';
+ import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
+@@ -225,6 +226,21 @@ const PORT = Number(process.env.PORT || 5000);
+ let server: Server | null = null;
+ let shuttingDown = false;
+ 
++/**
++ * Trabalhos de background que precisam parar ANTES de o pool do PostgreSQL
++ * ser fechado.
++ *
++ * Antes desta correção o shutdown fechava o banco com workers em voo, e cada
++ * redeploy do Render produzia "Connection terminated unexpectedly" / erros de
++ * reconexão no log. A sequência agora é: para de aceitar HTTP → para cada
++ * subsistema (com teto de tempo) → fecha o pool.
++ */
++const backgroundStops: Array<{ name: string; stop: () => void }> = [];
++
++function trackBackground(name: string, stop: () => void): void {
++  backgroundStops.push({ name, stop });
++}
++
+ 
+ 
+ async function runSentimentBackfillOnBoot() {
+@@ -270,6 +286,30 @@ async function gracefulShutdown(signal: string) {
+       await new Promise<void>((resolve) => server!.close(() => resolve()));
+       console.log('HTTP fechado.');
+     }
++    // Depois de fechar o HTTP não entram novas requisições; agora os
++    // subsistemas em background param, ainda com o banco aberto.
++    for (const entry of backgroundStops.slice().reverse()) {
++      try {
++        entry.stop();
++      } catch (e: any) {
++        console.warn(`Falha ao parar ${entry.name}:`, e?.message || e);
++      }
++    }
++    // Ordem importa: parar os trabalhos em background ANTES de fechar o pool.
++    // Fechar o PostgreSQL com um worker no meio de uma consulta produz os
++    // erros de reconexão ("Connection terminated unexpectedly") que aparecem
++    // no log do Render em todo redeploy. Cada parada é limitada no tempo e
++    // falha em silêncio: o shutdown nunca fica preso por um tick travado.
++    const drain = async (label: string, stop: () => Promise<unknown>) => {
++      try {
++        await stop();
++        console.log(`${label} parado.`);
++      } catch (e: any) {
++        console.warn(`Falha ao parar ${label}:`, e?.message || e);
++      }
++    };
++    await drain('DOT scheduler', () => stopDotMonitorScheduler(5_000));
++    await drain('DOT agent worker', () => stopDotAgentWorkerAndDrain(5_000));
+     await closeDB();
+     console.log('Banco fechado.');
+     clearTimeout(force);
+@@ -354,19 +394,27 @@ export async function startServer() {
+     await ensureRetryQueue(getDb());
+     registerAllRetryHandlers();
+     startRetryWorker();
++    trackBackground('retry worker', stopRetryWorker);
+   } catch (e) {
+     console.warn('retry queue:', e);
+   }
+   try {
+     await ensureAcquisitionEngineSchema(getDb());
+     startAcquisitionWorker();
+-    setTimeout(() => {
++    trackBackground('acquisition worker', stopAcquisitionWorker);
++    // O bootstrap atrasado do replenisher também é cancelado no encerramento:
++    // sem isso ele podia nascer DEPOIS do fechamento do pool do PostgreSQL.
++    const replenisherBoot = setTimeout(() => {
+       try {
+         startAcquisitionReplenisher();
+       } catch (e: any) {
+         console.warn('[acquisition-replenisher] delayed bootstrap failed:', e?.message || e);
+       }
+     }, 60_000);
++    trackBackground('acquisition replenisher', () => {
++      clearTimeout(replenisherBoot);
++      stopAcquisitionReplenisher();
++    });
+     await startProductHuntAcquisition();
+     await startHubSpotAcquisitionSync();
+   } catch (e) {
+@@ -381,6 +429,7 @@ export async function startServer() {
+     await ensureDotAccessSchema();
+     await ensureDotAgentSchema();
+     await ensureMissionTables();
++    await ensureDotLedgerSchema();
+   } catch (e) {
+     console.warn('dot schema:', e);
+   }
+@@ -434,6 +483,8 @@ export async function startServer() {
+     mountDotAdminRoutes(app);
+     startDotMonitorScheduler();
+     startDotAgentWorker();
++    trackBackground('DOT scheduler', () => { void stopDotMonitorScheduler(5_000); });
++    trackBackground('DOT agent worker', () => { void stopDotAgentWorkerAndDrain(5_000); });
+     console.log('[dot] Filtra Dot habilitado: rotas + monitor + agente em background.');
+   } else {
+     app.get('/api/dot/status', (_req, res) => res.status(403).json({ ok: false, enabled: false, access: false, error: 'Filtra Dot desativado. Defina FILTRA_DOT_ENABLED=1 para habilitar.' }));
+@@ -442,6 +493,7 @@ export async function startServer() {
+ 
+   // Agendador in-process do relatório mensal (sem cron externo e sem credenciais).
+   startMonthlyReportScheduler();
++  trackBackground('monthly report scheduler', stopMonthlyReportScheduler);
+ 
+   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
+   mountAdminPasswordResetRoutes(app, getDb);
+diff --git a/services/dotAgentWorker.ts b/services/dotAgentWorker.ts
+index 79dad4b..cc58bcf 100644
+--- a/services/dotAgentWorker.ts
++++ b/services/dotAgentWorker.ts
+@@ -3,6 +3,18 @@ import { runCurrentDotMissionStep } from './dotAgentMissionRunner.js';
+ 
+ let timer: NodeJS.Timeout | null = null;
+ let running = false;
++/**
++ * A promessa do tick em andamento, UMA SÓ para todos os caminhos:
++ *
++ *  - tick de inicialização (`startDotAgentWorker`);
++ *  - tick de timer (`setInterval`);
++ *  - tick acordado (`wakeDotAgentWorker`);
++ *  - o encerramento gracioso (`stopDotAgentWorkerAndDrain`) aguarda esta
++ *    mesma promessa em vez de uma cópia desconectada do trabalho real.
++ *
++ * Sem o compartilhamento, um tick iniciado pelo timer não era observado pelo drain:
++ * o shutdown fechava o pool com a rodada ainda em voo.
++ */
+ let tickInFlight: Promise<void> | null = null;
+ 
+ async function runTick() {
+@@ -40,14 +52,14 @@ async function runTick() {
+   }
+ }
+ 
+-// Falhas transitórias no banco não podem virar rejeições não tratadas:
+-// o processo Node encerrava quando db.all() falhava antes do loop por missão.
+-export async function runDotAgentWorkerTick(task: () => Promise<void> = runTick) {
+-  try {
+-    await task();
+-  } catch (error: any) {
+-    console.warn('[dot-agent-worker] tick falhou; nova tentativa no próximo ciclo:', error?.message || error);
+-  }
++/** Porta ÚNICA: inicia o tick (ou devolve o que já está em voo). */
++function scheduleTick(): Promise<void> {
++  if (tickInFlight) return tickInFlight;
++  const promise = runTick().finally(() => {
++    if (tickInFlight === promise) tickInFlight = null;
++  });
++  tickInFlight = promise;
++  return promise;
+ }
+ 
+ export function startDotAgentWorker() {
+@@ -56,19 +68,15 @@ export function startDotAgentWorker() {
+ 
+   const intervalMs = Math.max(60_000, Number(process.env.DOT_AGENT_WORKER_INTERVAL_MS || 300_000));
+ 
+-  void runDotAgentWorkerTick();
+-  timer = setInterval(() => void runDotAgentWorkerTick(), intervalMs);
++  void scheduleTick();
++  timer = setInterval(() => void scheduleTick(), intervalMs);
+   timer.unref();
+   console.log(`🤖 DOT agente em background: intervalo ${Math.round(intervalMs / 60000)} min.`);
+ }
+ 
+ export function wakeDotAgentWorker() {
+-  if (process.env.DOT_AGENT_WORKER_ENABLED === '0') return;
+-  if (tickInFlight) return tickInFlight;
+-  tickInFlight = runTick().finally(() => {
+-    tickInFlight = null;
+-  });
+-  return tickInFlight;
++  if (process.env.DOT_AGENT_WORKER_ENABLED === '0') return undefined;
++  return scheduleTick();
+ }
+ 
+ /** Estado do worker para observabilidade em `/api/dot/status`. */
+@@ -77,6 +85,7 @@ export function getDotAgentWorkerStatus() {
+     disabled: process.env.DOT_AGENT_WORKER_ENABLED === '0',
+     timer_active: Boolean(timer),
+     running,
++    in_flight: Boolean(tickInFlight),
+     interval_ms: Math.max(60_000, Number(process.env.DOT_AGENT_WORKER_INTERVAL_MS || 300_000)),
+   };
+ }
+@@ -86,3 +95,31 @@ export function stopDotAgentWorker() {
+   clearInterval(timer);
+   timer = null;
+ }
++
++/**
++ * Para o worker e aguarda (limitado) o tick em andamento — qualquer um:
++ * o de inicialização, o de timer ou o acordado. O encerramento gracioso só
++ * fecha o pool depois desta promessa assentar.
++ *
++ * O worker avança etapas determinísticas dentro de transações e com lock
++ * durável; interromper um tick no meio deixa a missão em `working`, que o
++ * próximo boot retoma. Ainda assim, o encerramento gracioso tenta terminar o
++ * tick atual antes de fechar o pool do PostgreSQL — fechar o banco com uma
++ * consulta em voo é o caminho mais curto para os erros de reconexão vistos
++ * no Render.
++ */
++export async function stopDotAgentWorkerAndDrain(timeoutMs = 5_000): Promise<{ drained: boolean; running: boolean }> {
++  stopDotAgentWorker();
++  const inFlight = tickInFlight;
++  if (!inFlight) return { drained: true, running };
++  let timedOut = false;
++  const guard = new Promise<void>((resolve) => {
++    const t = setTimeout(() => {
++      timedOut = true;
++      resolve();
++    }, Math.max(0, timeoutMs));
++    if (typeof (t as any).unref === 'function') (t as any).unref();
++  });
++  await Promise.race([inFlight.catch(() => undefined), guard]);
++  return { drained: !timedOut, running };
++}
+diff --git a/services/dotScheduler.ts b/services/dotScheduler.ts
+index 3fea550..5ddb1fb 100644
+--- a/services/dotScheduler.ts
++++ b/services/dotScheduler.ts
+@@ -40,6 +40,18 @@ const schedulerStatus: DotSchedulerStatus = {
+ 
+ let timer: NodeJS.Timeout | null = null;
+ let running = false;
++/**
++ * A rodada em andamento, quando existe.
++ *
++ * O agendador só usa `setInterval` (unref'd), mas uma rodada em curso mantém
++ * trabalho assíncrono vivo: sem referência, o encerramento gracioso do
++ * processo (SIGTERM do Render) poderia interromper uma rodada no meio de uma
++ * transação. `stopDotMonitorScheduler` permite aguardar a rodada terminar
++ * dentro do orçamento de shutdown.
++ */
++let currentRun: Promise<unknown> | null = null;
++/** Marcado pela parada: nenhuma rodada nova pode iniciar. */
++let stopped = false;
+ 
+ function errorMessage(error: unknown): string {
+   return error instanceof Error ? error.message : String(error);
+@@ -90,7 +102,7 @@ async function runDueDotMonitorsUnlocked() {
+     const companies = await db.all(
+       `SELECT id, plan, status, dot_monitor_last_at FROM empresas
+        WHERE status IN ('ativo', 'trial')
+-         AND LOWER(IFNULL(plan, '')) IN ('rei', 'rei-anual', 'corporativo', 'corporativo-anual', 'corp', 'corp-anual', 'corporate', 'corporate-anual')`
++         AND LOWER(IFNULL(plan, '')) IN ('rei', 'corporativo', 'corp', 'corporate')`
+     );
+     const schedulerCandidates = await db.all(
+       `SELECT status, LOWER(IFNULL(plan, '')) AS plan, COUNT(*) AS total
+@@ -194,10 +206,63 @@ export function startDotMonitorScheduler() {
+     return;
+   }
+   const interval = Math.max(60_000, Number(process.env.FILTRA_DOT_MONITOR_TICK_MS || 300_000));
+-  void runDueDotMonitors().catch((error) => console.warn('Dot scheduler startup:', errorMessage(error)));
+-  timer = setInterval(() => {
+-    void runDueDotMonitors().catch((error) => console.warn('Dot scheduler:', errorMessage(error)));
+-  }, interval);
++  stopped = false;
++  const tick = () => {
++    // Uma única rodada por vez; o tick REUTILIZA a rodada em andamento em vez
++    // de enfileirar uma cópia imediata de `runDueDotMonitors()`.
++    if (stopped || currentRun) return;
++    // `currentRun` recebe a promessa COMPLETA, incluindo o bloco de limpeza.
++    // Antes ele guardava a rodada e a limpeza rodava fora dele, então a parada
++    // podia retornar com a rodada já encerrada e uma consulta final ainda
++    // acontecendo depois (`22 !== 21` no teste de drenagem).
++    const run = (async () => {
++      try {
++        await runDueDotMonitors();
++      } catch (error) {
++        console.warn('Dot scheduler:', errorMessage(error));
++      } finally {
++        if (currentRun === run) currentRun = null;
++      }
++    })();
++    currentRun = run;
++  };
++  tick();
++  timer = setInterval(tick, interval);
+   timer.unref();
+   console.log(`Filtra Dot monitor ativo — tick ${Math.round(interval / 1000)}s`);
+ }
++
++/** Estado para `/api/dot/status` (observabilidade do agendador). */
++export function getDotSchedulerRuntimeStatus() {
++  return { timer_active: Boolean(timer), running, in_flight: Boolean(currentRun) };
++}
++
++/**
++ * Para o agendador e aguarda (limitado) a rodada em andamento.
++ *
++ * Chamado pelo encerramento gracioso: nunca espera indefinidamente — a rodada
++ * que não terminar dentro de `timeoutMs` continua interrompida pelo
++ * `process.exit` do shutdown, e nada é corrompido porque cada etapa é
++ * idempotente e transacional.
++ */
++export async function stopDotMonitorScheduler(timeoutMs = 5_000): Promise<{ stopped: boolean; in_flight: boolean }> {
++  stopped = true;
++  if (timer) {
++    clearInterval(timer);
++    timer = null;
++  }
++  const inFlight = currentRun;
++  if (!inFlight) return { stopped: true, in_flight: false };
++  // `currentRun` agora inclui o bloco `finally` que zera a referência: quando
++  // esta promessa resolve, NENHUMA consulta da rodada pode mais acontecer.
++  let timedOut = false;
++  const guard = new Promise<void>((resolve) => {
++    const t = setTimeout(() => {
++      timedOut = true;
++      resolve();
++    }, Math.max(0, timeoutMs));
++    if (typeof (t as any).unref === 'function') (t as any).unref();
++  });
++  await Promise.race([inFlight.catch(() => undefined), guard]);
++  return { stopped: !timedOut, in_flight: true };
++}
+
