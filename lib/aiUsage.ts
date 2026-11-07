@@ -20,6 +20,13 @@ export async function ensureAiUsageSchema(db: Database) {
   if (!cols.includes('feature')) {
     await db.exec(`ALTER TABLE ai_usage ADD COLUMN feature TEXT`);
   }
+  // Distinção entre tokens de entrada e saída (o orçamento consome a soma).
+  if (!cols.includes('tokens_input')) {
+    await db.exec(`ALTER TABLE ai_usage ADD COLUMN tokens_input INTEGER`);
+  }
+  if (!cols.includes('tokens_output')) {
+    await db.exec(`ALTER TABLE ai_usage ADD COLUMN tokens_output INTEGER`);
+  }
 }
 
 export async function recordAiUsage(
@@ -30,21 +37,31 @@ export async function recordAiUsage(
     tokens: number;
     provider?: string;
     feature?: string | null;
+    inputTokens?: number | null;
+    outputTokens?: number | null;
   }
 ) {
   const tokens = Math.max(0, Math.round(Number(opts.tokens) || 0));
   if (!tokens) return;
+  const input = opts.inputTokens === null || opts.inputTokens === undefined
+    ? null
+    : Math.max(0, Math.round(Number(opts.inputTokens) || 0));
+  const output = opts.outputTokens === null || opts.outputTokens === undefined
+    ? null
+    : Math.max(0, Math.round(Number(opts.outputTokens) || 0));
   try {
     await ensureAiUsageSchema(db);
     await db.run(
-      `INSERT INTO ai_usage (empresa_id, tipo, tokens, provider, feature, criado_em)
-       VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+      `INSERT INTO ai_usage (empresa_id, tipo, tokens, provider, feature, tokens_input, tokens_output, criado_em)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
       [
         opts.empresaId || null,
         String(opts.tipo).slice(0, 40),
         tokens,
         opts.provider ? String(opts.provider).slice(0, 20) : null,
         opts.feature ? String(opts.feature).toLowerCase().slice(0, 40) : null,
+        input,
+        output,
       ]
     );
   } catch (e: any) {
