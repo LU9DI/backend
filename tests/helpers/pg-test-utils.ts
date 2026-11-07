@@ -30,9 +30,48 @@ export const DDL_ERROR_PATTERNS: RegExp[] = [
   /advisory lock/i,
 ];
 
+/** Hosts locais permitidos por padrão para testes PostgreSQL reais. */
+const LOCAL_TEST_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+
+/**
+ * Guarda OBRIGATÓRIA: o teste PostgreSQL cria/derruba bancos no servidor
+ * indicado por DATABASE_URL. Sem esta trava, apontar DATABASE_URL para um
+ * servidor real executaria `CREATE DATABASE`/`DROP DATABASE` em produção.
+ *
+ * Regras:
+ *  - hosts locais (localhost/127.0.0.1/::1) são permitidos;
+ *  - qualquer outro host só entra se estiver listado (separado por vírgula)
+ *    em `FILTERA_PG_TEST_ALLOWED_HOSTS`;
+ *  - nunca confie na presença de "test" no nome do host/banco — não é prova
+ *    de isolamento.
+ */
+export function assertSafeTestDatabaseUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error('DATABASE_URL de teste PostgreSQL inválida (não é uma URL válida).');
+  }
+  if (!/^postgres(ql)?:$/i.test(parsed.protocol)) {
+    throw new Error('DATABASE_URL de teste PostgreSQL deve ser uma URL postgres:// ou postgresql://.');
+  }
+  const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  const allowed = (process.env.FILTERA_PG_TEST_ALLOWED_HOSTS || '')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  if (!LOCAL_TEST_HOSTS.has(host) && !allowed.includes(host)) {
+    throw new Error(
+      `DATABASE_URL de teste PostgreSQL recusada: host "${host}" não é localhost ` +
+        `nem está em FILTERA_PG_TEST_ALLOWED_HOSTS. Testes PostgreSQL jamais rodam contra produção.`,
+    );
+  }
+}
+
 export function databaseUrl(): string {
   const url = process.env.DATABASE_URL?.trim();
   assert.ok(url, 'DATABASE_URL de teste PostgreSQL é obrigatória para testes *.pg.test.ts');
+  assertSafeTestDatabaseUrl(url);
   return url;
 }
 
