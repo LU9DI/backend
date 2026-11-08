@@ -290,6 +290,16 @@ export async function retryQueueStats(db: Database = getDb()) {
 }
 
 let workerStarted = false;
+let retryTimer: NodeJS.Timeout | null = null;
+
+/** Para o worker de retry (encerramento gracioso). Idempotente. */
+export function stopRetryWorker(): void {
+  if (retryTimer) {
+    clearInterval(retryTimer);
+    retryTimer = null;
+  }
+  workerStarted = false;
+}
 
 export function startRetryWorker() {
   if (workerStarted) return;
@@ -311,5 +321,6 @@ export function startRetryWorker() {
   };
 
   tick();
-  setInterval(tick, interval);
+  retryTimer = setInterval(tick, interval);
+  retryTimer.unref();
 }

@@ -471,6 +471,22 @@ export async function queueEligibleAcquisition(limit = 25) {
   }
 }
 
+let acquisitionTimer: NodeJS.Timeout | null = null;
+
+/**
+ * Para o worker de aquisição (encerramento gracioso). Idempotente.
+ *
+ * Sem isso, um tick em voo podia continuar consultando o PostgreSQL depois
+ * que o pool foi fechado — a origem dos erros de reconexão no redeploy.
+ */
+export function stopAcquisitionWorker(): void {
+  if (acquisitionTimer) {
+    clearInterval(acquisitionTimer);
+    acquisitionTimer = null;
+  }
+  started = false;
+}
+
 export function startAcquisitionWorker() {
   if (started || process.env.ACQUISITION_ENGINE === '0') return;
   started = true;
@@ -482,7 +498,8 @@ export function startAcquisitionWorker() {
 
   };
   tick();
-  setInterval(tick, ENGINE_INTERVAL_MS);
+  acquisitionTimer = setInterval(tick, ENGINE_INTERVAL_MS);
+  acquisitionTimer.unref();
 }
 
 export async function acquisitionEngineStatus() {

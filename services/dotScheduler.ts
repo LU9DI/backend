@@ -41,6 +41,19 @@ const schedulerStatus: DotSchedulerStatus = {
 let timer: NodeJS.Timeout | null = null;
 let running = false;
 
+/**
+ * A rodada em andamento, quando existe.
+ *
+ * O agendador só usa `setInterval` (unref'd), mas uma rodada em curso mantém
+ * trabalho assíncrono vivo: sem referência, o encerramento gracioso do
+ * processo (SIGTERM do Render) poderia interromper uma rodada no meio de uma
+ * transação. `stopDotMonitorScheduler` permite aguardar a rodada terminar
+ * dentro do orçamento de shutdown.
+ */
+let currentRun: Promise<unknown> | null = null;
+/** Marcado pela parada: nenhuma rodada NOVA pode iniciar. */
+let stopped = false;
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -194,10 +207,68 @@ export function startDotMonitorScheduler() {
     return;
   }
   const interval = Math.max(60_000, Number(process.env.FILTRA_DOT_MONITOR_TICK_MS || 300_000));
-  void runDueDotMonitors().catch((error) => console.warn('Dot scheduler startup:', errorMessage(error)));
-  timer = setInterval(() => {
-    void runDueDotMonitors().catch((error) => console.warn('Dot scheduler:', errorMessage(error)));
-  }, interval);
+  stopped = false;
+  const tick = () => {
+    // Uma única rodada por vez; o tick REUTILIZA a rodada em andamento em vez
+    // de enfileirar uma cópia imediata de `runDueDotMonitors()`.
+    if (stopped || currentRun) return;
+    // `currentRun` recebe a promessa COMPLETA, incluindo o bloco de limpeza —
+    // assim a parada só retorna quando NENHUMA consulta da rodada pode mais
+    // acontecer. Cada etapa interna é idempotente e transacional.
+    // `let` (e nao `const`) evita o TS2454: a promessa e atribuida antes de o
+    // `finally` assincrono executar; a comparacao por identidade impede que um
+    // `stop`+`start` concorrente zere a referencia de outra rodada.
+    let run: Promise<void> | null = null;
+    run = (async () => {
+      try {
+        await runDueDotMonitors();
+      } catch (error) {
+        console.warn('Dot scheduler:', errorMessage(error));
+      } finally {
+        if (currentRun === run) currentRun = null;
+      }
+    })();
+    currentRun = run;
+  };
+  tick();
+  timer = setInterval(tick, interval);
   timer.unref();
   console.log(`Filtra Dot monitor ativo — tick ${Math.round(interval / 1000)}s`);
+}
+
+/** Estado para `/api/dot/status` (observabilidade do agendador). */
+export function getDotSchedulerRuntimeStatus() {
+  return { timer_active: Boolean(timer), running, in_flight: Boolean(currentRun), stopped };
+}
+
+/**
+ * Para o agendador e aguarda (limitado) a rodada em andamento.
+ *
+ * Nunca espera indefinidamente — a rodada que não terminar dentro de
+ * `timeoutMs` é interrompida pelo `process.exit` do shutdown, e nada é
+ * corrompido porque cada etapa é idempotente e transacional.
+ *
+ * Não fecha conexões nem toca o pool do banco, e não executa sweep nem
+ * reconciliação do ledger: reservas ambíguas do Dot permanecem intactas.
+ */
+export async function stopDotMonitorScheduler(timeoutMs = 5_000): Promise<{ stopped: boolean; in_flight: boolean }> {
+  stopped = true;
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
+  const inFlight = currentRun;
+  if (!inFlight) return { stopped: true, in_flight: false };
+  let timedOut = false;
+  const guard = new Promise<void>((resolve) => {
+    const t = setTimeout(() => {
+      timedOut = true;
+      resolve();
+    }, Math.max(0, timeoutMs));
+    if (typeof (t as any).unref === 'function') (t as any).unref();
+  });
+  await Promise.race([inFlight.catch(() => undefined), guard]);
+  // Sucesso: o `finally` da rodada já zerou `currentRun` -> nada em voo.
+  // Timeout: a rodada continua e NÃO pode ser reportada como drenada.
+  return { stopped: !timedOut, in_flight: timedOut ? Boolean(currentRun) : false };
 }

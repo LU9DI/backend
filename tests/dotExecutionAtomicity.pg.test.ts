@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { test } from 'node:test';
 import { closeDB, getDb, initDB } from '../lib/db.js';
+import { databaseUrl } from './helpers/pg-test-utils.js';
 import { ensureDotAccessSchema } from '../services/dotAccessControl.js';
 import {
   approveDotAction,
@@ -20,7 +21,8 @@ import { dotInternalActor, dotUserActor } from '../services/dotActor.js';
 process.env.NODE_ENV = 'test';
 
 function requireDatabaseUrl() {
-  assert.ok(process.env.DATABASE_URL, 'DATABASE_URL de teste PostgreSQL é obrigatória');
+  // Guarda central: localhost-only/allowlist (bloqueia banco remoto antes de conectar).
+  databaseUrl();
 }
 
 async function ensureDecisionTable() {
