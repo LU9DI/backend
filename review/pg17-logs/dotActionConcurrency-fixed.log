@@ -1,0 +1,26 @@
+TAP version 13
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: duas instâncias PostgreSQL concorrentes retornam a mesma ação sem auditoria duplicada
+ok 1 - duas instâncias PostgreSQL concorrentes retornam a mesma ação sem auditoria duplicada
+  ---
+  duration_ms: 5583.520811
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: duas instâncias PostgreSQL não aprovam duas vezes a mesma ação
+ok 2 - duas instâncias PostgreSQL não aprovam duas vezes a mesma ação
+  ---
+  duration_ms: 4897.940526
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 11307.240137

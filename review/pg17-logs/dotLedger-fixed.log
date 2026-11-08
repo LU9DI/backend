@@ -1,0 +1,48 @@
+TAP version 13
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PostgreSQL: a tabela do ledger e o índice único parcial existem após as migrações
+ok 1 - PostgreSQL: a tabela do ledger e o índice único parcial existem após as migrações
+  ---
+  duration_ms: 7585.709158
+  type: 'test'
+  ...
+# Subtest: PostgreSQL: reserva e finalização gravam consumo real e liberam a reserva
+ok 2 - PostgreSQL: reserva e finalização gravam consumo real e liberam a reserva
+  ---
+  duration_ms: 427.753198
+  type: 'test'
+  ...
+# Subtest: PostgreSQL: duas instâncias finalizando a mesma reserva gravam um único consumo
+ok 3 - PostgreSQL: duas instâncias finalizando a mesma reserva gravam um único consumo
+  ---
+  duration_ms: 5446.514973
+  type: 'test'
+  ...
+# Subtest: PostgreSQL: reservas concorrentes são serializadas e não ultrapassam o saldo
+ok 4 - PostgreSQL: reservas concorrentes são serializadas e não ultrapassam o saldo
+  ---
+  duration_ms: 12883.089011
+  type: 'test'
+  ...
+# Subtest: PostgreSQL: sweep e finalize concorrentes não deixam consumo órfão nem reserva reaberta
+ok 5 - PostgreSQL: sweep e finalize concorrentes não deixam consumo órfão nem reserva reaberta
+  ---
+  duration_ms: 611.433606
+  type: 'test'
+  ...
+# Subtest: PostgreSQL: reserva ambígua continua comprometendo o orçamento mesmo 48h após expirar
+ok 6 - PostgreSQL: reserva ambígua continua comprometendo o orçamento mesmo 48h após expirar
+  ---
+  duration_ms: 610.245505
+  type: 'test'
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 6
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 31787.518364

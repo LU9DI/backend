@@ -1,0 +1,3438 @@
+
+> backend@1.0.5 test
+> node scripts/run-tests.mjs
+
+Executando 83 arquivo(s) de teste em v22.22.1.
+
+TAP version 13
+# Subtest: e-mail corporativo: aceita domínio próprio e recusa gratuito/público/inválido
+ok 1 - e-mail corporativo: aceita domínio próprio e recusa gratuito/público/inválido
+  ---
+  duration_ms: 48.912
+  type: 'test'
+  ...
+# Subtest: recusa governo estrangeiro, caixas de papel (ouvidoria/rh) e instituições não comerciais
+ok 2 - recusa governo estrangeiro, caixas de papel (ouvidoria/rh) e instituições não comerciais
+  ---
+  duration_ms: 40.597499
+  type: 'test'
+  ...
+# Subtest: legítimo interesse: desligado por padrão
+ok 3 - legítimo interesse: desligado por padrão
+  ---
+  duration_ms: 0.8306
+  type: 'test'
+  ...
+# Subtest: legítimo interesse: ligado exige base pública, e-mail corporativo e ausência de opt-in
+ok 4 - legítimo interesse: ligado exige base pública, e-mail corporativo e ausência de opt-in
+  ---
+  duration_ms: 0.8406
+  type: 'test'
+  ...
+# Subtest: legítimo interesse: recusa entes públicos pelo nome mesmo com e-mail aparentemente comercial
+ok 5 - legítimo interesse: recusa entes públicos pelo nome mesmo com e-mail aparentemente comercial
+  ---
+  duration_ms: 18.6851
+  type: 'test'
+  ...
+# Subtest: teto diário próprio: padrão 10, mínimo 1, máximo 30
+ok 6 - teto diário próprio: padrão 10, mínimo 1, máximo 30
+  ---
+  duration_ms: 0.7453
+  type: 'test'
+  ...
+# Subtest: mensagem por legítimo interesse informa origem, base legal e descadastro; opt-in não leva o aviso
+ok 7 - mensagem por legítimo interesse informa origem, base legal e descadastro; opt-in não leva o aviso
+  ---
+  duration_ms: 3676.667863
+  type: 'test'
+  ...
+# Subtest: resolveIpv4: IP literal passa direto e host inexistente cai em null
+ok 8 - resolveIpv4: IP literal passa direto e host inexistente cai em null
+  ---
+  duration_ms: 906.77889
+  type: 'test'
+  ...
+# Subtest: ACQUISITION_TEST_EMAILS libera apenas os endereços listados
+ok 9 - ACQUISITION_TEST_EMAILS libera apenas os endereços listados
+  ---
+  duration_ms: 1.037
+  type: 'test'
+  ...
+# Subtest: aceita empresas mal avaliadas com avaliações suficientes
+ok 10 - aceita empresas mal avaliadas com avaliações suficientes
+  ---
+  duration_ms: 1.5288
+  type: 'test'
+  ...
+# Subtest: rejeita empresas bem avaliadas, sem nota ou com poucas avaliações
+ok 11 - rejeita empresas bem avaliadas, sem nota ou com poucas avaliações
+  ---
+  duration_ms: 0.3278
+  type: 'test'
+  ...
+# Subtest: limites configuráveis por env
+ok 12 - limites configuráveis por env
+  ---
+  duration_ms: 0.2597
+  type: 'test'
+  ...
+# [mail] acquisition_email bloqueado: ACQUISITION_REPLY_TO não configurado
+# [mail] Resend OK to=a@empresa.com.br id=msg_1
+# [mail] Resend OK to=a@empresa.com.br id=msg_2
+# Subtest: janela de envio: horário comercial em dia útil
+ok 13 - janela de envio: horário comercial em dia útil
+  ---
+  duration_ms: 1670.269681
+  type: 'test'
+  ...
+# Subtest: janela de envio: fim de semana liberado por env
+ok 14 - janela de envio: fim de semana liberado por env
+  ---
+  duration_ms: 2.8074
+  type: 'test'
+  ...
+# Subtest: janela de envio: horas configuráveis e valor inválido volta ao padrão
+ok 15 - janela de envio: horas configuráveis e valor inválido volta ao padrão
+  ---
+  duration_ms: 3.5203
+  type: 'test'
+  ...
+# Subtest: captação é bloqueada sem ACQUISITION_REPLY_TO
+ok 16 - captação é bloqueada sem ACQUISITION_REPLY_TO
+  ---
+  duration_ms: 3.6546
+  type: 'test'
+  ...
+# Subtest: captação envia reply_to para a Resend quando configurado
+ok 17 - captação envia reply_to para a Resend quando configurado
+  ---
+  duration_ms: 771.796392
+  type: 'test'
+  ...
+# Subtest: períodos padrão: manhã, tarde e noite com intervalos entre eles
+ok 18 - períodos padrão: manhã, tarde e noite com intervalos entre eles
+  ---
+  duration_ms: 2.4579
+  type: 'test'
+  ...
+# Subtest: teto diário é dividido entre os períodos de forma acumulada
+ok 19 - teto diário é dividido entre os períodos de forma acumulada
+  ---
+  duration_ms: 1.6355
+  type: 'test'
+  ...
+# Subtest: ACQUISITION_SEND_HOURS aceita lista e valor inválido volta ao padrão
+ok 20 - ACQUISITION_SEND_HOURS aceita lista e valor inválido volta ao padrão
+  ---
+  duration_ms: 0.3903
+  type: 'test'
+  ...
+# Subtest: captação envia cabeçalhos List-Unsubscribe (um clique) para a Resend
+ok 21 - captação envia cabeçalhos List-Unsubscribe (um clique) para a Resend
+  ---
+  duration_ms: 2.4693
+  type: 'test'
+  ...
+# Subtest: AI providers
+    # Subtest: listAiProviders respeita chaves ausentes
+    ok 1 - listAiProviders respeita chaves ausentes
+      ---
+      duration_ms: 3.3092
+      type: 'test'
+      ...
+    # Subtest: detecta groq quando só GROQ_API_KEY existe
+    ok 2 - detecta groq quando só GROQ_API_KEY existe
+      ---
+      duration_ms: 0.6358
+      type: 'test'
+      ...
+    1..2
+ok 22 - AI providers
+  ---
+  duration_ms: 6.3804
+  type: 'suite'
+  ...
+# Subtest: AI load balance stats
+    # Subtest: getAiLoadStats expõe mode e contadores
+    ok 1 - getAiLoadStats expõe mode e contadores
+      ---
+      duration_ms: 2.013
+      type: 'test'
+      ...
+    # Subtest: listAiProviders sem chaves fica vazio
+    ok 2 - listAiProviders sem chaves fica vazio
+      ---
+      duration_ms: 1.5756
+      type: 'test'
+      ...
+    1..2
+ok 23 - AI load balance stats
+  ---
+  duration_ms: 5.5874
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-ai-usage-dedup-1794165413416-6610.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: callAI — contabilidade única
+    # Subtest: callAI sem skipUsageRecord grava UMA linha com tokens de entrada/saída
+    ok 1 - callAI sem skipUsageRecord grava UMA linha com tokens de entrada/saída
+      ---
+      duration_ms: 266.087397
+      type: 'test'
+      ...
+    # Subtest: callAI com skipUsageRecord não grava nada — o ledger é a fonte única
+    ok 2 - callAI com skipUsageRecord não grava nada — o ledger é a fonte única
+      ---
+      duration_ms: 8.9755
+      type: 'test'
+      ...
+    # Subtest: setCallAIImpl: ativo em NODE_ENV=test e recusado fora dele
+    ok 3 - setCallAIImpl: ativo em NODE_ENV=test e recusado fora dele
+      ---
+      duration_ms: 7.7651
+      type: 'test'
+      ...
+    1..3
+ok 24 - callAI — contabilidade única
+  ---
+  duration_ms: 1528.337684
+  type: 'suite'
+  ...
+# ok resolvePlano mensal e anual
+# ok listPlanosPublicos tem 10 entradas
+# ok PLANOS unitAmount coerente com display
+# ok relatório e IA por plano
+# ok tokens e unidades
+# billingActivate.test done
+# Subtest: tests/billingActivate.test.ts
+ok 7 - tests/billingActivate.test.ts
+  ---
+  duration_ms: 787.031292
+  type: 'test'
+  ...
+# Subtest: normalizarCnpj
+    # Subtest: remove máscara
+    ok 1 - remove máscara
+      ---
+      duration_ms: 1.4164
+      type: 'test'
+      ...
+    1..1
+ok 26 - normalizarCnpj
+  ---
+  duration_ms: 3.576899
+  type: 'suite'
+  ...
+# Subtest: cnpjValido
+    # Subtest: rejeita vazio e repetidos
+    ok 1 - rejeita vazio e repetidos
+      ---
+      duration_ms: 0.8476
+      type: 'test'
+      ...
+    # Subtest: rejeita tamanho errado
+    ok 2 - rejeita tamanho errado
+      ---
+      duration_ms: 0.3704
+      type: 'test'
+      ...
+    # Subtest: aceita CNPJ válido 11.222.333/0001-81
+    ok 3 - aceita CNPJ válido 11.222.333/0001-81
+      ---
+      duration_ms: 0.5822
+      type: 'test'
+      ...
+    # Subtest: rejeita dígito verificador errado
+    ok 4 - rejeita dígito verificador errado
+      ---
+      duration_ms: 0.2969
+      type: 'test'
+      ...
+    1..4
+ok 27 - cnpjValido
+  ---
+  duration_ms: 2.6576
+  type: 'suite'
+  ...
+# Subtest: company reviews shared cache
+    # Subtest: reuses the complete review set for panel and report consumers
+    ok 1 - reuses the complete review set for panel and report consumers
+      ---
+      duration_ms: 3.7361
+      type: 'test'
+      ...
+    # Subtest: does not repopulate stale cache when invalidated during an in-flight query
+    ok 2 - does not repopulate stale cache when invalidated during an in-flight query
+      ---
+      duration_ms: 1.0142
+      type: 'test'
+      ...
+    # Subtest: does not share cached rows between distinct database connections
+    ok 3 - does not share cached rows between distinct database connections
+      ---
+      duration_ms: 0.5848
+      type: 'test'
+      ...
+    1..3
+ok 28 - company reviews shared cache
+  ---
+  duration_ms: 9.3365
+  type: 'suite'
+  ...
+# Subtest: uma reclamação por dispositivo/WhatsApp
+    # Subtest: permite primeira reclamação
+    ok 1 - permite primeira reclamação
+      ---
+      duration_ms: 1.6665
+      type: 'test'
+      ...
+    # Subtest: bloqueia segunda reclamação pelo mesmo IP
+    ok 2 - bloqueia segunda reclamação pelo mesmo IP
+      ---
+      duration_ms: 0.5044
+      type: 'test'
+      ...
+    # Subtest: bloqueia segunda reclamação pelo mesmo WhatsApp
+    ok 3 - bloqueia segunda reclamação pelo mesmo WhatsApp
+      ---
+      duration_ms: 0.7238
+      type: 'test'
+      ...
+    # Subtest: notas positivas não entram na regra
+    ok 4 - notas positivas não entram na regra
+      ---
+      duration_ms: 0.4559
+      type: 'test'
+      ...
+    # Subtest: ReviewFraudError usa status 409 para conflito
+    ok 5 - ReviewFraudError usa status 409 para conflito
+      ---
+      duration_ms: 0.6596
+      type: 'test'
+      ...
+    1..5
+ok 29 - uma reclamação por dispositivo/WhatsApp
+  ---
+  duration_ms: 12.8122
+  type: 'suite'
+  ...
+# [cors] origem bloqueada: https://unknown-preview.example
+# Subtest: allows the exact production frontend origins and rejects unknown origins
+ok 30 - allows the exact production frontend origins and rejects unknown origins
+  ---
+  duration_ms: 5.7831
+  type: 'test'
+  ...
+# Subtest: dateValidation
+    # Subtest: currentMonthYYYYMM
+    ok 1 - currentMonthYYYYMM
+      ---
+      duration_ms: 2.4955
+      type: 'test'
+      ...
+    # Subtest: aceita mês válido
+    ok 2 - aceita mês válido
+      ---
+      duration_ms: 0.8758
+      type: 'test'
+      ...
+    # Subtest: default = mês atual
+    ok 3 - default = mês atual
+      ---
+      duration_ms: 0.727
+      type: 'test'
+      ...
+    # Subtest: rejeita formato errado
+    ok 4 - rejeita formato errado
+      ---
+      duration_ms: 0.503
+      type: 'test'
+      ...
+    # Subtest: rejeita mês 13
+    ok 5 - rejeita mês 13
+      ---
+      duration_ms: 0.6012
+      type: 'test'
+      ...
+    # Subtest: rejeita mês 00
+    ok 6 - rejeita mês 00
+      ---
+      duration_ms: 0.8405
+      type: 'test'
+      ...
+    # Subtest: rejeita mês futuro
+    ok 7 - rejeita mês futuro
+      ---
+      duration_ms: 0.6933
+      type: 'test'
+      ...
+    # Subtest: rejeita ano muito antigo
+    ok 8 - rejeita ano muito antigo
+      ---
+      duration_ms: 0.8753
+      type: 'test'
+      ...
+    # Subtest: normaliza padding
+    ok 9 - normaliza padding
+      ---
+      duration_ms: 1.0213
+      type: 'test'
+      ...
+    # Subtest: ISO date válida
+    ok 10 - ISO date válida
+      ---
+      duration_ms: 1.5744
+      type: 'test'
+      ...
+    # Subtest: ISO date inválida (31 fev)
+    ok 11 - ISO date inválida (31 fev)
+      ---
+      duration_ms: 0.5406
+      type: 'test'
+      ...
+    # Subtest: range invertido
+    ok 12 - range invertido
+      ---
+      duration_ms: 0.4076
+      type: 'test'
+      ...
+    # Subtest: compareYYYYMM
+    ok 13 - compareYYYYMM
+      ---
+      duration_ms: 0.4664
+      type: 'test'
+      ...
+    1..13
+ok 31 - dateValidation
+  ---
+  duration_ms: 16.0972
+  type: 'suite'
+  ...
+# Subtest: local PostgreSQL may use plaintext for development
+ok 32 - local PostgreSQL may use plaintext for development
+  ---
+  duration_ms: 1.6948
+  type: 'test'
+  ...
+# Subtest: remote PostgreSQL validates TLS certificates by default
+ok 33 - remote PostgreSQL validates TLS certificates by default
+  ---
+  duration_ms: 1.2238
+  type: 'test'
+  ...
+# Subtest: PGSSL=0 cannot disable TLS for a remote database
+ok 34 - PGSSL=0 cannot disable TLS for a remote database
+  ---
+  duration_ms: 0.7918
+  type: 'test'
+  ...
+# Subtest: IPv6 loopback is treated as local
+ok 35 - IPv6 loopback is treated as local
+  ---
+  duration_ms: 0.2733
+  type: 'test'
+  ...
+# [schema] Estruturas obrigatórias ausentes: tabela password_resets, coluna usuarios.email
+# [schema] Estruturas obrigatórias ausentes: coluna reviews.createdAt, coluna reviews.fraud_flags, coluna reviews.origin, coluna reviews.client_whatsapp, coluna reviews.sentiment, coluna reviews.sentiment_score, coluna reviews.sentiment_source, coluna reviews.locale, coluna reviews.unidade_id, coluna reviews.treated_at, coluna reviews.treated_note
+# Subtest: requireSchema valida sem executar DDL quando o schema está completo
+ok 36 - requireSchema valida sem executar DDL quando o schema está completo
+  ---
+  duration_ms: 3.6312
+  type: 'test'
+  ...
+# Subtest: requireSchema falha explicitamente quando uma estrutura obrigatória está ausente
+ok 37 - requireSchema falha explicitamente quando uma estrutura obrigatória está ausente
+  ---
+  duration_ms: 4.2772
+  type: 'test'
+  ...
+# Subtest: caminhos de requisição não contêm DDL
+ok 38 - caminhos de requisição não contêm DDL
+  ---
+  duration_ms: 95.4129
+  type: 'test'
+  ...
+# Subtest: adapter PostgreSQL não usa pool global mutável e expõe o lock de migração
+ok 39 - adapter PostgreSQL não usa pool global mutável e expõe o lock de migração
+  ---
+  duration_ms: 1.04
+  type: 'test'
+  ...
+# Subtest: requireReviewSchema falha explicitamente e não executa DDL
+ok 40 - requireReviewSchema falha explicitamente e não executa DDL
+  ---
+  duration_ms: 1.3409
+  type: 'test'
+  ...
+# Subtest: chave do advisory lock de migração é estável e positiva (int8)
+ok 41 - chave do advisory lock de migração é estável e positiva (int8)
+  ---
+  duration_ms: 20.5837
+  type: 'test'
+  ...
+# Subtest: normaliza aliases anuais sem inventar um plano
+ok 42 - normaliza aliases anuais sem inventar um plano
+  ---
+  duration_ms: 2.2608
+  type: 'test'
+  ...
+# Subtest: plano ausente ou desconhecido permanece não identificado
+ok 43 - plano ausente ou desconhecido permanece não identificado
+  ---
+  duration_ms: 0.3788
+  type: 'test'
+  ...
+# Subtest: cotas do Dot só existem para planos autorizados
+ok 44 - cotas do Dot só existem para planos autorizados
+  ---
+  duration_ms: 0.4419
+  type: 'test'
+  ...
+# Subtest: DOT demo mode is opt-in, centralized and never available in production
+ok 45 - DOT demo mode is opt-in, centralized and never available in production
+  ---
+  duration_ms: 26.5859
+  type: 'test'
+  ...
+# Subtest: DOT execution binds permission to authenticated actor
+ok 46 - DOT execution binds permission to authenticated actor
+  ---
+  duration_ms: 1.4644
+  type: 'test'
+  ...
+# Subtest: approval cannot execute the action inline
+ok 47 - approval cannot execute the action inline
+  ---
+  duration_ms: 1.0054
+  type: 'test'
+  ...
+# Subtest: external side effects remain blocked by the execution gateway
+ok 48 - external side effects remain blocked by the execution gateway
+  ---
+  duration_ms: 0.5951
+  type: 'test'
+  ...
+# Subtest: permission changes require an authenticated granting actor and are audited
+ok 49 - permission changes require an authenticated granting actor and are audited
+  ---
+  duration_ms: 0.8952
+  type: 'test'
+  ...
+# Subtest: tenant scoping is present on mission and action access paths
+ok 50 - tenant scoping is present on mission and action access paths
+  ---
+  duration_ms: 14.0394
+  type: 'test'
+  ...
+# Subtest: DOT agent goal mutations require an authenticated granular actor
+ok 51 - DOT agent goal mutations require an authenticated granular actor
+  ---
+  duration_ms: 0.6751
+  type: 'test'
+  ...
+# Subtest: DOT session scope includes tenant and authenticated user identity
+ok 52 - DOT session scope includes tenant and authenticated user identity
+  ---
+  duration_ms: 0.9199
+  type: 'test'
+  ...
+# Subtest: DOT execution cannot proceed without an authenticated actor permission
+ok 53 - DOT execution cannot proceed without an authenticated actor permission
+  ---
+  duration_ms: 0.8537
+  type: 'test'
+  ...
+# Subtest: DOT execution audit preserves the authenticated actor
+ok 54 - DOT execution audit preserves the authenticated actor
+  ---
+  duration_ms: 1.3467
+  type: 'test'
+  ...
+# Subtest: DOT mission approval is a server-side execution barrier
+ok 55 - DOT mission approval is a server-side execution barrier
+  ---
+  duration_ms: 0.4773
+  type: 'test'
+  ...
+# Subtest: DOT ownership comes from empresa_owners, never from role claims
+ok 56 - DOT ownership comes from empresa_owners, never from role claims
+  ---
+  duration_ms: 0.4172
+  type: 'test'
+  ...
+# Subtest: DOT PIN: scrypt+salt, lockout persistido enquanto a sessão é vinculada e versionada
+ok 57 - DOT PIN: scrypt+salt, lockout persistido enquanto a sessão é vinculada e versionada
+  ---
+  duration_ms: 65.3319
+  type: 'test'
+  ...
+# Subtest: DOT admin routes: only owner manages; header+sessão em toda mutação protegida
+ok 58 - DOT admin routes: only owner manages; header+sessão em toda mutação protegida
+  ---
+  duration_ms: 8.1739
+  type: 'test'
+  ...
+# Subtest: DOT request paths never execute DDL de tabelas centrais
+ok 59 - DOT request paths never execute DDL de tabelas centrais
+  ---
+  duration_ms: 3.2913
+  type: 'test'
+  ...
+# Subtest: DOT owner provisioning is validated against the DB, audited and admin-only
+ok 60 - DOT owner provisioning is validated against the DB, audited and admin-only
+  ---
+  duration_ms: 1.396
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-access-control-test.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Controle de acesso DOT: permissão é sempre escopada por empresa
+ok 61 - Controle de acesso DOT: permissão é sempre escopada por empresa
+  ---
+  duration_ms: 209.886
+  type: 'test'
+  ...
+# Subtest: Controle de acesso DOT: concessão, revogação e auditoria
+ok 62 - Controle de acesso DOT: concessão, revogação e auditoria
+  ---
+  duration_ms: 35.621401
+  type: 'test'
+  ...
+# Subtest: Controle de acesso DOT: permissão por usuário não vaza para o restante da empresa
+ok 63 - Controle de acesso DOT: permissão por usuário não vaza para o restante da empresa
+  ---
+  duration_ms: 30.5022
+  type: 'test'
+  ...
+# Subtest: Controle de acesso DOT: revogação individual vence a concessão da empresa (e vice-versa)
+ok 64 - Controle de acesso DOT: revogação individual vence a concessão da empresa (e vice-versa)
+  ---
+  duration_ms: 71.6817
+  type: 'test'
+  ...
+# Subtest: Controle de acesso DOT: baseline interno é mínimo, preserva revogações e não abre conectores externos
+ok 65 - Controle de acesso DOT: baseline interno é mínimo, preserva revogações e não abre conectores externos
+  ---
+  duration_ms: 81.214
+  type: 'test'
+  ...
+# Subtest: Controle de acesso DOT: baseline legado do sistema é revogado e concessões explícitas permanecem
+ok 66 - Controle de acesso DOT: baseline legado do sistema é revogado e concessões explícitas permanecem
+  ---
+  duration_ms: 42.5872
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-action-audit-integrity-test.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: prepare registra o ator autenticado que pediu a preparação
+ok 67 - prepare registra o ator autenticado que pediu a preparação
+  ---
+  duration_ms: 200.227292
+  type: 'test'
+  ...
+# Subtest: prepare automático do Dot continua auditado como ator dot, sem ator humano
+ok 68 - prepare automático do Dot continua auditado como ator dot, sem ator humano
+  ---
+  duration_ms: 16.161599
+  type: 'test'
+  ...
+# Subtest: prepare repetido é idempotente para a mesma opção e rejeita opção divergente
+ok 69 - prepare repetido é idempotente para a mesma opção e rejeita opção divergente
+  ---
+  duration_ms: 32.153999
+  type: 'test'
+  ...
+# Subtest: falha ao gravar a auditoria reverte a preparação (sem ação órfã)
+ok 70 - falha ao gravar a auditoria reverte a preparação (sem ação órfã)
+  ---
+  duration_ms: 66.151997
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-action-queue-test.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Dot action queue: prepare is tenant-scoped and rejects a second active option
+ok 71 - Dot action queue: prepare is tenant-scoped and rejects a second active option
+  ---
+  duration_ms: 129.598695
+  type: 'test'
+  ...
+# Subtest: Dot action queue: approval is one-way and execution is replay-safe
+ok 72 - Dot action queue: approval is one-way and execution is replay-safe
+  ---
+  duration_ms: 53.623998
+  type: 'test'
+  ...
+# Subtest: Dot action queue: audit failure rolls back approval state
+ok 73 - Dot action queue: audit failure rolls back approval state
+  ---
+  duration_ms: 16.967799
+  type: 'test'
+  ...
+# Subtest: Dot action queue: concurrent approvals consume the same action only once
+ok 74 - Dot action queue: concurrent approvals consume the same action only once
+  ---
+  duration_ms: 21.511699
+  type: 'test'
+  ...
+# Subtest: Dot action queue: execution requires explicit permission
+ok 75 - Dot action queue: execution requires explicit permission
+  ---
+  duration_ms: 115.605296
+  type: 'test'
+  ...
+# Subtest: Dot action queue: an action cannot execute before approval
+ok 76 - Dot action queue: an action cannot execute before approval
+  ---
+  duration_ms: 37.955798
+  type: 'test'
+  ...
+# Subtest: Dot action queue: identidade ausente ou inválida é rejeitada sem efeito
+ok 77 - Dot action queue: identidade ausente ou inválida é rejeitada sem efeito
+  ---
+  duration_ms: 74.811397
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-admin-http-1794165428582-6870.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Dot admin — orçamento por HTTP (JWT + PIN + sessão + reconciliação)
+    # Subtest: sem JWT: o gate nega antes de qualquer dado de orçamento
+    ok 1 - sem JWT: o gate nega antes de qualquer dado de orçamento
+      ---
+      duration_ms: 751.743598
+      type: 'test'
+      ...
+    # Subtest: JWT de funcionário sem propriedade: 403 DOT_OWNER_REQUIRED
+    ok 2 - JWT de funcionário sem propriedade: 403 DOT_OWNER_REQUIRED
+      ---
+      duration_ms: 282.590499
+      type: 'test'
+      ...
+    # Subtest: estado administrativo do proprietário: dono provisionado, PIN ainda não configurado
+    ok 3 - estado administrativo do proprietário: dono provisionado, PIN ainda não configurado
+      ---
+      duration_ms: 14.6728
+      type: 'test'
+      ...
+    # Subtest: cadastro de PIN: cabeçalho obrigatório, formato validado e sucesso auditado
+    ok 4 - cadastro de PIN: cabeçalho obrigatório, formato validado e sucesso auditado
+      ---
+      duration_ms: 833.065597
+      type: 'test'
+      ...
+    # Subtest: segundo cadastro de PIN é recusado (não sobrescreve): 409 DOT_ADMIN_PIN_EXISTS
+    ok 5 - segundo cadastro de PIN é recusado (não sobrescreve): 409 DOT_ADMIN_PIN_EXISTS
+      ---
+      duration_ms: 16.9078
+      type: 'test'
+      ...
+    # Subtest: PIN errado: 403 DOT_ADMIN_PIN_INVALID e auditoria de falha (empresa isolada)
+    ok 6 - PIN errado: 403 DOT_ADMIN_PIN_INVALID e auditoria de falha (empresa isolada)
+      ---
+      duration_ms: 198.517199
+      type: 'test'
+      ...
+    # Subtest: PIN correto emite a sessão administrativa (cookie) e a audita
+    ok 7 - PIN correto emite a sessão administrativa (cookie) e a audita
+      ---
+      duration_ms: 390.434299
+      type: 'test'
+      ...
+    # Subtest: visão de orçamento: agrega só o tenant do dono e não expõe dado sensível
+    ok 8 - visão de orçamento: agrega só o tenant do dono e não expõe dado sensível
+      ---
+      duration_ms: 25.8979
+      type: 'test'
+      ...
+    # Subtest: reconciliação sem sessão administrativa: 403 DOT_ADMIN_SESSION_REQUIRED
+    ok 9 - reconciliação sem sessão administrativa: 403 DOT_ADMIN_SESSION_REQUIRED
+      ---
+      duration_ms: 18.1973
+      type: 'test'
+      ...
+    # Subtest: reconciliação settle com sessão: grava consumo real e audita
+    ok 10 - reconciliação settle com sessão: grava consumo real e audita
+      ---
+      duration_ms: 377.845699
+      type: 'test'
+      ...
+    # Subtest: reconciliação release com sessão: libera sem consumir e audita
+    ok 11 - reconciliação release com sessão: libera sem consumir e audita
+      ---
+      duration_ms: 3804.522407
+      type: 'test'
+      ...
+    # Subtest: entrada inválida da reconciliação: 400 com código específico
+    ok 12 - entrada inválida da reconciliação: 400 com código específico
+      ---
+      duration_ms: 1913.465735
+      type: 'test'
+      ...
+    # Subtest: isolamento entre empresas: reserva de outro tenant não é reconciliável
+    ok 13 - isolamento entre empresas: reserva de outro tenant não é reconciliável
+      ---
+      duration_ms: 782.458391
+      type: 'test'
+      ...
+    # Subtest: bloqueio de sessão revoga o cookie, audita e invalida a reconciliação seguinte
+    ok 14 - bloqueio de sessão revoga o cookie, audita e invalida a reconciliação seguinte
+      ---
+      duration_ms: 620.453214
+      type: 'test'
+      ...
+    1..14
+ok 78 - Dot admin — orçamento por HTTP (JWT + PIN + sessão + reconciliação)
+  ---
+  duration_ms: 17861.862996
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-pin-1794165447612.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PIN administrativo: formato e hash
+    # Subtest: rejeita formatos fracos e aceita 6 dígitos sem padrão óbvio
+    ok 1 - rejeita formatos fracos e aceita 6 dígitos sem padrão óbvio
+      ---
+      duration_ms: 13.206698
+      type: 'test'
+      ...
+    # Subtest: armazena apenas hash scrypt com salt individual e compara sem vazar o PIN
+    ok 2 - armazena apenas hash scrypt com salt individual e compara sem vazar o PIN
+      ---
+      duration_ms: 1008.46016
+      type: 'test'
+      ...
+    1..2
+ok 79 - PIN administrativo: formato e hash
+  ---
+  duration_ms: 1601.227878
+  type: 'suite'
+  ...
+# Subtest: PIN administrativo: cadastro, redefinição e bloqueio
+    # Subtest: primeiro cadastro é único; redefinição exige senha e sobe a versão
+    ok 1 - primeiro cadastro é único; redefinição exige senha e sobe a versão
+      ---
+      duration_ms: 1493.595803
+      type: 'test'
+      ...
+    # Subtest: redefinir o PIN invalida as sessões anteriores (versão)
+    ok 2 - redefinir o PIN invalida as sessões anteriores (versão)
+      ---
+      duration_ms: 1604.563362
+      type: 'test'
+      ...
+    # Subtest: atraso progressivo e bloqueio temporário persistem no banco e expiram
+    ok 3 - atraso progressivo e bloqueio temporário persistem no banco e expiram
+      ---
+      duration_ms: 2864.657833
+      type: 'test'
+      ...
+    # Subtest: a auditoria registra falhas sem nunca conter o PIN
+    ok 4 - a auditoria registra falhas sem nunca conter o PIN
+      ---
+      duration_ms: 368.818691
+      type: 'test'
+      ...
+    1..4
+ok 80 - PIN administrativo: cadastro, redefinição e bloqueio
+  ---
+  duration_ms: 6334.562989
+  type: 'suite'
+  ...
+# Subtest: Sessão administrativa: vínculo, expiração e revogação
+    # Subtest: sessão é vinculada à empresa e ao usuário (não vale em outro escopo)
+    ok 1 - sessão é vinculada à empresa e ao usuário (não vale em outro escopo)
+      ---
+      duration_ms: 649.663584
+      type: 'test'
+      ...
+    # Subtest: expiração e revogação invalidam a sessão
+    ok 2 - expiração e revogação invalidam a sessão
+      ---
+      duration_ms: 493.531589
+      type: 'test'
+      ...
+    # Subtest: requireDotAdminSession exige cabeçalho e sessão válida (falha fechada)
+    ok 3 - requireDotAdminSession exige cabeçalho e sessão válida (falha fechada)
+      ---
+      duration_ms: 312.885992
+      type: 'test'
+      ...
+    1..3
+ok 81 - Sessão administrativa: vínculo, expiração e revogação
+  ---
+  duration_ms: 1457.845065
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-agent-goals-test.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Dot goals: criação, validação e isolamento entre empresas
+ok 82 - Dot goals: criação, validação e isolamento entre empresas
+  ---
+  duration_ms: 156.519696
+  type: 'test'
+  ...
+# Subtest: Dot goals: atualização de status/progresso e workspace
+ok 83 - Dot goals: atualização de status/progresso e workspace
+  ---
+  duration_ms: 38.468899
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-mission-runner-test.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Dot mission runner: ciclo completo com barreira de aprovação
+ok 84 - Dot mission runner: ciclo completo com barreira de aprovação
+  ---
+  duration_ms: 442.911923
+  type: 'test'
+  ...
+# Subtest: Dot mission runner: falha repetida pausa a missão em vez de repetir para sempre
+ok 85 - Dot mission runner: falha repetida pausa a missão em vez de repetir para sempre
+  ---
+  duration_ms: 46.660903
+  type: 'test'
+  ...
+# Subtest: Dot mission runner: missão de outra empresa não é acessível
+ok 86 - Dot mission runner: missão de outra empresa não é acessível
+  ---
+  duration_ms: 27.056701
+  type: 'test'
+  ...
+# Subtest: Dot mission runner: prepare não cria ação duplicada quando repetido
+ok 87 - Dot mission runner: prepare não cria ação duplicada quando repetido
+  ---
+  duration_ms: 136.887607
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-gate-1794165460659.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: M1: gate de plano do Dot em /api/dot/agent/*
+    # Subtest: libera workspace, permissions, tools e missions para rei/corporativo/corp/corporate
+    ok 1 - libera workspace, permissions, tools e missions para rei/corporativo/corp/corporate
+      ---
+      duration_ms: 540.144429
+      type: 'test'
+      ...
+    # Subtest: nega trial de 7 dias: o trial não concede o Dot
+    ok 2 - nega trial de 7 dias: o trial não concede o Dot
+      ---
+      duration_ms: 54.894003
+      type: 'test'
+      ...
+    # Subtest: nega planos fora da matriz e empresa bloqueada
+    ok 3 - nega planos fora da matriz e empresa bloqueada
+      ---
+      duration_ms: 33.509602
+      type: 'test'
+      ...
+    # Subtest: nega sem token e com token inválido
+    ok 4 - nega sem token e com token inválido
+      ---
+      duration_ms: 17.545901
+      type: 'test'
+      ...
+    # Subtest: nega conta admin da plataforma
+    ok 5 - nega conta admin da plataforma
+      ---
+      duration_ms: 8.5484
+      type: 'test'
+      ...
+    # Subtest: nega mutação de missão sem permissão e não cruza empresas
+    ok 6 - nega mutação de missão sem permissão e não cruza empresas
+      ---
+      duration_ms: 120.549507
+      type: 'test'
+      ...
+    # Subtest: demo mode nunca libera sem token em produção
+    ok 7 - demo mode nunca libera sem token em produção
+      ---
+      duration_ms: 13.6015
+      type: 'test'
+      ...
+    1..7
+ok 88 - M1: gate de plano do Dot em /api/dot/agent/*
+  ---
+  duration_ms: 2904.904654
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-sod-1794165465201.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: preparador não pode aprovar a própria ação (mesmo usuário, sem owner)
+ok 89 - preparador não pode aprovar a própria ação (mesmo usuário, sem owner)
+  ---
+  duration_ms: 187.89841
+  type: 'test'
+  ...
+# Subtest: aprovador distinto é aceito e a decisão fica registrada
+ok 90 - aprovador distinto é aceito e a decisão fica registrada
+  ---
+  duration_ms: 36.018502
+  type: 'test'
+  ...
+# Subtest: owner autoritativo pode aprovar a própria preparação como exceção auditada
+ok 91 - owner autoritativo pode aprovar a própria preparação como exceção auditada
+  ---
+  duration_ms: 41.117902
+  type: 'test'
+  ...
+# Subtest: preparação automática do Dot + aprovação humana registra internal_actor
+ok 92 - preparação automática do Dot + aprovação humana registra internal_actor
+  ---
+  duration_ms: 36.959001
+  type: 'test'
+  ...
+# Subtest: identidade humana ausente ou em branco é rejeitada e não aprova
+ok 93 - identidade humana ausente ou em branco é rejeitada e não aprova
+  ---
+  duration_ms: 21.160302
+  type: 'test'
+  ...
+# Subtest: ator interno explícito aprova preparação do Dot e é auditado como dot/null
+ok 94 - ator interno explícito aprova preparação do Dot e é auditado como dot/null
+  ---
+  duration_ms: 38.745502
+  type: 'test'
+  ...
+# Subtest: ator interno não aprova ação preparada por usuário humano
+ok 95 - ator interno não aprova ação preparada por usuário humano
+  ---
+  duration_ms: 34.037802
+  type: 'test'
+  ...
+# Subtest: evento prepared dot com actor_id preenchido é histórico inválido e bloqueia
+ok 96 - evento prepared dot com actor_id preenchido é histórico inválido e bloqueia
+  ---
+  duration_ms: 33.998101
+  type: 'test'
+  ...
+# Subtest: ausência de evento prepared bloqueia a aprovação (sem marcador)
+ok 97 - ausência de evento prepared bloqueia a aprovação (sem marcador)
+  ---
+  duration_ms: 47.003602
+  type: 'test'
+  ...
+# Subtest: compatibilidade histórica só com marcador explícito e restrito de migração
+ok 98 - compatibilidade histórica só com marcador explícito e restrito de migração
+  ---
+  duration_ms: 106.371206
+  type: 'test'
+  ...
+# Subtest: contrato de ator inválido nunca é convertido em dot
+ok 99 - contrato de ator inválido nunca é convertido em dot
+  ---
+  duration_ms: 31.118702
+  type: 'test'
+  ...
+# Subtest: limpeza
+ok 100 - limpeza
+  ---
+  duration_ms: 6.2625
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-audit-retention-9Rm7JY/retention.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: retenção: dry-run/export não apagam; purge exige confirmação e remove só expirados
+ok 101 - retenção: dry-run/export não apagam; purge exige confirmação e remove só expirados
+  ---
+  duration_ms: 193.239011
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-http-ledger-1794165467980-7006.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Dot HTTP + ledger (provedor simulado)
+    # Subtest: execução bem-sucedida: 200, reserva finalizada e consumo real registrado
+    ok 1 - execução bem-sucedida: 200, reserva finalizada e consumo real registrado
+      ---
+      duration_ms: 296.921916
+      type: 'test'
+      ...
+# [dot-ledger] resultado ambíguo: reserva mantida e orçamento comprometido até reconciliação.
+# [Filtra Dot] socket hang up
+    # Subtest: resultado ambíguo: 503, reserva permanece aberta e o orçamento continua comprometido
+    ok 2 - resultado ambíguo: 503, reserva permanece aberta e o orçamento continua comprometido
+      ---
+      duration_ms: 70.057104
+      type: 'test'
+      ...
+# [Filtra Dot] Groq API error 429: rate limit; request not processed
+    # Subtest: recusa estruturada COM evidência de não processamento: 503 e reserva liberada
+    ok 3 - recusa estruturada COM evidência de não processamento: 503 e reserva liberada
+      ---
+      duration_ms: 51.405403
+      type: 'test'
+      ...
+# [dot-ledger] resultado ambíguo: reserva mantida e orçamento comprometido até reconciliação.
+# [Filtra Dot] Groq API error 429: rate limit
+    # Subtest: 429 SEM evidência de não processamento: AMBÍGUO, reserva aberta e nada debitado
+    ok 4 - 429 SEM evidência de não processamento: AMBÍGUO, reserva aberta e nada debitado
+      ---
+      duration_ms: 43.736602
+      type: 'test'
+      ...
+# [Filtra Dot] Nenhuma IA configurada. Defina GROQ_API_KEY e/ou GEMINI_API_KEY no .env
+    # Subtest: nenhum provedor configurado: 503 e reserva liberada
+    ok 5 - nenhum provedor configurado: 503 e reserva liberada
+      ---
+      duration_ms: 61.755103
+      type: 'test'
+      ...
+    # Subtest: orçamento esgotado: 429 sem criar reserva
+    ok 6 - orçamento esgotado: 429 sem criar reserva
+      ---
+      duration_ms: 17.849401
+      type: 'test'
+      ...
+    # Subtest: retry da mesma execução não duplica consumo
+    ok 7 - retry da mesma execução não duplica consumo
+      ---
+      duration_ms: 52.329403
+      type: 'test'
+      ...
+    # Subtest: GET /api/dot/budget não expõe dado sensível
+    ok 8 - GET /api/dot/budget não expõe dado sensível
+      ---
+      duration_ms: 22.786601
+      type: 'test'
+      ...
+    1..8
+ok 102 - Dot HTTP + ledger (provedor simulado)
+  ---
+  duration_ms: 1419.083975
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-context-cache-test.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Contexto do Dot: snapshot, fingerprint e resposta factual determinística
+ok 103 - Contexto do Dot: snapshot, fingerprint e resposta factual determinística
+  ---
+  duration_ms: 184.59721
+  type: 'test'
+  ...
+# Subtest: Contexto do Dot: cache de respostas só reutiliza com os mesmos dados
+ok 104 - Contexto do Dot: cache de respostas só reutiliza com os mesmos dados
+  ---
+  duration_ms: 26.115301
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-coordination-test.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: lock: segunda aquisição falha enquanto a primeira está válida
+ok 105 - lock: segunda aquisição falha enquanto a primeira está válida
+  ---
+  duration_ms: 165.029209
+  type: 'test'
+  ...
+# Subtest: lock: liberação escopada não remove o lock de outro dono
+ok 106 - lock: liberação escopada não remove o lock de outro dono
+  ---
+  duration_ms: 8.5689
+  type: 'test'
+  ...
+# Subtest: lock: lock expirado é assumido pela próxima chamada (recuperação após queda)
+ok 107 - lock: lock expirado é assumido pela próxima chamada (recuperação após queda)
+  ---
+  duration_ms: 7.476701
+  type: 'test'
+  ...
+# Subtest: withDotLock: pula quando ocupado e executa quando livre
+ok 108 - withDotLock: pula quando ocupado e executa quando livre
+  ---
+  duration_ms: 10.9755
+  type: 'test'
+  ...
+# Subtest: withDotLock: espera o lock e nunca sobrepõe execuções
+ok 109 - withDotLock: espera o lock e nunca sobrepõe execuções
+  ---
+  duration_ms: 281.947315
+  type: 'test'
+  ...
+# Subtest: withDotLock: libera o lock mesmo quando o trabalho lança erro
+ok 110 - withDotLock: libera o lock mesmo quando o trabalho lança erro
+  ---
+  duration_ms: 6.917101
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-core-1794165472585-7062.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: DOT — regressão do núcleo (monitor → decisão → preparo)
+    # Subtest: o monitor cria eventos, decisões e ações preparadas por empresa
+    ok 1 - o monitor cria eventos, decisões e ações preparadas por empresa
+      ---
+      duration_ms: 1.7544
+      type: 'test'
+      ...
+    1..1
+ok 111 - DOT — regressão do núcleo (monitor → decisão → preparo)
+  ---
+  duration_ms: 465.429425
+  type: 'suite'
+  ...
+# Subtest: DOT — isolamento por empresa_id
+    # Subtest: não prepara ação a partir de decisão de outra empresa
+    ok 1 - não prepara ação a partir de decisão de outra empresa
+      ---
+      duration_ms: 9.810401
+      type: 'test'
+      ...
+    # Subtest: não aprova ação de outra empresa
+    ok 2 - não aprova ação de outra empresa
+      ---
+      duration_ms: 7.981
+      type: 'test'
+      ...
+    # Subtest: não executa ação de outra empresa
+    ok 3 - não executa ação de outra empresa
+      ---
+      duration_ms: 3.3745
+      type: 'test'
+      ...
+    # Subtest: listagens e auditoria respeitam o tenant
+    ok 4 - listagens e auditoria respeitam o tenant
+      ---
+      duration_ms: 10.792401
+      type: 'test'
+      ...
+    1..4
+ok 112 - DOT — isolamento por empresa_id
+  ---
+  duration_ms: 33.665202
+  type: 'suite'
+  ...
+# Subtest: DOT — aprovação obrigatória, execução interna e auditoria
+    # Subtest: não executa antes da aprovação
+    ok 1 - não executa antes da aprovação
+      ---
+      duration_ms: 5.0522
+      type: 'test'
+      ...
+    # Subtest: executa após aprovação e cria caso interno, follow-up e auditoria ordenada
+    ok 2 - executa após aprovação e cria caso interno, follow-up e auditoria ordenada
+      ---
+      duration_ms: 48.598703
+      type: 'test'
+      ...
+    1..2
+ok 113 - DOT — aprovação obrigatória, execução interna e auditoria
+  ---
+  duration_ms: 55.186003
+  type: 'suite'
+  ...
+# Subtest: DOT — efeitos externos (lacuna documentada, sem mock)
+    # Subtest: nenhuma ação registrada expõe efeito externo e todas exigem aprovação
+    ok 1 - nenhuma ação registrada expõe efeito externo e todas exigem aprovação
+      ---
+      duration_ms: 0.5353
+      type: 'test'
+      ...
+    1..1
+ok 114 - DOT — efeitos externos (lacuna documentada, sem mock)
+  ---
+  duration_ms: 1.3068
+  type: 'suite'
+  ...
+# Subtest: DOT — idempotência
+    # Subtest: preparar a mesma decisão duas vezes devolve a mesma ação ativa (uma por decisão)
+    ok 1 - preparar a mesma decisão duas vezes devolve a mesma ação ativa (uma por decisão)
+      ---
+      duration_ms: 30.509402
+      type: 'test'
+      ...
+    # Subtest: aprovar duas vezes não duplica efeito
+    ok 2 - aprovar duas vezes não duplica efeito
+      ---
+      duration_ms: 13.7772
+      type: 'test'
+      ...
+    # Subtest: executar duas vezes não duplica caso interno nem follow-up
+    ok 3 - executar duas vezes não duplica caso interno nem follow-up
+      ---
+      duration_ms: 3.1757
+      type: 'test'
+      ...
+    # Subtest: createDotFollowUp é idempotente por (empresa, ação)
+    ok 4 - createDotFollowUp é idempotente por (empresa, ação)
+      ---
+      duration_ms: 11.420701
+      type: 'test'
+      ...
+    1..4
+ok 115 - DOT — idempotência
+  ---
+  duration_ms: 60.128503
+  type: 'suite'
+  ...
+# Subtest: DOT — política e aprovação de ação externa
+    # Subtest: normaliza preferências para sempre exigir aprovação de ação externa
+    ok 1 - normaliza preferências para sempre exigir aprovação de ação externa
+      ---
+      duration_ms: 10.990901
+      type: 'test'
+      ...
+    # Subtest: mesmo em autonomia máxima e risco baixo, não executa automaticamente e exige aprovação
+    ok 2 - mesmo em autonomia máxima e risco baixo, não executa automaticamente e exige aprovação
+      ---
+      duration_ms: 3.1287
+      type: 'test'
+      ...
+    1..2
+ok 116 - DOT — política e aprovação de ação externa
+  ---
+  duration_ms: 14.709401
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-owner-1794165473726.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Propriedade da empresa (empresa_owners)
+    # Subtest: empresa sem proprietário provisionado não tem dono — fail-closed
+    ok 1 - empresa sem proprietário provisionado não tem dono — fail-closed
+      ---
+      duration_ms: 5.5954
+      type: 'test'
+      ...
+    # Subtest: provisiona somente usuário que existe e pertence à empresa
+    ok 2 - provisiona somente usuário que existe e pertence à empresa
+      ---
+      duration_ms: 18.2901
+      type: 'test'
+      ...
+    # Subtest: é idempotente, auditado e permite correção explícita do proprietário
+    ok 3 - é idempotente, auditado e permite correção explícita do proprietário
+      ---
+      duration_ms: 20.675501
+      type: 'test'
+      ...
+    1..3
+ok 117 - Propriedade da empresa (empresa_owners)
+  ---
+  duration_ms: 297.122616
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-exec-atomicity-1794165474813.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: execução feliz grava caso, follow-up, status e auditoria no mesmo commit
+ok 118 - execução feliz grava caso, follow-up, status e auditoria no mesmo commit
+  ---
+  duration_ms: 404.255735
+  type: 'test'
+  ...
+# Subtest: falha ao criar follow-up reverte caso, claim e auditoria inicial
+ok 119 - falha ao criar follow-up reverte caso, claim e auditoria inicial
+  ---
+  duration_ms: 75.247306
+  type: 'test'
+  ...
+# Subtest: duas execuções concorrentes da mesma ação produzem um único efeito
+ok 120 - duas execuções concorrentes da mesma ação produzem um único efeito
+  ---
+  duration_ms: 49.081404
+  type: 'test'
+  ...
+# Subtest: ator interno explícito é auditado como dot, sem usuário anônimo
+ok 121 - ator interno explícito é auditado como dot, sem usuário anônimo
+  ---
+  duration_ms: 31.935603
+  type: 'test'
+  ...
+# Subtest: falha com ator interno audita failed como dot e não mascara a exceção
+ok 122 - falha com ator interno audita failed como dot e não mascara a exceção
+  ---
+  duration_ms: 52.285805
+  type: 'test'
+  ...
+# Subtest: identidade ausente é rejeitada sem efeito e a ação continua executável
+ok 123 - identidade ausente é rejeitada sem efeito e a ação continua executável
+  ---
+  duration_ms: 48.465404
+  type: 'test'
+  ...
+# Subtest: limpeza
+ok 124 - limpeza
+  ---
+  duration_ms: 2.3667
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-e2e-1794165476457-7120.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# [dot-scheduler] candidatos observados [
+#   { status: 'ativo', plan: 'pro', total: 1 },
+#   { status: 'ativo', plan: 'rei', total: 1 }
+# ]
+# [dot-scheduler] rodada concluída {
+#   eligible_companies: 1,
+#   due: 1,
+#   processed: 1,
+#   skipped: 0,
+#   errors: 0,
+#   followups: 0,
+#   events: 2,
+#   decisions: 2,
+#   actions_prepared: 2,
+#   duration_ms: 80
+# }
+# Subtest: Filtra Dot — execução real, ledger e encerramento gracioso
+    # Subtest: o scheduler identifica a empresa elegível e ignora a inelegível
+    ok 1 - o scheduler identifica a empresa elegível e ignora a inelegível
+      ---
+      duration_ms: 98.455108
+      type: 'test'
+      ...
+    # Subtest: o agente registra a execução: evento, decisão e ação preparada
+    ok 2 - o agente registra a execução: evento, decisão e ação preparada
+      ---
+      duration_ms: 5.677601
+      type: 'test'
+      ...
+    # Subtest: o ciclo do orçamento registra reserva, consumo real e finalização
+    ok 3 - o ciclo do orçamento registra reserva, consumo real e finalização
+      ---
+      duration_ms: 23.517302
+      type: 'test'
+      ...
+# Filtra Dot monitor ativo — tick 60s
+    # Subtest: falha ambígua mantém a reserva aberta e o orçamento comprometido
+    ok 4 - falha ambígua mantém a reserva aberta e o orçamento comprometido
+      ---
+      duration_ms: 24.022202
+      type: 'test'
+      ...
+    # Subtest: o alerta emitido não carrega dado sensível
+    ok 5 - o alerta emitido não carrega dado sensível
+      ---
+      duration_ms: 2.4458
+      type: 'test'
+      ...
+# [dot-scheduler] candidatos observados [
+#   { status: 'ativo', plan: 'pro', total: 1 },
+#   { status: 'ativo', plan: 'rei', total: 1 }
+# ]
+# [dot-scheduler] rodada concluída {
+#   eligible_companies: 1,
+#   due: 0,
+#   processed: 0,
+#   skipped: 1,
+#   errors: 0,
+#   followups: 0,
+#   events: 0,
+#   decisions: 0,
+#   actions_prepared: 0,
+#   duration_ms: 20
+# }
+    # Subtest: o encerramento gracioso para o scheduler e drena o worker sem pendurar o processo
+    ok 6 - o encerramento gracioso para o scheduler e drena o worker sem pendurar o processo
+      ---
+      duration_ms: 48.233304
+      type: 'test'
+      ...
+    1..6
+ok 125 - Filtra Dot — execução real, ledger e encerramento gracioso
+  ---
+  duration_ms: 858.860574
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-explain-1794165478783-7139.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Dot /api/dot/explain + ledger (provedor simulado)
+    # Subtest: autenticado: 200, reserva liquidada e consumo real (in/out) registrado
+    ok 1 - autenticado: 200, reserva liquidada e consumo real (in/out) registrado
+      ---
+      duration_ms: 152.802713
+      type: 'test'
+      ...
+# [dot-ledger] resultado ambíguo: reserva mantida e orçamento comprometido até reconciliação.
+# [Filtra Dot explain] socket hang up
+    # Subtest: resultado ambíguo: 503, reserva aberta e orçamento comprometido
+    ok 2 - resultado ambíguo: 503, reserva aberta e orçamento comprometido
+      ---
+      duration_ms: 26.538103
+      type: 'test'
+      ...
+# [Filtra Dot explain] Groq API error 429: rate limit; request not processed
+    # Subtest: recusa estruturada COM evidência: 503 e reserva liberada — nada debitado
+    ok 3 - recusa estruturada COM evidência: 503 e reserva liberada — nada debitado
+      ---
+      duration_ms: 41.060003
+      type: 'test'
+      ...
+# [dot-ledger] resultado ambíguo: reserva mantida e orçamento comprometido até reconciliação.
+# [Filtra Dot explain] Groq API error 429: rate limit
+    # Subtest: 429 SEM evidência: AMBÍGUO, reserva aberta e nada debitado
+    ok 4 - 429 SEM evidência: AMBÍGUO, reserva aberta e nada debitado
+      ---
+      duration_ms: 29.308103
+      type: 'test'
+      ...
+    # Subtest: orçamento esgotado: 429 com DOT_TOKEN_LIMIT e nenhuma reserva criada
+    ok 5 - orçamento esgotado: 429 com DOT_TOKEN_LIMIT e nenhuma reserva criada
+      ---
+      duration_ms: 29.558102
+      type: 'test'
+      ...
+    # Subtest: demonstração: 200 sem reserva e sem consumo gravado
+    ok 6 - demonstração: 200 sem reserva e sem consumo gravado
+      ---
+      duration_ms: 11.029901
+      type: 'test'
+      ...
+    1..6
+ok 126 - Dot /api/dot/explain + ledger (provedor simulado)
+  ---
+  duration_ms: 1290.939111
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-internal-executors-test.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: DOT internal executor creates a real tenant-scoped operational case
+ok 127 - DOT internal executor creates a real tenant-scoped operational case
+  ---
+  duration_ms: 82.859107
+  type: 'test'
+  ...
+# Subtest: DOT internal executor is replay-safe for the same action
+ok 128 - DOT internal executor is replay-safe for the same action
+  ---
+  duration_ms: 7.764801
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-ledger-1794165481362-7176.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Dot ledger — orçamento durável
+    # Subtest: o limite de orçamento do Dot é o da matriz de planos (rei/corporativo, aliases incluídos)
+    ok 1 - o limite de orçamento do Dot é o da matriz de planos (rei/corporativo, aliases incluídos)
+      ---
+      duration_ms: 4.0969
+      type: 'test'
+      ...
+    # Subtest: reserva debita o orçamento antes da chamada e sobrevive como linha durável
+    ok 2 - reserva debita o orçamento antes da chamada e sobrevive como linha durável
+      ---
+      duration_ms: 38.694904
+      type: 'test'
+      ...
+    # Subtest: finalize converte a estimativa em consumo real e vincula a linha de ai_usage
+    ok 3 - finalize converte a estimativa em consumo real e vincula a linha de ai_usage
+      ---
+      duration_ms: 13.894401
+      type: 'test'
+      ...
+    # Subtest: retry de finalize não duplica consumo
+    ok 4 - retry de finalize não duplica consumo
+      ---
+      duration_ms: 15.141001
+      type: 'test'
+      ...
+    # Subtest: finalize concorrente (mesma reserva, 5 chamadas) grava exatamente um consumo
+    ok 5 - finalize concorrente (mesma reserva, 5 chamadas) grava exatamente um consumo
+      ---
+      duration_ms: 15.961602
+      type: 'test'
+      ...
+    # Subtest: resultado ambíguo mantém a reserva aberta e NÃO registra consumo
+    ok 6 - resultado ambíguo mantém a reserva aberta e NÃO registra consumo
+      ---
+      duration_ms: 12.397101
+      type: 'test'
+      ...
+    # Subtest: reserva ambígua permanece comprometida mesmo 48h após expirar
+    ok 7 - reserva ambígua permanece comprometida mesmo 48h após expirar
+      ---
+      duration_ms: 12.934401
+      type: 'test'
+      ...
+    # Subtest: reserva não ambígua vencida é expirada de forma idempotente
+    ok 8 - reserva não ambígua vencida é expirada de forma idempotente
+      ---
+      duration_ms: 14.140201
+      type: 'test'
+      ...
+    # Subtest: corrida sweep × finalize: uma única transição vence e o consumo não se perde
+    ok 9 - corrida sweep × finalize: uma única transição vence e o consumo não se perde
+      ---
+      duration_ms: 13.132401
+      type: 'test'
+      ...
+    # Subtest: liberação só é aceita com comprovação de que a chamada não foi enviada
+    ok 10 - liberação só é aceita com comprovação de que a chamada não foi enviada
+      ---
+      duration_ms: 29.900203
+      type: 'test'
+      ...
+    # Subtest: reconciliação: settle com tokens reais fecha a reserva ambígua
+    ok 11 - reconciliação: settle com tokens reais fecha a reserva ambígua
+      ---
+      duration_ms: 11.920001
+      type: 'test'
+      ...
+    # Subtest: reconciliação: release encerra a reserva ambígua sem consumo
+    ok 12 - reconciliação: release encerra a reserva ambígua sem consumo
+      ---
+      duration_ms: 11.973701
+      type: 'test'
+      ...
+    # Subtest: orçamento esgotado recusa a reserva com DOT_TOKEN_LIMIT
+    ok 13 - orçamento esgotado recusa a reserva com DOT_TOKEN_LIMIT
+      ---
+      duration_ms: 5.3076
+      type: 'test'
+      ...
+    # Subtest: o consumo do Dot não é somado ao orçamento de reviews (isolamento de feature)
+    ok 14 - o consumo do Dot não é somado ao orçamento de reviews (isolamento de feature)
+      ---
+      duration_ms: 8.853801
+      type: 'test'
+      ...
+    # Subtest: alertas são emitidos por faixa e nunca carregam dado sensível
+    ok 15 - alertas são emitidos por faixa e nunca carregam dado sensível
+      ---
+      duration_ms: 2.477
+      type: 'test'
+      ...
+# [dot-ledger] falha ao ler o orçamento do Dot: falha simulada de leitura
+# [dot-ledger] falha ao reservar orçamento: falha simulada de leitura
+    # Subtest: snapshot falha fechado quando a leitura do orçamento quebra
+    ok 16 - snapshot falha fechado quando a leitura do orçamento quebra
+      ---
+      duration_ms: 8.509001
+      type: 'test'
+      ...
+    # Subtest: a reserva de uma empresa nunca é visível para outra
+    ok 17 - a reserva de uma empresa nunca é visível para outra
+      ---
+      duration_ms: 17.444102
+      type: 'test'
+      ...
+    1..17
+ok 129 - Dot ledger — orçamento durável
+  ---
+  duration_ms: 462.43084
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-migration-1794165482356-7194.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Upgrade de banco legado — colunas novas
+    # Subtest: initDB adiciona sent_at e tokens in/out sem perder linhas
+    ok 1 - initDB adiciona sent_at e tokens in/out sem perder linhas
+      ---
+      duration_ms: 137.209911
+      type: 'test'
+      ...
+    1..1
+ok 130 - Upgrade de banco legado — colunas novas
+  ---
+  duration_ms: 143.011913
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-mission-lifecycle-test.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Dot missão: ciclo completo aprova, executa e conclui com output na etapa certa
+ok 131 - Dot missão: ciclo completo aprova, executa e conclui com output na etapa certa
+  ---
+  duration_ms: 242.737931
+  type: 'test'
+  ...
+# Subtest: Dot missão: aprovação sem execução conclui o fluxo sem executar a ação
+ok 132 - Dot missão: aprovação sem execução conclui o fluxo sem executar a ação
+  ---
+  duration_ms: 138.164518
+  type: 'test'
+  ...
+# Subtest: Dot missão: execução não aprovada e avanço direto não atravessam a barreira
+ok 133 - Dot missão: execução não aprovada e avanço direto não atravessam a barreira
+  ---
+  duration_ms: 138.262318
+  type: 'test'
+  ...
+# Subtest: Dot missão: etapa de aprovação sem ação preparada é passagem e não pausa a missão
+ok 134 - Dot missão: etapa de aprovação sem ação preparada é passagem e não pausa a missão
+  ---
+  duration_ms: 111.040814
+  type: 'test'
+  ...
+# Subtest: Dot missão: falha repetida pausa; retomada explícita volta sem apagar o histórico
+ok 135 - Dot missão: falha repetida pausa; retomada explícita volta sem apagar o histórico
+  ---
+  duration_ms: 133.658018
+  type: 'test'
+  ...
+# Subtest: Dot missão: nenhuma operação cruza empresas
+ok 136 - Dot missão: nenhuma operação cruza empresas
+  ---
+  duration_ms: 225.802329
+  type: 'test'
+  ...
+# Subtest: Dot missão: chamadas concorrentes não duplicam etapas nem ações
+ok 137 - Dot missão: chamadas concorrentes não duplicam etapas nem ações
+  ---
+  duration_ms: 1055.772839
+  type: 'test'
+  ...
+# Subtest: Roteamento de modelo: tiers refletem a intenção da mensagem
+ok 138 - Roteamento de modelo: tiers refletem a intenção da mensagem
+  ---
+  duration_ms: 3.309801
+  type: 'test'
+  ...
+# Subtest: Roteamento de modelo: o modelo devolvido é válido para o provedor informado
+ok 139 - Roteamento de modelo: o modelo devolvido é válido para o provedor informado
+  ---
+  duration_ms: 1.2653
+  type: 'test'
+  ...
+# Subtest: Roteamento de modelo: configuração por ambiente só aceita modelo do provedor correto
+ok 140 - Roteamento de modelo: configuração por ambiente só aceita modelo do provedor correto
+  ---
+  duration_ms: 1.2702
+  type: 'test'
+  ...
+# Subtest: Roteamento de modelo: compatibilidade de modelo por provedor
+ok 141 - Roteamento de modelo: compatibilidade de modelo por provedor
+  ---
+  duration_ms: 0.5096
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-concurrency-test.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: M2: rodadas concorrentes do monitor não duplicam eventos nem decisões
+ok 142 - M2: rodadas concorrentes do monitor não duplicam eventos nem decisões
+  ---
+  duration_ms: 357.944447
+  type: 'test'
+  ...
+# Subtest: M2: preparação concorrente cria uma única ação por decisão
+ok 143 - M2: preparação concorrente cria uma única ação por decisão
+  ---
+  duration_ms: 149.011719
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-is-test-38VGlh/fresh.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: A2: init limpo cria is_test e o monitor roda sem erro de coluna
+ok 144 - A2: init limpo cria is_test e o monitor roda sem erro de coluna
+  ---
+  duration_ms: 242.736932
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-is-test-38VGlh/legacy.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# 💾 SQLite: /tmp/filtra-dot-is-test-38VGlh/legacy.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: A2: banco legado sem is_test ganha a coluna por migração idempotente
+ok 145 - A2: banco legado sem is_test ganha a coluna por migração idempotente
+  ---
+  duration_ms: 221.845629
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-is-test-38VGlh/scheduler.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# [dot-scheduler] candidatos observados [ { status: 'ativo', plan: 'rei', total: 1 } ]
+# [dot-scheduler] empresa falhou {
+#   empresa_id: 'd1bd105b-f08f-4664-aaa2-65267c2adb24',
+#   error: 'SQLITE_ERROR: no such table: reviews'
+# }
+# [dot-scheduler] rodada concluída {
+#   eligible_companies: 1,
+#   due: 1,
+#   processed: 0,
+#   skipped: 0,
+#   errors: 1,
+#   followups: 0,
+#   events: 0,
+#   decisions: 0,
+#   actions_prepared: 0,
+#   duration_ms: 18
+# }
+# [dot-scheduler] candidatos observados [ { status: 'ativo', plan: 'rei', total: 1 } ]
+# [dot-scheduler] rodada concluída {
+#   eligible_companies: 1,
+#   due: 1,
+#   processed: 0,
+#   skipped: 0,
+#   errors: 1,
+#   followups: 0,
+#   events: 0,
+#   decisions: 0,
+#   actions_prepared: 0,
+#   duration_ms: 20
+# }
+# Subtest: A2: erro por empresa no scheduler fica observável sem derrubar a rodada
+ok 146 - A2: erro por empresa no scheduler fica observável sem derrubar a rodada
+  ---
+  duration_ms: 175.887323
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-monitor-resolve-test.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Monitor do Dot: cria eventos e decisões e não duplica na mesma janela
+ok 147 - Monitor do Dot: cria eventos e decisões e não duplica na mesma janela
+  ---
+  duration_ms: 182.194324
+  type: 'test'
+  ...
+# Subtest: Resolução do Dot: verificação por evidência real e isolamento
+ok 148 - Resolução do Dot: verificação por evidência real e isolamento
+  ---
+  duration_ms: 16.938202
+  type: 'test'
+  ...
+# Subtest: Provedor de IA: recusa x resultado ambíguo
+    # Subtest: 429 estruturado é AMBÍGUO: não libera orçamento por padrão
+    ok 1 - 429 estruturado é AMBÍGUO: não libera orçamento por padrão
+      ---
+      duration_ms: 3.1033
+      type: 'test'
+      ...
+    # Subtest: 429 é recusa SOMENTE com evidência explícita de não processamento
+    ok 2 - 429 é recusa SOMENTE com evidência explícita de não processamento
+      ---
+      duration_ms: 0.2979
+      type: 'test'
+      ...
+    # Subtest: 4xx de autenticação/pagamento/modelo do provedor é recusa
+    ok 3 - 4xx de autenticação/pagamento/modelo do provedor é recusa
+      ---
+      duration_ms: 0.6169
+      type: 'test'
+      ...
+    # Subtest: 5xx do provedor é ambíguo: a geração pode ter começado
+    ok 4 - 5xx do provedor é ambíguo: a geração pode ter começado
+      ---
+      duration_ms: 0.340701
+      type: 'test'
+      ...
+    # Subtest: 408 (Request Timeout) é ambíguo mesmo vindo do provedor
+    ok 5 - 408 (Request Timeout) é ambíguo mesmo vindo do provedor
+      ---
+      duration_ms: 0.2376
+      type: 'test'
+      ...
+    # Subtest: 429 de um intermediário NÃO é confundido com recusa do modelo
+    ok 6 - 429 de um intermediário NÃO é confundido com recusa do modelo
+      ---
+      duration_ms: 0.3355
+      type: 'test'
+      ...
+    # Subtest: erro sem status (timeout, conexão cortada) é ambíguo
+    ok 7 - erro sem status (timeout, conexão cortada) é ambíguo
+      ---
+      duration_ms: 0.3798
+      type: 'test'
+      ...
+    # Subtest: ausência de provedor configurado é comprovadamente "não enviado"
+    ok 8 - ausência de provedor configurado é comprovadamente "não enviado"
+      ---
+      duration_ms: 0.4078
+      type: 'test'
+      ...
+    # Subtest: "rejected" sem o erro em mãos não é prova suficiente para liberar
+    ok 9 - "rejected" sem o erro em mãos não é prova suficiente para liberar
+      ---
+      duration_ms: 0.4029
+      type: 'test'
+      ...
+    # Subtest: rótulos de telemetria são sanitizados e não expõem corpo de resposta
+    ok 10 - rótulos de telemetria são sanitizados e não expõem corpo de resposta
+      ---
+      duration_ms: 0.7951
+      type: 'test'
+      ...
+    1..10
+ok 149 - Provedor de IA: recusa x resultado ambíguo
+  ---
+  duration_ms: 9.552001
+  type: 'suite'
+  ...
+# Subtest: Cota por feature: limites declarados apenas para planos com acesso ao Dot
+ok 150 - Cota por feature: limites declarados apenas para planos com acesso ao Dot
+  ---
+  duration_ms: 3.585801
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-quota-isolation-test.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Cota por feature: consumo do Dot não consome o orçamento de feedback
+ok 151 - Cota por feature: consumo do Dot não consome o orçamento de feedback
+  ---
+  duration_ms: 74.579409
+  type: 'test'
+  ...
+# Subtest: Cota por feature: feature normalizada e limitada a tokens positivos
+ok 152 - Cota por feature: feature normalizada e limitada a tokens positivos
+  ---
+  duration_ms: 3.3699
+  type: 'test'
+  ...
+# Subtest: Cota por feature: leitura indisponível falha fechada (nunca libera tokens)
+ok 153 - Cota por feature: leitura indisponível falha fechada (nunca libera tokens)
+  ---
+  duration_ms: 9.051902
+  type: 'test'
+  ...
+# Subtest: não trata datas como telefone
+ok 154 - não trata datas como telefone
+  ---
+  duration_ms: 4.3609
+  type: 'test'
+  ...
+# Subtest: redige telefones, e-mails e tokens
+ok 155 - redige telefones, e-mails e tokens
+  ---
+  duration_ms: 1.438
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-route-protection-1794165493395.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Propriedade: administração é exclusiva do proprietário
+    # Subtest: funcionário com papel padrão não administra; proprietário exige cabeçalho e sessão
+    ok 1 - funcionário com papel padrão não administra; proprietário exige cabeçalho e sessão
+      ---
+      duration_ms: 303.217237
+      type: 'test'
+      ...
+    1..1
+ok 156 - Propriedade: administração é exclusiva do proprietário
+  ---
+  duration_ms: 1973.237742
+  type: 'suite'
+  ...
+# Subtest: PIN administrativo: cadastro somente pelo proprietário
+    # Subtest: funcionário não cadastra PIN; proprietário cadastra uma única vez
+    ok 1 - funcionário não cadastra PIN; proprietário cadastra uma única vez
+      ---
+      duration_ms: 483.496259
+      type: 'test'
+      ...
+    1..1
+ok 157 - PIN administrativo: cadastro somente pelo proprietário
+  ---
+  duration_ms: 484.430659
+  type: 'suite'
+  ...
+# Subtest: Sessão administrativa: emissão, uso e vínculos
+    # Subtest: PIN errado tem atraso progressivo; sessão válida libera a administração
+    ok 1 - PIN errado tem atraso progressivo; sessão válida libera a administração
+      ---
+      duration_ms: 708.584987
+      type: 'test'
+      ...
+    # Subtest: expiração e bloqueio (lock) invalidam a sessão
+    ok 2 - expiração e bloqueio (lock) invalidam a sessão
+      ---
+      duration_ms: 1793.900219
+      type: 'test'
+      ...
+    1..2
+ok 158 - Sessão administrativa: emissão, uso e vínculos
+  ---
+  duration_ms: 2503.797106
+  type: 'suite'
+  ...
+# Subtest: Redefinição do PIN: senha atual + invalidação das sessões
+    # Subtest: exige a senha do proprietário, sobe a versão e derruba as sessões
+    ok 1 - exige a senha do proprietário, sobe a versão e derruba as sessões
+      ---
+      duration_ms: 624.334677
+      type: 'test'
+      ...
+    1..1
+ok 159 - Redefinição do PIN: senha atual + invalidação das sessões
+  ---
+  duration_ms: 625.239877
+  type: 'suite'
+  ...
+# Subtest: Provisionamento de proprietário: exclusivo do admin da plataforma
+    # Subtest: valida token admin, pertencimento do usuário e libera a administração
+    ok 1 - valida token admin, pertencimento do usuário e libera a administração
+      ---
+      duration_ms: 84.458807
+      type: 'test'
+      ...
+    1..1
+ok 160 - Provisionamento de proprietário: exclusivo do admin da plataforma
+  ---
+  duration_ms: 84.909307
+  type: 'suite'
+  ...
+# Subtest: Ferramentas e execução: produto preservado, execução protegida
+    # Subtest: ferramenta de leitura funciona para funcionário; execução exige sessão
+    ok 1 - ferramenta de leitura funciona para funcionário; execução exige sessão
+      ---
+      duration_ms: 251.145505
+      type: 'test'
+      ...
+    1..1
+ok 161 - Ferramentas e execução: produto preservado, execução protegida
+  ---
+  duration_ms: 251.497605
+  type: 'suite'
+  ...
+# Subtest: Bloqueio de sessão administrativa: cabeçalho anti-CSRF obrigatório
+    # Subtest: DELETE /api/dot/admin/session sem X-Dot-Admin é recusado e não revoga a sessão
+    ok 1 - DELETE /api/dot/admin/session sem X-Dot-Admin é recusado e não revoga a sessão
+      ---
+      duration_ms: 407.051709
+      type: 'test'
+      ...
+    # Subtest: prepare-action registra o proprietário autenticado como ator da preparação
+    ok 2 - prepare-action registra o proprietário autenticado como ator da preparação
+      ---
+      duration_ms: 97.706202
+      type: 'test'
+      ...
+    # Subtest: aprovação do próprio preparador retorna HTTP 403 DOT_SEPARATION_OF_DUTIES
+    ok 3 - aprovação do próprio preparador retorna HTTP 403 DOT_SEPARATION_OF_DUTIES
+      ---
+      duration_ms: 98.907102
+      type: 'test'
+      ...
+    # Subtest: mutação de empresa sem X-Dot-Csrf é recusada antes de autenticar
+    ok 4 - mutação de empresa sem X-Dot-Csrf é recusada antes de autenticar
+      ---
+      duration_ms: 20.5834
+      type: 'test'
+      ...
+    1..4
+ok 162 - Bloqueio de sessão administrativa: cabeçalho anti-CSRF obrigatório
+  ---
+  duration_ms: 625.583013
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-routing-1794165502004.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: M3: precedência de /decisions/:id/prepare-action
+    # Subtest: prepare-action é alcançado e prepara a ação (não cai na rota genérica)
+    ok 1 - prepare-action é alcançado e prepara a ação (não cai na rota genérica)
+      ---
+      duration_ms: 180.551104
+      type: 'test'
+      ...
+    # Subtest: a rota genérica continua recusando aprovação fora da fila de ações
+    ok 2 - a rota genérica continua recusando aprovação fora da fila de ações
+      ---
+      duration_ms: 22.075701
+      type: 'test'
+      ...
+    # Subtest: opção inválida é rejeitada e decisão de outra empresa não é encontrada
+    ok 3 - opção inválida é rejeitada e decisão de outra empresa não é encontrada
+      ---
+      duration_ms: 51.980401
+      type: 'test'
+      ...
+    1..3
+ok 163 - M3: precedência de /decisions/:id/prepare-action
+  ---
+  duration_ms: 2601.617154
+  type: 'suite'
+  ...
+# Subtest: A1 (HTTP): aprovar → executar → missão retomada e concluída
+    # Subtest: fluxo completo pela API com a missão vinculada
+    ok 1 - fluxo completo pela API com a missão vinculada
+      ---
+      duration_ms: 595.738812
+      type: 'test'
+      ...
+    # Subtest: retomada só existe para missão pausada
+    ok 2 - retomada só existe para missão pausada
+      ---
+      duration_ms: 19.3144
+      type: 'test'
+      ...
+    1..2
+ok 164 - A1 (HTTP): aprovar → executar → missão retomada e concluída
+  ---
+  duration_ms: 616.086412
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-scheduler-1794165505824-7403.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Filtra Dot monitor ativo — tick 600s
+# [dot-scheduler] candidatos observados []
+# [dot-scheduler] rodada concluída {
+#   eligible_companies: 0,
+#   due: 0,
+#   processed: 0,
+#   skipped: 0,
+#   errors: 0,
+#   followups: 0,
+#   events: 0,
+#   decisions: 0,
+#   actions_prepared: 0,
+#   duration_ms: 7
+# }
+# Filtra Dot monitor ativo — tick 600s
+# Subtest: Scheduler — estado e encerramento gracioso
+    # Subtest: após o start, a rodada em voo é visível e a parada aguarda o término
+    ok 1 - após o start, a rodada em voo é visível e a parada aguarda o término
+      ---
+      duration_ms: 15.753401
+      type: 'test'
+      ...
+# [dot-scheduler] candidatos observados []
+# [dot-scheduler] rodada concluída {
+#   eligible_companies: 0,
+#   due: 0,
+#   processed: 0,
+#   skipped: 0,
+#   errors: 0,
+#   followups: 0,
+#   events: 0,
+#   decisions: 0,
+#   actions_prepared: 0,
+#   duration_ms: 4
+# }
+# Filtra Dot monitor ativo — tick 600s
+    # Subtest: paradas repetidas são idempotentes e nunca devolvem in_flight preso
+    ok 2 - paradas repetidas são idempotentes e nunca devolvem in_flight preso
+      ---
+      duration_ms: 9.0815
+      type: 'test'
+      ...
+# [dot-scheduler] candidatos observados []
+# [dot-scheduler] rodada concluída {
+#   eligible_companies: 0,
+#   due: 0,
+#   processed: 0,
+#   skipped: 0,
+#   errors: 0,
+#   followups: 0,
+#   events: 0,
+#   decisions: 0,
+#   actions_prepared: 0,
+#   duration_ms: 5
+# }
+    # Subtest: iniciar duas vezes não cria duas rodadas nem dois timers
+    ok 3 - iniciar duas vezes não cria duas rodadas nem dois timers
+      ---
+      duration_ms: 8.0881
+      type: 'test'
+      ...
+    1..3
+ok 165 - Scheduler — estado e encerramento gracioso
+  ---
+  duration_ms: 209.833204
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-sent-1794165506573-7421.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Reserva enviada ao provedor — sweep × finalize
+    # Subtest: reserva enviada e vencida NÃO expira; orçamento continua comprometido
+    ok 1 - reserva enviada e vencida NÃO expira; orçamento continua comprometido
+      ---
+      duration_ms: 20.189501
+      type: 'test'
+      ...
+    # Subtest: reserva NÃO enviada e vencida é expirada — orçamento liberado
+    ok 2 - reserva NÃO enviada e vencida é expirada — orçamento liberado
+      ---
+      duration_ms: 13.8258
+      type: 'test'
+      ...
+    # Subtest: um sweep distingue abandonada de enviada na mesma passada
+    ok 3 - um sweep distingue abandonada de enviada na mesma passada
+      ---
+      duration_ms: 15.7181
+      type: 'test'
+      ...
+    # Subtest: dentro da carência a reserva enviada não vira ambígua
+    ok 4 - dentro da carência a reserva enviada não vira ambígua
+      ---
+      duration_ms: 9.174501
+      type: 'test'
+      ...
+    # Subtest: além da carência, reserva enviada sem finalização vira ambígua e mantém o orçamento
+    ok 5 - além da carência, reserva enviada sem finalização vira ambígua e mantém o orçamento
+      ---
+      duration_ms: 12.8404
+      type: 'test'
+      ...
+    # Subtest: sweep × sweep concorrentes: a abandonada expira uma única vez
+    ok 6 - sweep × sweep concorrentes: a abandonada expira uma única vez
+      ---
+      duration_ms: 9.6757
+      type: 'test'
+      ...
+    # Subtest: sweep × finalize em reserva enviada: finalize vence e o consumo é único
+    ok 7 - sweep × finalize em reserva enviada: finalize vence e o consumo é único
+      ---
+      duration_ms: 13.1963
+      type: 'test'
+      ...
+    # Subtest: reserva enviada continua liquidável após virar ambígua (consumo real único)
+    ok 8 - reserva enviada continua liquidável após virar ambígua (consumo real único)
+      ---
+      duration_ms: 11.519801
+      type: 'test'
+      ...
+    # Subtest: marca de envio é idempotente e sobrevive à finalização
+    ok 9 - marca de envio é idempotente e sobrevive à finalização
+      ---
+      duration_ms: 12.4912
+      type: 'test'
+      ...
+    1..9
+ok 166 - Reserva enviada ao provedor — sweep × finalize
+  ---
+  duration_ms: 310.801106
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-shutdown-1794165507581-7439.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Filtra Dot monitor ativo — tick 60s
+# [dot-scheduler] candidatos observados [ { status: 'ativo', plan: 'rei', total: 1 } ]
+# [dot-scheduler] rodada concluída {
+#   eligible_companies: 1,
+#   due: 1,
+#   processed: 1,
+#   skipped: 0,
+#   errors: 0,
+#   followups: 0,
+#   events: 0,
+#   decisions: 0,
+#   actions_prepared: 0,
+#   duration_ms: 19
+# }
+# Filtra Dot monitor ativo — tick 60s
+# Subtest: Scheduler e worker — encerramento gracioso
+    # Subtest: parar o scheduler desliga o timer e chamadas repetidas são idempotentes
+    ok 1 - parar o scheduler desliga o timer e chamadas repetidas são idempotentes
+      ---
+      duration_ms: 34.3609
+      type: 'test'
+      ...
+# [dot-scheduler] candidatos observados [ { status: 'ativo', plan: 'rei', total: 1 } ]
+# [dot-scheduler] rodada concluída {
+#   eligible_companies: 1,
+#   due: 0,
+#   processed: 0,
+#   skipped: 1,
+#   errors: 0,
+#   followups: 0,
+#   events: 0,
+#   decisions: 0,
+#   actions_prepared: 0,
+#   duration_ms: 8
+# }
+# Filtra Dot monitor ativo — tick 60s
+    # Subtest: após a parada, nenhuma rodada nova é agendada (o contador de rodadas não avança)
+    ok 2 - após a parada, nenhuma rodada nova é agendada (o contador de rodadas não avança)
+      ---
+      duration_ms: 165.0039
+      type: 'test'
+      ...
+    # Subtest: o timeout de shutdown é respeitado e a parada não pendura o processo
+    ok 3 - o timeout de shutdown é respeitado e a parada não pendura o processo
+      ---
+      duration_ms: 3.626
+      type: 'test'
+      ...
+# [dot-scheduler] candidatos observados [ { status: 'ativo', plan: 'rei', total: 1 } ]
+# 🤖 DOT agente em background: intervalo 1 min.
+    # Subtest: drenagem do worker: para o timer e aguarda o tick em andamento
+    ok 4 - drenagem do worker: para o timer e aguarda o tick em andamento
+      ---
+      duration_ms: 24.9282
+      type: 'test'
+      ...
+    # Subtest: falha transitória do worker não vira rejeição não tratada
+    ok 5 - falha transitória do worker não vira rejeição não tratada
+      ---
+      duration_ms: 0.8073
+      type: 'test'
+      ...
+    # Subtest: server.ts para os subsistemas ANTES de fechar o pool do banco
+    ok 6 - server.ts para os subsistemas ANTES de fechar o pool do banco
+      ---
+      duration_ms: 0.795
+      type: 'test'
+      ...
+    # Subtest: a sequência de shutdown é idempotente (guard `shuttingDown`)
+    ok 7 - a sequência de shutdown é idempotente (guard `shuttingDown`)
+      ---
+      duration_ms: 0.6611
+      type: 'test'
+      ...
+# [dot-scheduler] rodada concluída {
+#   eligible_companies: 1,
+#   due: 0,
+#   processed: 0,
+#   skipped: 1,
+#   errors: 0,
+#   followups: 0,
+#   events: 0,
+#   decisions: 0,
+#   actions_prepared: 0,
+#   duration_ms: 30
+# }
+    1..7
+ok 167 - Scheduler e worker — encerramento gracioso
+  ---
+  duration_ms: 596.490101
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-drain-1794165508919-7457.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# 🤖 DOT agente em background: intervalo 1 min.
+# Subtest: Shutdown comportamental — drenagem antes do fechamento do pool
+    # Subtest: worker em execução é drenado e nenhuma consulta ocorre após o fechamento do pool
+    ok 1 - worker em execução é drenado e nenhuma consulta ocorre após o fechamento do pool
+      ---
+      duration_ms: 429.627401
+      type: 'test'
+      ...
+# 💾 SQLite: /tmp/filtra-dot-drain-1794165508919-7457.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Filtra Dot monitor ativo — tick 60s
+# [dot-scheduler] candidatos observados [ { status: 'ativo', plan: 'rei', total: 1 } ]
+# [dot-scheduler] rodada concluída {
+#   eligible_companies: 1,
+#   due: 1,
+#   processed: 1,
+#   skipped: 0,
+#   errors: 0,
+#   followups: 0,
+#   events: 0,
+#   decisions: 0,
+#   actions_prepared: 0,
+#   duration_ms: 56
+# }
+    # Subtest: scheduler parado não consulta o banco depois da drenagem
+    ok 2 - scheduler parado não consulta o banco depois da drenagem
+      ---
+      duration_ms: 568.841902
+      type: 'test'
+      ...
+# 💾 SQLite: /tmp/filtra-dot-drain-1794165508919-7457.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+    # Subtest: a drenagem é limitada no tempo e não pendura o processo
+    ok 3 - a drenagem é limitada no tempo e não pendura o processo
+      ---
+      duration_ms: 71.9734
+      type: 'test'
+      ...
+    1..3
+ok 168 - Shutdown comportamental — drenagem antes do fechamento do pool
+  ---
+  duration_ms: 1626.727604
+  type: 'suite'
+  ...
+# Subtest: Ferramentas do Dot: catálogo não expõe o executor
+ok 169 - Ferramentas do Dot: catálogo não expõe o executor
+  ---
+  duration_ms: 5.0544
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-tool-registry-test.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Ferramentas do Dot: invocação exige permissão explícita e é auditada
+ok 170 - Ferramentas do Dot: invocação exige permissão explícita e é auditada
+  ---
+  duration_ms: 169.0424
+  type: 'test'
+  ...
+# Subtest: Ferramentas do Dot: ferramenta desconhecida e limite de leitura
+ok 171 - Ferramentas do Dot: ferramenta desconhecida e limite de leitura
+  ---
+  duration_ms: 32.979001
+  type: 'test'
+  ...
+# 💾 SQLite: /tmp/filtra-dot-tickshare-1794165512994-7503.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# 🤖 DOT agente em background: intervalo 10 min.
+# 🤖 DOT agente em background: intervalo 10 min.
+# Subtest: Worker — promessa única por tick
+    # Subtest: start agenda um tick e wake devolve A MESMA promessa
+    ok 1 - start agenda um tick e wake devolve A MESMA promessa
+      ---
+      duration_ms: 9.3411
+      type: 'test'
+      ...
+# 🤖 DOT agente em background: intervalo 10 min.
+    # Subtest: após o assentamento, um novo wake cria um tick novo (nunca reutiliza encerrado)
+    ok 2 - após o assentamento, um novo wake cria um tick novo (nunca reutiliza encerrado)
+      ---
+      duration_ms: 4.8492
+      type: 'test'
+      ...
+# 🤖 DOT agente em background: intervalo 10 min.
+    # Subtest: status expõe in_flight durante o tick e some depois da drenagem
+    ok 3 - status expõe in_flight durante o tick e some depois da drenagem
+      ---
+      duration_ms: 4.3892
+      type: 'test'
+      ...
+    # Subtest: drenagem sem tick em voo é imediata e não pendura
+    ok 4 - drenagem sem tick em voo é imediata e não pendura
+      ---
+      duration_ms: 0.9847
+      type: 'test'
+      ...
+    # Subtest: fila de missões do tick respeita o limite e não quebra sem trabalho
+    ok 5 - fila de missões do tick respeita o limite e não quebra sem trabalho
+      ---
+      duration_ms: 6.1184
+      type: 'test'
+      ...
+    1..5
+ok 172 - Worker — promessa única por tick
+  ---
+  duration_ms: 390.876101
+  type: 'suite'
+  ...
+# Subtest: aceita e-mails válidos (inclusive com a letra "s" e com ponto no domínio)
+ok 173 - aceita e-mails válidos (inclusive com a letra "s" e com ponto no domínio)
+  ---
+  duration_ms: 2.9655
+  type: 'test'
+  ...
+# Subtest: rejeita e-mails inválidos
+ok 174 - rejeita e-mails inválidos
+  ---
+  duration_ms: 0.6491
+  type: 'test'
+  ...
+# Subtest: validateEnv
+    # Subtest: falha sem JWT_SECRET
+    ok 1 - falha sem JWT_SECRET
+      ---
+      duration_ms: 2.4945
+      type: 'test'
+      ...
+    # Subtest: ok com JWT longo
+    ok 2 - ok com JWT longo
+      ---
+      duration_ms: 0.8571
+      type: 'test'
+      ...
+    1..2
+ok 175 - validateEnv
+  ---
+  duration_ms: 5.1677
+  type: 'suite'
+  ...
+# Subtest: buildFollowupDraft
+    # Subtest: mantém a oferta de 7 dias sem cartão e o nome da empresa
+    ok 1 - mantém a oferta de 7 dias sem cartão e o nome da empresa
+      ---
+      duration_ms: 2.9877
+      type: 'test'
+      ...
+    # Subtest: usa APP_URL quando configurado
+    ok 2 - usa APP_URL quando configurado
+      ---
+      duration_ms: 0.6101
+      type: 'test'
+      ...
+    1..2
+ok 176 - buildFollowupDraft
+  ---
+  duration_ms: 13.1066
+  type: 'suite'
+  ...
+# Subtest: smoke — módulos críticos exportam
+    # Subtest: validateEnv rejeita JWT curto
+    ok 1 - validateEnv rejeita JWT curto
+      ---
+      duration_ms: 44.552101
+      type: 'test'
+      ...
+    # Subtest: plan utils e planTemRelatorio
+    ok 2 - plan utils e planTemRelatorio
+      ---
+      duration_ms: 10.3786
+      type: 'test'
+      ...
+    # Subtest: password policy
+    ok 3 - password policy
+      ---
+      duration_ms: 18.0456
+      type: 'test'
+      ...
+    # Subtest: jwt sign/verify com secret de teste
+    ok 4 - jwt sign/verify com secret de teste
+      ---
+      duration_ms: 131.871802
+      type: 'test'
+      ...
+    1..4
+ok 177 - smoke — módulos críticos exportam
+  ---
+  duration_ms: 208.655003
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-lead-test-1794165516942.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# 🔑 Admin criado: admin-test@example.com
+# Subtest: POST /api/lead
+    # Subtest: rejeita quando o consentimento está ausente
+    ok 1 - rejeita quando o consentimento está ausente
+      ---
+      duration_ms: 127.996002
+      type: 'test'
+      ...
+    # Subtest: rejeita consent=false
+    ok 2 - rejeita consent=false
+      ---
+      duration_ms: 20.473501
+      type: 'test'
+      ...
+    # Subtest: rejeita e-mail inválido
+    ok 3 - rejeita e-mail inválido
+      ---
+      duration_ms: 13.2724
+      type: 'test'
+      ...
+    1..3
+ok 178 - POST /api/lead
+  ---
+  duration_ms: 1913.115131
+  type: 'suite'
+  ...
+# Subtest: recordLeadConsent
+    # Subtest: acrescenta prova de consentimento ao lead do trial sem apagar o conteúdo existente
+    ok 1 - acrescenta prova de consentimento ao lead do trial sem apagar o conteúdo existente
+      ---
+      duration_ms: 15.4267
+      type: 'test'
+      ...
+    # Subtest: não falha quando não existe lead para o e-mail
+    ok 2 - não falha quando não existe lead para o e-mail
+      ---
+      duration_ms: 4.4831
+      type: 'test'
+      ...
+    1..2
+ok 179 - recordLeadConsent
+  ---
+  duration_ms: 20.8858
+  type: 'suite'
+  ...
+# Subtest: POST /api/legal/aceite
+    # Subtest: exige aceito=true
+    ok 1 - exige aceito=true
+      ---
+      duration_ms: 15.1017
+      type: 'test'
+      ...
+    # Subtest: registra o aceite e devolve as versões
+    ok 2 - registra o aceite e devolve as versões
+      ---
+      duration_ms: 13.767301
+      type: 'test'
+      ...
+    1..2
+ok 180 - POST /api/legal/aceite
+  ---
+  duration_ms: 29.962101
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-stripe-e2e-1794165519461.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# 🔑 Admin criado: admin-stripe-e2e@example.com
+# [billing] plano ativado empresa=7b321ed7-96e0-4df8-a898-837613a89cad plan=pro
+# Subtest: E2E Stripe webhook → ativação de plano
+    # Subtest: checkout.session.completed ativa plan=pro
+    ok 1 - checkout.session.completed ativa plan=pro
+      ---
+      duration_ms: 352.008006
+      type: 'test'
+      ...
+    # Subtest: GET /api/empresa/:id/assinatura reflete acesso pago
+    ok 2 - GET /api/empresa/:id/assinatura reflete acesso pago
+      ---
+      duration_ms: 113.698601
+      type: 'test'
+      ...
+    1..2
+ok 181 - E2E Stripe webhook → ativação de plano
+  ---
+  duration_ms: 1692.799827
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-test-1794165521968.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# 🔑 Admin criado: admin-test@example.com
+# Subtest: GET /api/health
+    # Subtest: responde ok
+    ok 1 - responde ok
+      ---
+      duration_ms: 107.710201
+      type: 'test'
+      ...
+    1..1
+ok 182 - GET /api/health
+  ---
+  duration_ms: 1735.326724
+  type: 'suite'
+  ...
+# Subtest: POST /api/trial/ativar
+    # Subtest: rejeita body inválido (sem CNPJ)
+    ok 1 - rejeita body inválido (sem CNPJ)
+      ---
+      duration_ms: 72.189801
+      type: 'test'
+      ...
+    # Subtest: rejeita CNPJ inválido
+    ok 2 - rejeita CNPJ inválido
+      ---
+      duration_ms: 42.056501
+      type: 'test'
+      ...
+# [mail] Sem RESEND_API_KEY e SMTP incompleto
+# ────────────────────────────────────────────
+# 📧 E-mail NÃO enviado. Para: trial-1794165523841@teste.com Assunto: Filtra.IA — trial ativado para Empresa Integração Teste
+# Olá,
+# Seu período de 7 dias grátis de Empresa Integração Teste está ativo.
+# Expira em: 15 de nov. de 2026, 16:18
+# Painel (faça login): http://localhost:3000/login?next=%2Fpainel%2Fempresa-integracao-teste
+# Link de avaliação: http://localhost:3000/avaliacao/empresa-integracao-teste
+# Compartilhe o link (ou QR) com clientes. Críticas ≤3★ ficam privadas e você recebe alerta.
+# ────────────────────────────────────────────
+# [lead-automation] qualificação IA indisponível: Nenhuma IA configurada. Defina GROQ_API_KEY e/ou GEMINI_API_KEY no .env
+    # Subtest: ativa trial com CNPJ válido
+    ok 3 - ativa trial com CNPJ válido
+      ---
+      duration_ms: 770.685308
+      type: 'test'
+      ...
+    # Subtest: bloqueia CNPJ duplicado
+    ok 4 - bloqueia CNPJ duplicado
+      ---
+      duration_ms: 10.2295
+      type: 'test'
+      ...
+    1..4
+ok 183 - POST /api/trial/ativar
+  ---
+  duration_ms: 896.80831
+  type: 'suite'
+  ...
+# Subtest: POST /api/reviews
+    # Subtest: rejeita rating inválido
+    ok 1 - rejeita rating inválido
+      ---
+      duration_ms: 15.9189
+      type: 'test'
+      ...
+    # Subtest: exige comentário para nota ≤ 3
+    ok 2 - exige comentário para nota ≤ 3
+      ---
+      duration_ms: 7.4137
+      type: 'test'
+      ...
+    # Subtest: aceita review 5 estrelas sem comentário
+    ok 3 - aceita review 5 estrelas sem comentário
+      ---
+      duration_ms: 11.526701
+      type: 'test'
+      ...
+    # Subtest: persiste unidade_id informado pelo link exclusivo da unidade
+    ok 4 - persiste unidade_id informado pelo link exclusivo da unidade
+      ---
+      duration_ms: 16.3967
+      type: 'test'
+      ...
+    # Subtest: rejeita unidade_id acima de 100 caracteres
+    ok 5 - rejeita unidade_id acima de 100 caracteres
+      ---
+      duration_ms: 9.4689
+      type: 'test'
+      ...
+    1..5
+ok 184 - POST /api/reviews
+  ---
+  duration_ms: 63.662301
+  type: 'suite'
+  ...
+# Subtest: GET /api/trial/verificar (tombstone)
+    # Subtest: responde 410 com código explícito (confirmação por e-mail aposentada)
+    ok 1 - responde 410 com código explícito (confirmação por e-mail aposentada)
+      ---
+      duration_ms: 8.8452
+      type: 'test'
+      ...
+    1..1
+ok 185 - GET /api/trial/verificar (tombstone)
+  ---
+  duration_ms: 9.2143
+  type: 'suite'
+  ...
+# Subtest: JWT rotation
+    # Subtest: assina com chave atual e verifica com atual
+    ok 1 - assina com chave atual e verifica com atual
+      ---
+      duration_ms: 112.557401
+      type: 'test'
+      ...
+    # Subtest: ainda valida token assinado com chave anterior
+    ok 2 - ainda valida token assinado com chave anterior
+      ---
+      duration_ms: 7.9552
+      type: 'test'
+      ...
+    1..2
+ok 186 - JWT rotation
+  ---
+  duration_ms: 123.630901
+  type: 'suite'
+  ...
+# Subtest: lgpd retention
+    # Subtest: default 90 days
+    ok 1 - default 90 days
+      ---
+      duration_ms: 1.298
+      type: 'test'
+      ...
+    # Subtest: respects env
+    ok 2 - respects env
+      ---
+      duration_ms: 0.2855
+      type: 'test'
+      ...
+    # Subtest: invalid falls back
+    ok 3 - invalid falls back
+      ---
+      duration_ms: 0.2222
+      type: 'test'
+      ...
+    1..3
+ok 187 - lgpd retention
+  ---
+  duration_ms: 3.4958
+  type: 'suite'
+  ...
+# Subtest: HTTP metrics
+    # Subtest: acumula amostras e calcula resumo
+    ok 1 - acumula amostras e calcula resumo
+      ---
+      duration_ms: 1.8705
+      type: 'test'
+      ...
+    1..1
+ok 188 - HTTP metrics
+  ---
+  duration_ms: 3.4292
+  type: 'suite'
+  ...
+# Subtest: TOTP MFA
+    # Subtest: gera secret base32
+    ok 1 - gera secret base32
+      ---
+      duration_ms: 2.1213
+      type: 'test'
+      ...
+    # Subtest: verifica código atual
+    ok 2 - verifica código atual
+      ---
+      duration_ms: 2.7034
+      type: 'test'
+      ...
+    # Subtest: rejeita código inválido
+    ok 3 - rejeita código inválido
+      ---
+      duration_ms: 1.2841
+      type: 'test'
+      ...
+    # Subtest: monta otpauth url
+    ok 4 - monta otpauth url
+      ---
+      duration_ms: 0.8882
+      type: 'test'
+      ...
+    1..4
+ok 189 - TOTP MFA
+  ---
+  duration_ms: 10.9229
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-monthly-report-job-test.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: job mensal gera+persiste snapshot e não distribui quando a entrega externa está desligada
+ok 190 - job mensal gera+persiste snapshot e não distribui quando a entrega externa está desligada
+  ---
+  duration_ms: 119.607701
+  type: 'test'
+  ...
+# Subtest: entrega externa ligada sem n8n: marca distribuição indisponível sem falhar
+ok 191 - entrega externa ligada sem n8n: marca distribuição indisponível sem falhar
+  ---
+  duration_ms: 17.5978
+  type: 'test'
+  ...
+# Subtest: empresa sem destinatário configurado e sem usuário com e-mail fica generated/sem_destinatario
+ok 192 - empresa sem destinatário configurado e sem usuário com e-mail fica generated/sem_destinatario
+  ---
+  duration_ms: 20.9516
+  type: 'test'
+  ...
+# Subtest: modo automático só roda no dia do aniversário da assinatura
+ok 193 - modo automático só roda no dia do aniversário da assinatura
+  ---
+  duration_ms: 28.340901
+  type: 'test'
+  ...
+# Subtest: pendência antiga é retomada automaticamente mesmo sem âncora de assinatura
+ok 194 - pendência antiga é retomada automaticamente mesmo sem âncora de assinatura
+  ---
+  duration_ms: 23.7078
+  type: 'test'
+  ...
+# Subtest: empresa legada sem âncora e sem pendência entra em sem_dia_assinatura
+ok 195 - empresa legada sem âncora e sem pendência entra em sem_dia_assinatura
+  ---
+  duration_ms: 13.3764
+  type: 'test'
+  ...
+# Subtest: monthly report runs on the subscription anniversary day
+ok 196 - monthly report runs on the subscription anniversary day
+  ---
+  duration_ms: 1.7876
+  type: 'test'
+  ...
+# Subtest: anniversary on days 29-31 falls back to the last day of shorter months
+ok 197 - anniversary on days 29-31 falls back to the last day of shorter months
+  ---
+  duration_ms: 0.5023
+  type: 'test'
+  ...
+# Subtest: invalid subscription days never trigger scheduled reports
+ok 198 - invalid subscription days never trigger scheduled reports
+  ---
+  duration_ms: 0.3112
+  type: 'test'
+  ...
+# Subtest: unresolved monthly report reservations retry after the anniversary day
+ok 199 - unresolved monthly report reservations retry after the anniversary day
+  ---
+  duration_ms: 2.2783
+  type: 'test'
+  ...
+# Subtest: generated snapshot counts as resolved when external delivery is disabled
+ok 200 - generated snapshot counts as resolved when external delivery is disabled
+  ---
+  duration_ms: 0.6511
+  type: 'test'
+  ...
+# Subtest: processing reservation is retried only after the 30-minute lease expires
+ok 201 - processing reservation is retried only after the 30-minute lease expires
+  ---
+  duration_ms: 0.8475
+  type: 'test'
+  ...
+# [monthly-report] agendador: período 2031-04 processado (candidatos=0, pulados=0, snapshots=0, falhas=0)
+# [monthly-report] agendador: período 2031-04 processado (candidatos=0, pulados=0, snapshots=0, falhas=0)
+# [monthly-report] agendador falhou: banco fora
+# [monthly-report] agendador: período 2031-04 processado (candidatos=0, pulados=0, snapshots=0, falhas=0)
+# Subtest: período alvo é o mês UTC anterior (virada de ano inclusive)
+ok 202 - período alvo é o mês UTC anterior (virada de ano inclusive)
+  ---
+  duration_ms: 2.3813
+  type: 'test'
+  ...
+# Subtest: agendador ligado por padrão e desligável por MONTHLY_REPORT_SCHEDULER
+ok 203 - agendador ligado por padrão e desligável por MONTHLY_REPORT_SCHEDULER
+  ---
+  duration_ms: 0.5364
+  type: 'test'
+  ...
+# Subtest: tick roda no máximo uma vez por dia UTC e propaga erro para retry
+ok 204 - tick roda no máximo uma vez por dia UTC e propaga erro para retry
+  ---
+  duration_ms: 4.3796
+  type: 'test'
+  ...
+# Subtest: tick não executa quando desligado
+ok 205 - tick não executa quando desligado
+  ---
+  duration_ms: 0.6969
+  type: 'test'
+  ...
+# Subtest: validarSenhaEmpresa
+    # Subtest: rejeita senha curta
+    ok 1 - rejeita senha curta
+      ---
+      duration_ms: 1.5073
+      type: 'test'
+      ...
+    # Subtest: rejeita sem maiúscula
+    ok 2 - rejeita sem maiúscula
+      ---
+      duration_ms: 0.2878
+      type: 'test'
+      ...
+    # Subtest: rejeita sem número
+    ok 3 - rejeita sem número
+      ---
+      duration_ms: 0.3369
+      type: 'test'
+      ...
+    # Subtest: rejeita sem especial
+    ok 4 - rejeita sem especial
+      ---
+      duration_ms: 0.4311
+      type: 'test'
+      ...
+    # Subtest: aceita senha válida
+    ok 5 - aceita senha válida
+      ---
+      duration_ms: 0.3879
+      type: 'test'
+      ...
+    1..5
+ok 206 - validarSenhaEmpresa
+  ---
+  duration_ms: 5.0257
+  type: 'suite'
+  ...
+# Subtest: guarda anti-produção dos testes PostgreSQL
+    # Subtest: aceita localhost, 127.0.0.1 e ::1
+    ok 1 - aceita localhost, 127.0.0.1 e ::1
+      ---
+      duration_ms: 2.2186
+      type: 'test'
+      ...
+    # Subtest: recusa hosts remotos que não estejam na allowlist
+    ok 2 - recusa hosts remotos que não estejam na allowlist
+      ---
+      duration_ms: 1.4425
+      type: 'test'
+      ...
+    # Subtest: aceita host remoto explicitamente listado na allowlist
+    ok 3 - aceita host remoto explicitamente listado na allowlist
+      ---
+      duration_ms: 0.6886
+      type: 'test'
+      ...
+    # Subtest: recusa URL inválida e scheme não-postgres
+    ok 4 - recusa URL inválida e scheme não-postgres
+      ---
+      duration_ms: 0.951
+      type: 'test'
+      ...
+    1..4
+ok 207 - guarda anti-produção dos testes PostgreSQL
+  ---
+  duration_ms: 8.9356
+  type: 'suite'
+  ...
+# Subtest: allowPlanSwitch: produção sempre OFF, mesmo com ALLOW_PLAN_SWITCH=1
+ok 208 - allowPlanSwitch: produção sempre OFF, mesmo com ALLOW_PLAN_SWITCH=1
+  ---
+  duration_ms: 1.8416
+  type: 'test'
+  ...
+# Subtest: allowPlanSwitch: fora de produção ligado por padrão e desligável por env
+ok 209 - allowPlanSwitch: fora de produção ligado por padrão e desligável por env
+  ---
+  duration_ms: 1.0683
+  type: 'test'
+  ...
+# Subtest: rotas de teste respondem desativadas em produção
+ok 210 - rotas de teste respondem desativadas em produção
+  ---
+  duration_ms: 8.6193
+  type: 'test'
+  ...
+# Subtest: legacy report-file endpoints return 410 Gone
+ok 211 - legacy report-file endpoints return 410 Gone
+  ---
+  duration_ms: 2.6909
+  type: 'test'
+  ...
+# Subtest: report entitlement is not advertised for Initial plan
+ok 212 - report entitlement is not advertised for Initial plan
+  ---
+  duration_ms: 0.4482
+  type: 'test'
+  ...
+# Subtest: recipient normalization preserves all recipients so the route can reject more than 20
+ok 213 - recipient normalization preserves all recipients so the route can reject more than 20
+  ---
+  duration_ms: 0.8295
+  type: 'test'
+  ...
+# Subtest: planTemIA
+    # Subtest: inicial e pro sem IA
+    ok 1 - inicial e pro sem IA
+      ---
+      duration_ms: 2.645299
+      type: 'test'
+      ...
+    # Subtest: ultra+ e trial com IA
+    ok 2 - ultra+ e trial com IA
+      ---
+      duration_ms: 0.5928
+      type: 'test'
+      ...
+    1..2
+ok 214 - planTemIA
+  ---
+  duration_ms: 12.181899
+  type: 'suite'
+  ...
+# Subtest: getFeedbackLimit
+    # Subtest: respeita tabela de planos
+    ok 1 - respeita tabela de planos
+      ---
+      duration_ms: 0.9282
+      type: 'test'
+      ...
+    # Subtest: fallback trial para plano desconhecido
+    ok 2 - fallback trial para plano desconhecido
+      ---
+      duration_ms: 0.619
+      type: 'test'
+      ...
+    1..2
+ok 215 - getFeedbackLimit
+  ---
+  duration_ms: 3.1304
+  type: 'suite'
+  ...
+# Subtest: getTokenLimit
+    # Subtest: inicial/pro zerados
+    ok 1 - inicial/pro zerados
+      ---
+      duration_ms: 0.5039
+      type: 'test'
+      ...
+    # Subtest: trial e ultra+ com teto
+    ok 2 - trial e ultra+ com teto
+      ---
+      duration_ms: 0.4916
+      type: 'test'
+      ...
+    1..2
+ok 216 - getTokenLimit
+  ---
+  duration_ms: 2.0397
+  type: 'suite'
+  ...
+# Subtest: planTemRelatorio
+    # Subtest: inicial sem relatório; pro+ e trial com relatório
+    ok 1 - inicial sem relatório; pro+ e trial com relatório
+      ---
+      duration_ms: 2.1777
+      type: 'test'
+      ...
+    1..1
+ok 217 - planTemRelatorio
+  ---
+  duration_ms: 4.0648
+  type: 'suite'
+  ...
+# 💾 SQLite: /tmp/filtra-relatorio-unidades-test.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: Relatório profissional: unidades reais aparecem mesmo sem coluna slug (regressão B1)
+ok 218 - Relatório profissional: unidades reais aparecem mesmo sem coluna slug (regressão B1)
+  ---
+  duration_ms: 376.723281
+  type: 'test'
+  ...
+# Subtest: retry queue database compatibility
+    # Subtest: uses INSERT RETURNING instead of sqlite-only lastID
+    ok 1 - uses INSERT RETURNING instead of sqlite-only lastID
+      ---
+      duration_ms: 2.9895
+      type: 'test'
+      ...
+    1..1
+ok 219 - retry queue database compatibility
+  ---
+  duration_ms: 4.8092
+  type: 'suite'
+  ...
+# Subtest: retry queue atomic claiming
+    # Subtest: does not execute a job when another worker already claimed it
+    ok 1 - does not execute a job when another worker already claimed it
+      ---
+      duration_ms: 1.225
+      type: 'test'
+      ...
+    # Subtest: executes only after successfully claiming the job
+    ok 2 - executes only after successfully claiming the job
+      ---
+      duration_ms: 0.6653
+      type: 'test'
+      ...
+    1..2
+ok 220 - retry queue atomic claiming
+  ---
+  duration_ms: 2.2353
+  type: 'suite'
+  ...
+# 💾 SQLite: /home/lucas/dot-test/data/legacy-reviews-central-1794165535211-062895f5bbf5a.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# 💾 SQLite: /home/lucas/dot-test/data/legacy-reviews-central-1794165535211-062895f5bbf5a.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: SQLite legado recebe todas as colunas de reviews e preserva dados
+ok 221 - SQLite legado recebe todas as colunas de reviews e preserva dados
+  ---
+  duration_ms: 31031.863057
+  type: 'test'
+  ...
+# 💾 SQLite: /home/lucas/dot-test/data/legacy-reviews-failure-1794165566183.sqlite
+# 💾 SQLite: /home/lucas/dot-test/data/legacy-reviews-failure-1794165566183.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: SQLite: falha na migração limpa o estado e permite nova inicialização
+ok 222 - SQLite: falha na migração limpa o estado e permite nova inicialização
+  ---
+  duration_ms: 67884.860745
+  type: 'test'
+  ...
+# 💾 SQLite: /home/lucas/dot-test/data/legacy-reviews-created_at-1794165634869-bff6e703d628a.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# 💾 SQLite: /home/lucas/dot-test/data/legacy-reviews-created_at-1794165634869-bff6e703d628a.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: preserva datas históricas em created_at (snake_case)
+ok 223 - preserva datas históricas em created_at (snake_case)
+  ---
+  duration_ms: 112078.953482
+  type: 'test'
+  ...
+# 💾 SQLite: /home/lucas/dot-test/data/legacy-reviews-createdat-1794165746950-6e339f7b38319.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: preserva datas históricas em createdat (minúsculo)
+ok 224 - preserva datas históricas em createdat (minúsculo)
+  ---
+  duration_ms: 96020.100992
+  type: 'test'
+  ...
+# 💾 SQLite: /home/lucas/dot-test/data/legacy-reviews-createdAt-1794165842970-14cfcf8a15be1.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: preserva datas históricas em createdAt (schema original)
+ok 225 - preserva datas históricas em createdAt (schema original)
+  ---
+  duration_ms: 107806.373618
+  type: 'test'
+  ...
+# 💾 SQLite: /home/lucas/dot-test/data/legacy-reviews-created_at-1794165950777-e1863136f4b97.sqlite
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: preserva datas anteriores mesmo quando a coluna é adicionada com DEFAULT legado
+ok 226 - preserva datas anteriores mesmo quando a coluna é adicionada com DEFAULT legado
+  ---
+  duration_ms: 140690.107839
+  type: 'test'
+  ...
+# Subtest: nenhuma DDL de reviews fora de lib/migrations.ts
+ok 227 - nenhuma DDL de reviews fora de lib/migrations.ts
+  ---
+  duration_ms: 1012.383536
+  type: 'test'
+  ...
+# Subtest: auditoria cobre os módulos com DDL remanescente para justificativa
+ok 228 - auditoria cobre os módulos com DDL remanescente para justificativa
+  ---
+  duration_ms: 348.626584
+  type: 'test'
+  ...
+# Subtest: sentiment
+    # Subtest: nota alta → positivo
+    ok 1 - nota alta → positivo
+      ---
+      duration_ms: 1.6059
+      type: 'test'
+      ...
+    # Subtest: nota baixa → negativo
+    ok 2 - nota baixa → negativo
+      ---
+      duration_ms: 0.2363
+      type: 'test'
+      ...
+    # Subtest: heurística detecta palavras negativas
+    ok 3 - heurística detecta palavras negativas
+      ---
+      duration_ms: 1.7139
+      type: 'test'
+      ...
+    # Subtest: heurística detecta palavras positivas
+    ok 4 - heurística detecta palavras positivas
+      ---
+      duration_ms: 0.8068
+      type: 'test'
+      ...
+    # Subtest: parse JSON da IA
+    ok 5 - parse JSON da IA
+      ---
+      duration_ms: 0.4376
+      type: 'test'
+      ...
+    1..5
+ok 229 - sentiment
+  ---
+  duration_ms: 6.9199
+  type: 'suite'
+  ...
+# Subtest: resolvePlano
+    # Subtest: resolve todos os planos da tabela
+    ok 1 - resolve todos os planos da tabela
+      ---
+      duration_ms: 1.5603
+      type: 'test'
+      ...
+    # Subtest: rejeita plano inválido
+    ok 2 - rejeita plano inválido
+      ---
+      duration_ms: 0.2925
+      type: 'test'
+      ...
+    # Subtest: lista pública tem 10 entradas
+    ok 3 - lista pública tem 10 entradas
+      ---
+      duration_ms: 0.6278
+      type: 'test'
+      ...
+    # Subtest: stripeConfigured sem chave é false
+    ok 4 - stripeConfigured sem chave é false
+      ---
+      duration_ms: 0.3233
+      type: 'test'
+      ...
+    # Subtest: limites de feedback batem com o produto
+    ok 5 - limites de feedback batem com o produto
+      ---
+      duration_ms: 0.2302
+      type: 'test'
+      ...
+    1..5
+ok 230 - resolvePlano
+  ---
+  duration_ms: 5.1898
+  type: 'suite'
+  ...
+# Subtest: runner padrão lista testes comuns e exclui *.pg.test.ts
+ok 231 - runner padrão lista testes comuns e exclui *.pg.test.ts
+  ---
+  duration_ms: 121.837294
+  type: 'test'
+  ...
+# Subtest: runner --postgres lista somente *.pg.test.ts
+ok 232 - runner --postgres lista somente *.pg.test.ts
+  ---
+  duration_ms: 349.383484
+  type: 'test'
+  ...
+# Subtest: scripts de teste não dependem de find/xargs (Windows/PowerShell)
+ok 233 - scripts de teste não dependem de find/xargs (Windows/PowerShell)
+  ---
+  duration_ms: 1.6897
+  type: 'test'
+  ...
+# Subtest: validateBody + schemaTrialAtivar
+    # Subtest: rejeita body vazio
+    ok 1 - rejeita body vazio
+      ---
+      duration_ms: 2.0715
+      type: 'test'
+      ...
+    # Subtest: rejeita CNPJ inválido
+    ok 2 - rejeita CNPJ inválido
+      ---
+      duration_ms: 1.0733
+      type: 'test'
+      ...
+    # Subtest: aceita payload válido
+    ok 3 - aceita payload válido
+      ---
+      duration_ms: 0.8963
+      type: 'test'
+      ...
+    1..3
+ok 234 - validateBody + schemaTrialAtivar
+  ---
+  duration_ms: 5.7767
+  type: 'suite'
+  ...
+# Subtest: schemaReview
+    # Subtest: exige comentário em nota baixa
+    ok 1 - exige comentário em nota baixa
+      ---
+      duration_ms: 0.6583
+      type: 'test'
+      ...
+    # Subtest: aceita nota alta sem comentário
+    ok 2 - aceita nota alta sem comentário
+      ---
+      duration_ms: 0.37
+      type: 'test'
+      ...
+    1..2
+ok 235 - schemaReview
+  ---
+  duration_ms: 1.4021
+  type: 'suite'
+  ...
+# Subtest: schemaLoginEmpresa
+    # Subtest: aceita identificador textual e exige senha
+    ok 1 - aceita identificador textual e exige senha
+      ---
+      duration_ms: 0.6504
+      type: 'test'
+      ...
+    # Subtest: ensureLoginIdentifier rejeita identificador curto
+    ok 2 - ensureLoginIdentifier rejeita identificador curto
+      ---
+      duration_ms: 0.7119
+      type: 'test'
+      ...
+    # Subtest: ensureLoginIdentifier aceita e-mail válido
+    ok 3 - ensureLoginIdentifier aceita e-mail válido
+      ---
+      duration_ms: 0.3217
+      type: 'test'
+      ...
+    1..3
+ok 236 - schemaLoginEmpresa
+  ---
+  duration_ms: 2.3231
+  type: 'suite'
+  ...
+# Subtest: schemaCheckout
+    # Subtest: rejeita plano inválido
+    ok 1 - rejeita plano inválido
+      ---
+      duration_ms: 0.5363
+      type: 'test'
+      ...
+    # Subtest: aceita pro-anual
+    ok 2 - aceita pro-anual
+      ---
+      duration_ms: 0.5772
+      type: 'test'
+      ...
+    1..2
+ok 237 - schemaCheckout
+  ---
+  duration_ms: 1.4157
+  type: 'suite'
+  ...
+# Subtest: normalizarWhatsapp
+    # Subtest: aceita número BR com DDD e prefixa 55
+    ok 1 - aceita número BR com DDD e prefixa 55
+      ---
+      duration_ms: 1.4524
+      type: 'test'
+      ...
+    # Subtest: mantém DDI quando já presente
+    ok 2 - mantém DDI quando já presente
+      ---
+      duration_ms: 0.2324
+      type: 'test'
+      ...
+    # Subtest: rejeita vazio ou inválido
+    ok 3 - rejeita vazio ou inválido
+      ---
+      duration_ms: 0.393999
+      type: 'test'
+      ...
+    # Subtest: rejeita números com tamanho absurdo
+    ok 4 - rejeita números com tamanho absurdo
+      ---
+      duration_ms: 0.2204
+      type: 'test'
+      ...
+    1..4
+ok 238 - normalizarWhatsapp
+  ---
+  duration_ms: 4.041899
+  type: 'suite'
+  ...
+# Subtest: linkWhatsapp
+    # Subtest: gera wa.me
+    ok 1 - gera wa.me
+      ---
+      duration_ms: 0.3988
+      type: 'test'
+      ...
+    # Subtest: inclui texto codificado
+    ok 2 - inclui texto codificado
+      ---
+      duration_ms: 0.2962
+      type: 'test'
+      ...
+    # Subtest: retorna null sem telefone válido
+    ok 3 - retorna null sem telefone válido
+      ---
+      duration_ms: 0.265
+      type: 'test'
+      ...
+    1..3
+ok 239 - linkWhatsapp
+  ---
+  duration_ms: 1.6646
+  type: 'suite'
+  ...
+# Subtest: mensagemEmpresaParaCliente (empresa → cliente)
+    # Subtest: inclui referência de nota, empresa, comentário e cliente
+    ok 1 - inclui referência de nota, empresa, comentário e cliente
+      ---
+      duration_ms: 0.4681
+      type: 'test'
+      ...
+    # Subtest: usa fallbacks quando dados ausentes
+    ok 2 - usa fallbacks quando dados ausentes
+      ---
+      duration_ms: 0.648
+      type: 'test'
+      ...
+    1..2
+ok 240 - mensagemEmpresaParaCliente (empresa → cliente)
+  ---
+  duration_ms: 2.1729
+  type: 'suite'
+  ...
+# Subtest: mensagemPosCritica (cliente → empresa, alias legado)
+    # Subtest: inclui empresa, comentário e assinatura do cliente
+    ok 1 - inclui empresa, comentário e assinatura do cliente
+      ---
+      duration_ms: 0.674
+      type: 'test'
+      ...
+    # Subtest: usa fallback "vocês" e omite assinatura sem cliente
+    ok 2 - usa fallback "vocês" e omite assinatura sem cliente
+      ---
+      duration_ms: 0.2538
+      type: 'test'
+      ...
+    1..2
+ok 241 - mensagemPosCritica (cliente → empresa, alias legado)
+  ---
+  duration_ms: 1.2976
+  type: 'suite'
+  ...
+# Subtest: worker schema bootstrap caching
+    # Subtest: runs retry queue DDL once per database handle, including concurrent callers
+    ok 1 - runs retry queue DDL once per database handle, including concurrent callers
+      ---
+      duration_ms: 2.037
+      type: 'test'
+      ...
+    # Subtest: runs acquisition DDL once per database handle, including concurrent callers
+    ok 2 - runs acquisition DDL once per database handle, including concurrent callers
+      ---
+      duration_ms: 0.756
+      type: 'test'
+      ...
+    # Subtest: contains a transient database failure in the background Dot worker
+    ok 3 - contains a transient database failure in the background Dot worker
+      ---
+      duration_ms: 0.8173
+      type: 'test'
+      ...
+    # Subtest: retries schema bootstrap after a transient setup failure
+    ok 4 - retries schema bootstrap after a transient setup failure
+      ---
+      duration_ms: 1.1477
+      type: 'test'
+      ...
+    1..4
+ok 242 - worker schema bootstrap caching
+  ---
+  duration_ms: 6.7785
+  type: 'suite'
+  ...
+1..242
+# tests 431
+# suites 74
+# pass 431
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 708784.977589

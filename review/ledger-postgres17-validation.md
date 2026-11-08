@@ -3,14 +3,40 @@
 Data: 2026-11-08
 Repositório validado: `backend` (`C:\Users\lucas\backend-pr139-integration`)
 Branch: `reconcile/dot-production-2026-11-06`
-HEAD validado: `932a2d0bedfd21fb63c59779eda0451dd35165fd`
+HEAD na validação original: `932a2d0bedfd21fb63c59779eda0451dd35165fd`
+HEAD após a correção: `e8345a6b73689b369fe2f640a246a59819b02f68`
 Branch documental: `audit/dot-ledger-2026-11-06`
 
 ---
 
-## 1. Conclusão objetiva
+## 0. Atualização pós-correção — commit `e8345a6` (estado atual)
 
-**BLOQUEADO.**
+**APROVADO.** A corrida `sweep` × `finalize` foi corrigida e revalidada no mesmo
+PostgreSQL 17.11 descartável (locale C/UTF8, 127.0.0.1:55433):
+
+| Validação | Resultado | Exit |
+|---|---|---:|
+| `dotLedger.pg.test.ts` | 6/6 | 0 |
+| `dotExecutionAtomicity.pg.test.ts` | 5/5 | 0 |
+| `dotActionConcurrency.pg.test.ts` | 2/2 | 0 |
+| `dotLedgerRace.pg.test.ts` (novo) | 7/7 | 0 |
+| `npm run test:postgres` | **35/35** (11 arquivos) | 0 |
+| Teste #22 × 5 repetições | 5/5 | 0 |
+| Suíte não-PG (SQLite) `npm test` | **431/431** | 0 |
+| `npx tsc --noEmit` (Windows e WSL) | 0 erros | 0 |
+
+Critérios obrigatórios: **0 consumo órfão, 0 duplicação, 0 transição
+`settled → expired`, comportamento idempotente, todas as suítes PG aprovadas.**
+
+Detalhes da correção, SQL anterior/corrigido e hashes: `review/ledger-postgres-race-fix.md`.
+Logs novos: `review/pg17-logs/*-fixed.log`, `dotLedgerRace.log`, `sweep2-run-*.log`,
+`test-postgres-fixed.log`, `sqlite-suite.log`.
+
+---
+
+## 1. Conclusão na validação original (histórico, antes da correção)
+
+**BLOQUEADO** naquele momento.
 
 A suíte PostgreSQL real rodou de ponta a ponta em um PostgreSQL 17.11 descartável
 (locale C, UTF8): **28 testes, 27 aprovados, 1 falho, 0 ignorados**.
@@ -303,11 +329,10 @@ Referências do código auditado:
 
 ## 11. Conclusão
 
-**BLOQUEADO** para aprovação final. Todos os demais critérios passam, mas o
-critério "ausência de consumo duplicado/órfão" falha de forma reproduzível no
-PostgreSQL 17.11, com evidência de reserva `expired` carregando `ai_usage`.
+**APROVADO** após a correção do commit `e8345a6` (seção 0). A falha original
+(seções 1 e 6) foi reproduzida e eliminada: 35/35 testes PostgreSQL, teste #22
+5/5, 431/431 SQLite, `tsc` limpo, sem consumo órfão nem duplicado.
 
-Para desbloquear: aplicar a correção da seção 7 (mediante autorização, em novo
-commit — sem reescrever os quatro lotes), reexecutar os 3 arquivos individuais,
-`npm run test:postgres` e as 5 repetições, e republicar este relatório com o novo
-resultado.
+A seção 6 permanece como registro histórico do defeito e a seção 7 como a
+proposta que foi aplicada — os quatro lotes anteriores (`b69bf3b`, `6f63380`,
+`70a106b`, `932a2d0`) não foram reescritos.

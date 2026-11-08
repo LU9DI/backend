@@ -1,0 +1,54 @@
+TAP version 13
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PG race 1: finalize vence e sweep posterior não altera settled
+ok 1 - PG race 1: finalize vence e sweep posterior não altera settled
+  ---
+  duration_ms: 9190.913278
+  type: 'test'
+  ...
+# Subtest: PG race 2/3/4: finalize × 2 sweeps concorrentes nunca geram consumo órfão nem settled→expired
+ok 2 - PG race 2/3/4: finalize × 2 sweeps concorrentes nunca geram consumo órfão nem settled→expired
+  ---
+  duration_ms: 4894.763211
+  type: 'test'
+  ...
+# Subtest: PG race 2: sweep vence e finalize não declara sucesso falso
+ok 3 - PG race 2: sweep vence e finalize não declara sucesso falso
+  ---
+  duration_ms: 359.823301
+  type: 'test'
+  ...
+# Subtest: PG race 4: dois finalizes concorrentes gravam um único consumo
+ok 4 - PG race 4: dois finalizes concorrentes gravam um único consumo
+  ---
+  duration_ms: 246.3458
+  type: 'test'
+  ...
+# Subtest: PG race 5: repetir finalize liquidado continua idempotente
+ok 5 - PG race 5: repetir finalize liquidado continua idempotente
+  ---
+  duration_ms: 264.461701
+  type: 'test'
+  ...
+# Subtest: PG race 6: outro tenant não consegue afetar a reserva
+ok 6 - PG race 6: outro tenant não consegue afetar a reserva
+  ---
+  duration_ms: 132.7361
+  type: 'test'
+  ...
+# Subtest: PG race 7: reserva enviada (sent_at) não é expirada; vira ambígua após a carência
+ok 7 - PG race 7: reserva enviada (sent_at) não é expirada; vira ambígua após a carência
+  ---
+  duration_ms: 390.2035
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 21311.758922
