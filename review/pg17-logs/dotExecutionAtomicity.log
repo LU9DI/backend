@@ -1,0 +1,50 @@
+TAP version 13
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PostgreSQL: falha no follow-up reverte claim, caso e auditoria inicial
+ok 1 - PostgreSQL: falha no follow-up reverte claim, caso e auditoria inicial
+  ---
+  duration_ms: 14930.731944
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PostgreSQL: duas execuções concorrentes têm um único vencedor
+ok 2 - PostgreSQL: duas execuções concorrentes têm um único vencedor
+  ---
+  duration_ms: 2782.469349
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PostgreSQL: separação de funções bloqueia o próprio preparador e libera o owner
+ok 3 - PostgreSQL: separação de funções bloqueia o próprio preparador e libera o owner
+  ---
+  duration_ms: 1777.403968
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PostgreSQL: ausência de prepared bloqueia e marcador explícito libera legado
+ok 4 - PostgreSQL: ausência de prepared bloqueia e marcador explícito libera legado
+  ---
+  duration_ms: 5109.223702
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PostgreSQL: ator interno é auditado como dot nos três eventos de execução
+ok 5 - PostgreSQL: ator interno é auditado como dot nos três eventos de execução
+  ---
+  duration_ms: 2631.131912
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 28034.023773
