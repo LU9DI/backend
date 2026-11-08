@@ -1,0 +1,302 @@
+
+> backend@1.0.5 test:postgres
+> node scripts/run-tests.mjs --postgres
+
+Executando 12 arquivo(s) de teste PostgreSQL em v22.22.1.
+
+TAP version 13
+# Subtest: snapshot de índices captura definições reais e detecta ausência/alteração
+ok 1 - snapshot de índices captura definições reais e detecta ausência/alteração
+  ---
+  duration_ms: 97151.582578
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# pg.exec falhou: cannot create index on relation "reviews": [42809]
+# SQL: CREATE INDEX IF NOT EXISTS idx_reviews_empresa ON reviews(empresa_id)
+# erro original propagado: cannot create index on relation "reviews" code= 42809
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: falha na migração de initDB fecha o pool, propaga o erro e permite nova tentativa
+ok 2 - falha na migração de initDB fecha o pool, propaga o erro e permite nova tentativa
+  ---
+  duration_ms: 20123.132725
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# 🐘 Postgres conectado
+# pg.exec falhou: cannot create index on relation "reviews": [42809]
+# SQL: CREATE INDEX IF NOT EXISTS idx_reviews_empresa ON reviews(empresa_id)
+# Subtest: falha de uma nova initDB não fecha a instância de uma chamada anterior
+ok 3 - falha de uma nova initDB não fecha a instância de uma chamada anterior
+  ---
+  duration_ms: 46168.004757
+  type: 'test'
+  ...
+# PostgreSQL real em uso: 17.11 (Ubuntu 17.11-1.pgdg26.04+2)
+# worker 1: exit=0 stdout={"pid":9378,"engine":"postgres","serverVersion":"17.11 (Ubuntu 17.11-1.pgdg26.04+2)","reviewsColumns":["id","empresa_id","name","rating","comment","ai_reply","ai_tags","createdat","is_test","ip_hash","fraud_flags","origin","client_whatsapp","sentiment","sentiment_score","sentiment_source","locale","unidade_id","treated_at","treated_note"],"usuariosColumns":["id","cnpj","nome_funcionario","empresa_id","senha_hash","email","mfa_secret","mfa_enabled","mfa_backup_hashes","mfa_pending_secret"],"auditColumns":["id","empresa_id","action_id","decision_id","event","actor_type","actor_id","metadata","created_at"],"indexes":{"idx_reviews_empresa":true,"idx_empresas_cnpj":true,"idx_empresas_slug":true,"idx_usuarios_email":true,"idx_password_resets_usuario":true,"ux_dot_action_queue_decision_option":true,"ux_dot_action_queue_one_active_decision":true,"idx_dot_action_audit_empresa":true,"idx_dot_action_audit_action":true}} stderr=🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# worker 2: exit=0 stdout={"pid":9379,"engine":"postgres","serverVersion":"17.11 (Ubuntu 17.11-1.pgdg26.04+2)","reviewsColumns":["id","empresa_id","name","rating","comment","ai_reply","ai_tags","createdat","is_test","ip_hash","fraud_flags","origin","client_whatsapp","sentiment","sentiment_score","sentiment_source","locale","unidade_id","treated_at","treated_note"],"usuariosColumns":["id","cnpj","nome_funcionario","empresa_id","senha_hash","email","mfa_secret","mfa_enabled","mfa_backup_hashes","mfa_pending_secret"],"auditColumns":["id","empresa_id","action_id","decision_id","event","actor_type","actor_id","metadata","created_at"],"indexes":{"idx_reviews_empresa":true,"idx_empresas_cnpj":true,"idx_empresas_slug":true,"idx_usuarios_email":true,"idx_password_resets_usuario":true,"ux_dot_action_queue_decision_option":true,"ux_dot_action_queue_one_active_decision":true,"idx_dot_action_audit_empresa":true,"idx_dot_action_audit_action":true}} stderr=🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# worker 3: exit=0 stdout={"pid":9381,"engine":"postgres","serverVersion":"17.11 (Ubuntu 17.11-1.pgdg26.04+2)","reviewsColumns":["id","empresa_id","name","rating","comment","ai_reply","ai_tags","createdat","is_test","ip_hash","fraud_flags","origin","client_whatsapp","sentiment","sentiment_score","sentiment_source","locale","unidade_id","treated_at","treated_note"],"usuariosColumns":["id","cnpj","nome_funcionario","empresa_id","senha_hash","email","mfa_secret","mfa_enabled","mfa_backup_hashes","mfa_pending_secret"],"auditColumns":["id","empresa_id","action_id","decision_id","event","actor_type","actor_id","metadata","created_at"],"indexes":{"idx_reviews_empresa":true,"idx_empresas_cnpj":true,"idx_empresas_slug":true,"idx_usuarios_email":true,"idx_password_resets_usuario":true,"ux_dot_action_queue_decision_option":true,"ux_dot_action_queue_one_active_decision":true,"idx_dot_action_audit_empresa":true,"idx_dot_action_audit_action":true}} stderr=🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# idempotência comprovada: schema idêntico após segunda inicialização
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: três processos inicializam um banco PostgreSQL vazio simultaneamente sem erro de DDL
+ok 4 - três processos inicializam um banco PostgreSQL vazio simultaneamente sem erro de DDL
+  ---
+  duration_ms: 22721.384886
+  type: 'test'
+  ...
+# pg.exec falhou: cannot create index on relation "reviews": [42809]
+# SQL: CREATE INDEX IF NOT EXISTS idx_reviews_empresa ON reviews(empresa_id)
+# erro propagado como esperado: cannot create index on relation "reviews"
+# Subtest: falha deliberada de migração é propagada e o advisory lock é liberado
+ok 5 - falha deliberada de migração é propagada e o advisory lock é liberado
+  ---
+  duration_ms: 3955.447784
+  type: 'test'
+  ...
+# worker PG_POOL_MAX=1 1: exit=0 stderr=🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# worker PG_POOL_MAX=1 2: exit=0 stderr=🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# worker PG_POOL_MAX=1 3: exit=0 stderr=🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: três processos com PG_POOL_MAX=1 inicializam o mesmo banco sem deadlock
+ok 6 - três processos com PG_POOL_MAX=1 inicializam o mesmo banco sem deadlock
+  ---
+  duration_ms: 14922.337523
+  type: 'test'
+  ...
+# Subtest: fechar uma instância PostgreSQL não encerra a outra
+ok 7 - fechar uma instância PostgreSQL não encerra a outra
+  ---
+  duration_ms: 41800.982303
+  type: 'test'
+  ...
+# pg.exec falhou: relation "alvo" already exists: [42P07]
+# SQL: CREATE TABLE alvo (id INTEGER)
+# pg.exec falhou: column "id" of relation "alvo" already exists: [42701]
+# SQL: ALTER TABLE alvo ADD COLUMN id TEXT
+# pg.exec falhou: relation "tabela_inexistente" does not exist: [42P01]
+# SQL: ALTER TABLE tabela_inexistente ADD COLUMN a TEXT
+# pg.exec falhou: syntax error at or near "SELEC": [42601]
+# SQL: SELEC 1
+# Subtest: exec propaga erros inesperados de catálogo em vez de mascará-los
+ok 8 - exec propaga erros inesperados de catálogo em vez de mascará-los
+  ---
+  duration_ms: 4376.393452
+  type: 'test'
+  ...
+# Subtest: PG_POOL_MAX=1 conclui migrações sem deadlock e libera a conexão
+ok 9 - PG_POOL_MAX=1 conclui migrações sem deadlock e libera a conexão
+  ---
+  duration_ms: 11432.011065
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: duas instâncias PostgreSQL concorrentes retornam a mesma ação sem auditoria duplicada
+ok 10 - duas instâncias PostgreSQL concorrentes retornam a mesma ação sem auditoria duplicada
+  ---
+  duration_ms: 7642.343456
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: duas instâncias PostgreSQL não aprovam duas vezes a mesma ação
+ok 11 - duas instâncias PostgreSQL não aprovam duas vezes a mesma ação
+  ---
+  duration_ms: 2365.476502
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# [schema] Estruturas obrigatórias ausentes: índice ux_dot_action_queue_decision_option (dot_action_queue)
+# [schema] Estruturas obrigatórias ausentes: coluna dot_action_audit.metadata
+# [schema] Estruturas obrigatórias ausentes: coluna dot_action_audit.metadata
+# Subtest: serviços Dot não executam DDL quando o schema está incompleto
+ok 12 - serviços Dot não executam DDL quando o schema está incompleto
+  ---
+  duration_ms: 14998.453837
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PostgreSQL: falha no follow-up reverte claim, caso e auditoria inicial
+ok 13 - PostgreSQL: falha no follow-up reverte claim, caso e auditoria inicial
+  ---
+  duration_ms: 5806.397204
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PostgreSQL: duas execuções concorrentes têm um único vencedor
+ok 14 - PostgreSQL: duas execuções concorrentes têm um único vencedor
+  ---
+  duration_ms: 2667.983855
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PostgreSQL: separação de funções bloqueia o próprio preparador e libera o owner
+ok 15 - PostgreSQL: separação de funções bloqueia o próprio preparador e libera o owner
+  ---
+  duration_ms: 3356.560575
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PostgreSQL: ausência de prepared bloqueia e marcador explícito libera legado
+ok 16 - PostgreSQL: ausência de prepared bloqueia e marcador explícito libera legado
+  ---
+  duration_ms: 3723.690111
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PostgreSQL: ator interno é auditado como dot nos três eventos de execução
+ok 17 - PostgreSQL: ator interno é auditado como dot nos três eventos de execução
+  ---
+  duration_ms: 5055.951652
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PostgreSQL: a tabela do ledger e o índice único parcial existem após as migrações
+ok 18 - PostgreSQL: a tabela do ledger e o índice único parcial existem após as migrações
+  ---
+  duration_ms: 16544.543221
+  type: 'test'
+  ...
+# Subtest: PostgreSQL: reserva e finalização gravam consumo real e liberam a reserva
+ok 19 - PostgreSQL: reserva e finalização gravam consumo real e liberam a reserva
+  ---
+  duration_ms: 282.922347
+  type: 'test'
+  ...
+# Subtest: PostgreSQL: duas instâncias finalizando a mesma reserva gravam um único consumo
+ok 20 - PostgreSQL: duas instâncias finalizando a mesma reserva gravam um único consumo
+  ---
+  duration_ms: 1602.464663
+  type: 'test'
+  ...
+# Subtest: PostgreSQL: reservas concorrentes são serializadas e não ultrapassam o saldo
+ok 21 - PostgreSQL: reservas concorrentes são serializadas e não ultrapassam o saldo
+  ---
+  duration_ms: 6876.783092
+  type: 'test'
+  ...
+# Subtest: PostgreSQL: sweep e finalize concorrentes não deixam consumo órfão nem reserva reaberta
+ok 22 - PostgreSQL: sweep e finalize concorrentes não deixam consumo órfão nem reserva reaberta
+  ---
+  duration_ms: 946.799426
+  type: 'test'
+  ...
+# Subtest: PostgreSQL: reserva ambígua continua comprometendo o orçamento mesmo 48h após expirar
+ok 23 - PostgreSQL: reserva ambígua continua comprometendo o orçamento mesmo 48h após expirar
+  ---
+  duration_ms: 460.777461
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PG race 1: finalize vence e sweep posterior não altera settled
+ok 24 - PG race 1: finalize vence e sweep posterior não altera settled
+  ---
+  duration_ms: 6568.282009
+  type: 'test'
+  ...
+# Subtest: PG race 2/3/4: finalize × 2 sweeps concorrentes nunca geram consumo órfão nem settled→expired
+ok 25 - PG race 2/3/4: finalize × 2 sweeps concorrentes nunca geram consumo órfão nem settled→expired
+  ---
+  duration_ms: 3293.048747
+  type: 'test'
+  ...
+# Subtest: PG race 2: sweep vence e finalize não declara sucesso falso
+ok 26 - PG race 2: sweep vence e finalize não declara sucesso falso
+  ---
+  duration_ms: 260.703912
+  type: 'test'
+  ...
+# Subtest: PG race 4: dois finalizes concorrentes gravam um único consumo
+ok 27 - PG race 4: dois finalizes concorrentes gravam um único consumo
+  ---
+  duration_ms: 397.633704
+  type: 'test'
+  ...
+# Subtest: PG race 5: repetir finalize liquidado continua idempotente
+ok 28 - PG race 5: repetir finalize liquidado continua idempotente
+  ---
+  duration_ms: 454.956097
+  type: 'test'
+  ...
+# Subtest: PG race 6: outro tenant não consegue afetar a reserva
+ok 29 - PG race 6: outro tenant não consegue afetar a reserva
+  ---
+  duration_ms: 161.405764
+  type: 'test'
+  ...
+# Subtest: PG race 7: reserva enviada (sent_at) não é expirada; vira ambígua após a carência
+ok 30 - PG race 7: reserva enviada (sent_at) não é expirada; vira ambígua após a carência
+  ---
+  duration_ms: 276.042838
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PostgreSQL legado recebe todas as colunas de reviews sem perder dados
+ok 31 - PostgreSQL legado recebe todas as colunas de reviews sem perder dados
+  ---
+  duration_ms: 8022.322636
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# [schema] Estruturas obrigatórias ausentes: coluna reviews.locale
+# [schema] Estruturas obrigatórias ausentes: coluna reviews.fraud_flags
+# [schema] Estruturas obrigatórias ausentes: coluna reviews.sentiment_source
+# Subtest: coluna obrigatória ausente falha explicitamente (sem DDL silenciosa)
+ok 32 - coluna obrigatória ausente falha explicitamente (sem DDL silenciosa)
+  ---
+  duration_ms: 10145.671836
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PostgreSQL: created_at histórico é copiado para createdat sem perder datas
+ok 33 - PostgreSQL: created_at histórico é copiado para createdat sem perder datas
+  ---
+  duration_ms: 8655.848766
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PostgreSQL: coluna legada createdat é copiada para createdAt
+ok 34 - PostgreSQL: coluna legada createdat é copiada para createdAt
+  ---
+  duration_ms: 11407.973922
+  type: 'test'
+  ...
+# 🐘 Postgres conectado
+# Schema inicializado (migrações centrais idempotentes)
+# Subtest: PostgreSQL: backfill não sobrescreve createdat já válido
+ok 35 - PostgreSQL: backfill não sobrescreve createdat já válido
+  ---
+  duration_ms: 9758.258855
+  type: 'test'
+  ...
+1..35
+# tests 35
+# suites 0
+# pass 35
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 415052.62099
