@@ -572,10 +572,17 @@ export async function finalizeDotReservation(params: {
         ],
       );
       if (!updatedRow || updatedRow.changes !== 1) {
-        // Outra instância finalizou entre a leitura e o UPDATE: devolve o
-        // estado final (nunca cria um segundo consumo).
+        // O UPDATE pode não atingir a linha se o estado mudou entre a leitura
+        // com FOR UPDATE e a escrita. Só é seguro declarar duplicidade quando
+        // o estado persistido é 'settled'; qualquer outro estado (expired,
+        // released, pending ou inexistente) NÃO é sucesso: o throw desfaz a
+        // transação — inclusive o ai_usage já inserido — para não deixar
+        // consumo órfão nem duplicado.
         const final = await tx.get('SELECT * FROM dot_budget_reservations WHERE id = ? AND empresa_id = ?', [id, empresaId]);
-        return { ok: true, reservation: final as DotReservation, duplicate: true };
+        if (final && String(final.status) === 'settled') {
+          return { ok: true, reservation: final as DotReservation, duplicate: true };
+        }
+        throw new Error(`reserva em estado '${final ? String(final.status) : 'inexistente'}' — liquidação não aplicada`);
       }
       const final = await tx.get('SELECT * FROM dot_budget_reservations WHERE id = ? AND empresa_id = ?', [id, empresaId]);
       return { ok: true, reservation: final as DotReservation };
@@ -664,27 +671,39 @@ export async function sweepExpiredDotReservations(opts: { empresaId?: string; li
   const heldParams = scopeEmpresa ? [now, scopeEmpresa] : [now];
   try {
     const expired = await db.run(
+      // O WHERE externo repete os predicados de estado: sob READ COMMITTED o
+      // UPDATE que esperou o lock de um `finalize` reavalia SÓ este WHERE. Sem
+      // `status = 'pending'` aqui, uma linha já liquidada seria sobrescrita
+      // para 'expired' (consumo órfão).
       `UPDATE dot_budget_reservations
           SET status = 'expired', updated_at = ?
-        WHERE id IN (
-          SELECT id FROM dot_budget_reservations
-           WHERE status = 'pending' AND ambiguous = 0 AND expires_at <= ? AND sent_at IS NULL${scope}
-           ORDER BY id ASC LIMIT ${max}
-        )`,
-      [now, now, ...scopeParams],
+        WHERE status = 'pending' AND ambiguous = 0 AND expires_at <= ? AND sent_at IS NULL${scope}
+          AND id IN (
+            SELECT id FROM dot_budget_reservations
+             WHERE status = 'pending' AND ambiguous = 0 AND expires_at <= ? AND sent_at IS NULL${scope}
+             ORDER BY id ASC LIMIT ${max}
+          )`,
+      [now, now, ...scopeParams, now, ...scopeParams],
     );
     const unterminated = await db.run(
+      // Mesmo motivo do UPDATE anterior: o estado precisa ser reconferido no
+      // WHERE externo para nunca marcar como ambígua uma reserva já liquidada.
       `UPDATE dot_budget_reservations
           SET ambiguous = 1, ambiguous_reason = ?, updated_at = ?
-        WHERE id IN (
-          SELECT id FROM dot_budget_reservations
-           WHERE status = 'pending' AND ambiguous = 0 AND sent_at IS NOT NULL
-             AND expires_at <= ? AND sent_at <= ?${scope}
-           ORDER BY id ASC LIMIT ${max}
-        )`,
+        WHERE status = 'pending' AND ambiguous = 0 AND sent_at IS NOT NULL
+          AND expires_at <= ? AND sent_at <= ?${scope}
+          AND id IN (
+            SELECT id FROM dot_budget_reservations
+             WHERE status = 'pending' AND ambiguous = 0 AND sent_at IS NOT NULL
+               AND expires_at <= ? AND sent_at <= ?${scope}
+             ORDER BY id ASC LIMIT ${max}
+          )`,
       [
         'chamada enviada ao provedor sem finalização — consumo desconhecido',
         now,
+        now,
+        graceCutoff,
+        ...scopeParams,
         now,
         graceCutoff,
         ...scopeParams,
