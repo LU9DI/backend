@@ -215,7 +215,11 @@ export function startDotMonitorScheduler() {
     // `currentRun` recebe a promessa COMPLETA, incluindo o bloco de limpeza —
     // assim a parada só retorna quando NENHUMA consulta da rodada pode mais
     // acontecer. Cada etapa interna é idempotente e transacional.
-    const run = (async () => {
+    // `let` (e nao `const`) evita o TS2454: a promessa e atribuida antes de o
+    // `finally` assincrono executar; a comparacao por identidade impede que um
+    // `stop`+`start` concorrente zere a referencia de outra rodada.
+    let run: Promise<void> | null = null;
+    run = (async () => {
       try {
         await runDueDotMonitors();
       } catch (error) {
