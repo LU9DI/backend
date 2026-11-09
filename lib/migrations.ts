@@ -456,7 +456,7 @@ async function migrateAuthSchema(db: Database | PgDatabase): Promise<void> {
        FROM (
          SELECT COUNT(*) AS user_count
            FROM usuarios
-          WHERE email IS NOT NULL AND TRIM(email) <> ''
+          WHERE email IS NOT NULL
           GROUP BY LOWER(TRIM(email))
          HAVING COUNT(*) > 1
        ) AS duplicates`,
