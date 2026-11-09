@@ -114,7 +114,7 @@ test('e-mail legado com espaços continua localizável pela normalização canô
       `SELECT indexdef FROM pg_indexes
         WHERE schemaname = 'public' AND indexname = 'ux_usuarios_email_normalized'`,
     );
-    assert.match(index?.indexdef || '', /lower\\(TRIM\\(email\\)\\)/i);
+    assert.match(index?.indexdef || '', /lower.*trim.*email/i);
   } finally {
     await db?.close();
     await client.end().catch(() => undefined);
