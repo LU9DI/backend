@@ -51,7 +51,7 @@ const adminResetLimiter = rateLimit({
 
 export function isAdminUsuario(usuario: any): boolean {
   if (!usuario) return false;
-  const email = String(usuario.email || '').toLowerCase();
+  const email = String(usuario.email || '').trim().toLowerCase();
   const adm = adminEmail();
   return usuario.empresa_id === 'admin' || (adm !== '' && email === adm);
 }
@@ -100,7 +100,7 @@ export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Databas
 
       const db = getDb();
       await ensureAuthColumns(db);
-      const usuario = await db.get('SELECT * FROM usuarios WHERE email = ?', [email]);
+      const usuario = await db.get('SELECT * FROM usuarios WHERE LOWER(TRIM(email)) = LOWER(TRIM(?))', [email]);
 
       if (!usuario || !isAdminUsuario(usuario) || !usuario.email) {
         console.warn('[admin-recovery] usuário admin não encontrado no banco para', email);
