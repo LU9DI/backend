@@ -77,3 +77,47 @@ test('migração bloqueia e-mails duplicados normalizados sem modificar usuário
     await dropTestDatabase(created.name);
   }
 });
+
+test('e-mail legado com espaços continua localizável pela normalização canônica', async () => {
+  const created = await createTestDatabase('pg_auth_trimmed_email');
+  const client = new Client({ connectionString: created.url });
+  let db: Awaited<ReturnType<typeof initPgDatabase>> | null = null;
+
+  try {
+    await client.connect();
+    await client.query(`
+      CREATE TABLE usuarios (
+        id TEXT PRIMARY KEY,
+        cnpj TEXT NOT NULL,
+        nome_funcionario TEXT NOT NULL,
+        empresa_id TEXT NOT NULL,
+        senha_hash TEXT NOT NULL,
+        email TEXT
+      )
+    `);
+    await client.query(
+      `INSERT INTO usuarios (id, cnpj, nome_funcionario, empresa_id, senha_hash, email)
+       VALUES ('legacy-user', '11111111111111', 'Conta legada', 'empresa-a', 'hash', ' Lucas@Example.com ')`,
+    );
+    await client.end();
+
+    db = await initPgDatabase(created.url);
+    await runCentralMigrations(db);
+
+    const found = await db.get<{ id: string }>(
+      'SELECT id FROM usuarios WHERE LOWER(TRIM(email)) = LOWER(TRIM(?)) LIMIT 1',
+      ['lucas@example.com'],
+    );
+    assert.equal(found?.id, 'legacy-user');
+
+    const index = await db.get<{ indexdef: string }>(
+      `SELECT indexdef FROM pg_indexes
+        WHERE schemaname = 'public' AND indexname = 'ux_usuarios_email_normalized'`,
+    );
+    assert.match(index?.indexdef || '', /lower\\(TRIM\\(email\\)\\)/i);
+  } finally {
+    await db?.close();
+    await client.end().catch(() => undefined);
+    await dropTestDatabase(created.name);
+  }
+});
