@@ -343,7 +343,7 @@ suite('Dot admin — orçamento por HTTP (JWT + PIN + sessão + reconciliação)
       token: tokenFor(USER_A, EMP_A),
       header: true,
       adminSession: sessao.cookie,
-      body: { reservation_id: id, decision: 'settle', tokens: 700, provider: 'groq' },
+      body: { reservation_id: id, decision: 'settle', tokens: 700, provider: 'groq', reason: 'tokens confirmados no registro do provedor' },
     });
     assert.equal(res.status, 200, JSON.stringify(res.data));
     assert.equal(res.data.ok, true);
@@ -365,6 +365,25 @@ suite('Dot admin — orçamento por HTTP (JWT + PIN + sessão + reconciliação)
     assert.match(String(auditoria[0].detail), /"decision":"settle"/);
   });
 
+  test('reconciliação release sem confirmação explícita é recusada e preserva a reserva', async () => {
+    const sessao = await adminFetch('/api/dot/admin/session', {
+      method: 'POST', token: tokenFor(USER_A, EMP_A), header: true, body: { pin: PIN },
+    });
+    const pendente = await ledger.reserveDotExecution({ empresaId: EMP_A, plan: 'rei' });
+    const id = pendente.reservation!.id;
+
+    const res = await adminFetch('/api/dot/admin/budget/reconcile', {
+      method: 'POST',
+      token: tokenFor(USER_A, EMP_A),
+      header: true,
+      adminSession: sessao.cookie,
+      body: { reservation_id: id, decision: 'release', reason: 'aparentemente não enviado' },
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.data.code, 'DOT_RECONCILE_NOT_SENT_CONFIRMATION_REQUIRED');
+    assert.equal((await ledger.getDotReservation(EMP_A, id))?.status, 'pending');
+  });
+
   test('reconciliação release com sessão: libera sem consumir e audita', async () => {
     const sessao = await adminFetch('/api/dot/admin/session', {
       method: 'POST', token: tokenFor(USER_A, EMP_A), header: true, body: { pin: PIN },
@@ -378,7 +397,7 @@ suite('Dot admin — orçamento por HTTP (JWT + PIN + sessão + reconciliação)
       token: tokenFor(USER_A, EMP_A),
       header: true,
       adminSession: sessao.cookie,
-      body: { reservation_id: id, decision: 'release', reason: 'não enviado' },
+      body: { reservation_id: id, decision: 'release', reason: 'confirmado que não houve envio', confirm_not_sent: true },
     });
     assert.equal(res.status, 200, JSON.stringify(res.data));
     assert.equal(res.data.result.reservation.status, 'released');
