@@ -1,7 +1,7 @@
 # Filtra Dot — runbook de ativação e rollback
 
 **Status:** preparação. Nenhuma flag foi ativada e nada foi publicado.
-**PR:** #139 — `fix/dot-atomicity-sod`
+**PR:** #144 — `reconcile/dot-production-2026-11-06`
 **Documento irmão:** [`DOT_PRODUCTION_READINESS.md`](DOT_PRODUCTION_READINESS.md)
 
 Este runbook é o procedimento operacional para ativar o Dot de forma gradual,
