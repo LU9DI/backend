@@ -474,7 +474,10 @@ async function callAIReal(
     }
   }
 
-  throw new AggregateError(attemptErrors, 'Falha em todos os providers de IA');
+  throw new AggregateError(
+    attemptErrors,
+    attemptErrors[attemptErrors.length - 1]?.message || 'Falha em todos os providers de IA',
+  );
 }
 export async function callAI(
   system: string,
