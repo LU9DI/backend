@@ -111,4 +111,29 @@ suite('Provedor de IA: recusa x resultado ambíguo', () => {
       assert.ok(!/@/.test(describeDotProviderOutcome(outcome)));
     }
   });
+  test('failover preserva tentativa ambígua anterior mesmo que o último provedor recuse', () => {
+    const first = providerError('Groq API error 503: upstream failure', 503);
+    const last = providerError('Gemini API error 401: invalid key', 401);
+    const aggregate = new AggregateError([first, last], 'Falha em todos os providers');
+    assert.equal(classifyDotProviderError(aggregate), 'ambiguous');
+    assert.equal(isProvenNotSent('ambiguous', aggregate), false);
+  });
+
+  test('failover só libera quando TODAS as tentativas são recusas estruturadas', () => {
+    const groq = providerError('Groq API error 401: invalid key', 401);
+    const gemini = providerError('Gemini API error 403: forbidden', 403);
+    const aggregate = new AggregateError([groq, gemini], 'Falha em todos os providers');
+    assert.equal(classifyDotProviderError(aggregate), 'rejected');
+    assert.equal(isProviderHttpRejection(aggregate), true);
+    assert.equal(isProvenNotSent('rejected', aggregate), true);
+  });
+
+  test('failover com falha local não estruturada permanece ambíguo', () => {
+    const groq = providerError('Groq API error 401: invalid key', 401);
+    const local = new Error('socket hang up');
+    const aggregate = new AggregateError([groq, local], 'Falha em todos os providers');
+    assert.equal(classifyDotProviderError(aggregate), 'ambiguous');
+    assert.equal(isProvenNotSent('ambiguous', aggregate), false);
+  });
+
 });
