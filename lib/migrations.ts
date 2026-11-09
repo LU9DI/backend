@@ -447,11 +447,39 @@ async function migrateAuthSchema(db: Database | PgDatabase): Promise<void> {
     )`,
   );
 
+  // A aplicação normaliza e-mails com trim + lowercase antes de consultar
+  // ou inserir. Detectar colisões com a mesma regra ANTES dos índices evita
+  // que contas legadas ambíguas recebam acesso incorreto após o deploy.
+  const duplicateEmails = await db.get(
+    `SELECT COUNT(*) AS duplicate_groups,
+            COALESCE(SUM(user_count), 0) AS affected_users
+       FROM (
+         SELECT COUNT(*) AS user_count
+           FROM usuarios
+          WHERE email IS NOT NULL AND TRIM(email) <> ''
+          GROUP BY LOWER(TRIM(email))
+         HAVING COUNT(*) > 1
+       ) AS duplicates`,
+  ) as { duplicate_groups?: number | string; affected_users?: number | string } | undefined;
+  const duplicateGroups = Number(duplicateEmails?.duplicate_groups || 0);
+  if (duplicateGroups > 0) {
+    const affectedUsers = Number(duplicateEmails?.affected_users || 0);
+    throw new Error(
+      `Migração de autenticação bloqueada: ${duplicateGroups} grupo(s) de e-mail duplicado(s) afetam ${affectedUsers} usuário(s), considerando trim + lowercase. Corrija as contas conflitantes de forma auditada e execute a migração novamente; nenhum usuário foi alterado.`,
+    );
+  }
+
   await createIndexIfMissing(
     db,
     'usuarios',
     'idx_usuarios_email',
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios(email)',
+  );
+  await createIndexIfMissing(
+    db,
+    'usuarios',
+    'ux_usuarios_email_normalized',
+    'CREATE UNIQUE INDEX IF NOT EXISTS ux_usuarios_email_normalized ON usuarios(LOWER(TRIM(email)))',
   );
   await createIndexIfMissing(
     db,
