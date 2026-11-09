@@ -443,7 +443,7 @@ suite('Dot admin — orçamento por HTTP (JWT + PIN + sessão + reconciliação)
       token: tokenFor(USER_A, EMP_A),
       header: true,
       adminSession: sessao.cookie,
-      body: { reservation_id: idB, decision: 'settle', tokens: 999, provider: 'groq' },
+      body: { reservation_id: idB, decision: 'settle', tokens: 999, provider: 'groq', reason: 'teste de isolamento entre empresas' },
     });
     assert.equal(res.status, 409);
     assert.equal(res.data.code, 'DOT_RECONCILE_REFUSED');
