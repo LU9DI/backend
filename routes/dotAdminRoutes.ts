@@ -280,7 +280,24 @@ export function mountDotAdminRoutes(app: Express) {
       if (tokens !== null && (!Number.isFinite(tokens) || tokens < 0)) {
         return res.status(400).json({ ok: false, error: 'tokens deve ser um número >= 0.', code: 'DOT_RECONCILE_BAD_TOKENS' });
       }
-      const reason = typeof body?.reason === 'string' ? body.reason.slice(0, 500) : undefined;
+      const reason = typeof body?.reason === 'string' ? body.reason.trim().slice(0, 500) : '';
+      if (reason.length < 10) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Informe o motivo operacional da reconciliação (mínimo de 10 caracteres).',
+          code: 'DOT_RECONCILE_REASON_REQUIRED',
+        });
+      }
+      // "release" é uma declaração operacional de que a chamada não foi
+      // enviada/processada. Exigir confirmação explícita evita liberar por
+      // engano uma reserva que pode representar cobrança real do provedor.
+      if (decision === 'release' && body?.confirm_not_sent !== true) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Para liberar, confirme explicitamente que a chamada não foi enviada ao provedor.',
+          code: 'DOT_RECONCILE_NOT_SENT_CONFIRMATION_REQUIRED',
+        });
+      }
       const provider = typeof body?.provider === 'string' ? body.provider.slice(0, 20) : null;
       const result = await reconcileDotBudget({
         empresaId,
@@ -297,7 +314,7 @@ export function mountDotAdminRoutes(app: Express) {
         result: result.ok ? 'ok' : 'error',
         ip: clientIp(req),
         user_agent: String(req.headers['user-agent'] || '').slice(0, 200),
-        detail: { reservation_id: reservationId, decision, ok: result.ok },
+        detail: { reservation_id: reservationId, decision, reason, confirm_not_sent: decision === 'release' ? true : undefined, ok: result.ok },
       });
       if (!result.ok) {
         return res.status(409).json({ ok: false, error: result.reason || 'Reconciliação recusada.', code: 'DOT_RECONCILE_REFUSED' });
