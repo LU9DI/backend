@@ -112,7 +112,7 @@ export async function ensureMfaColumns(db: Database): Promise<void> {
 
 function isAdminUser(u: any): boolean {
   const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
-  return u?.empresa_id === 'admin' || String(u?.email || '').toLowerCase() === adminMail;
+  return u?.empresa_id === 'admin' || String(u?.email || '').trim().toLowerCase() === adminMail;
 }
 
 const mfaLimiter = rateLimit({
