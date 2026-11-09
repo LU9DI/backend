@@ -27,7 +27,7 @@ function emailValido(email: string): boolean {
 function isAdminAccount(usuario: any): boolean {
   if (!usuario) return false;
   const adminMail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
-  const email = String(usuario.email || '').toLowerCase();
+  const email = String(usuario.email || '').trim().toLowerCase();
   if (usuario.empresa_id === 'admin') return true;
   if (adminMail && email === adminMail) return true;
   return false;
@@ -76,7 +76,7 @@ export async function createUsuarioForEmpresa(
   const pol = validarSenhaEmpresa(opts.senha);
   if (!pol.ok) throw new Error(pol.error);
 
-  const existenteEmail = await db.get('SELECT id FROM usuarios WHERE email = ?', [email]);
+  const existenteEmail = await db.get('SELECT id FROM usuarios WHERE LOWER(TRIM(email)) = LOWER(TRIM(?))', [email]);
   if (existenteEmail) throw new Error('Este e-mail já está em uso.');
 
   const id = crypto.randomUUID();
@@ -117,7 +117,7 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
 
       let usuario: any = null;
       if (email && emailValido(email)) {
-        usuario = await db.get('SELECT * FROM usuarios WHERE email = ?', [email]);
+        usuario = await db.get('SELECT * FROM usuarios WHERE LOWER(TRIM(email)) = LOWER(TRIM(?))', [email]);
       } else if (cnpj.length === 14) {
         usuario = await db.get('SELECT * FROM usuarios WHERE cnpj = ?', [cnpj]);
       } else {
