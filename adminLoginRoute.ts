@@ -19,7 +19,7 @@ function isAdminUser(usuario: any): boolean {
   const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
   return (
     usuario.empresa_id === 'admin' ||
-    String(usuario.email || '').toLowerCase() === adminMail
+    String(usuario.email || '').trim().toLowerCase() === adminMail
   );
 }
 
@@ -44,7 +44,7 @@ export function mountAdminLoginRoute(
 
       const db = getDb();
       await ensureMfaColumns(db);
-      const usuario = await db.get('SELECT * FROM usuarios WHERE email = ?', [email]);
+      const usuario = await db.get('SELECT * FROM usuarios WHERE LOWER(TRIM(email)) = LOWER(TRIM(?))', [email]);
 
       if (!usuario || !usuario.senha_hash) {
         return res.status(401).json({ error: 'Credenciais inválidas.' });
