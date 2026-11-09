@@ -433,7 +433,7 @@ async function callAIReal(
     );
   }
 
-  let lastError: Error | null = null;
+  const attemptErrors: Error[] = [];
 
   for (let i = 0; i < order.length; i++) {
     const provider = order[i];
@@ -469,12 +469,12 @@ async function callAIReal(
     } catch (e: any) {
       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
       markFail(provider, e, ms);
-      lastError = e;
+      attemptErrors.push(e instanceof Error ? e : new Error(String(e)));
       if (i < order.length - 1) continue;
     }
   }
 
-  throw lastError || new Error('Falha em todos os providers de IA');
+  throw new AggregateError(attemptErrors, 'Falha em todos os providers de IA');
 }
 export async function callAI(
   system: string,
