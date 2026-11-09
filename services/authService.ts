@@ -43,7 +43,7 @@ async function findUsuario(db: Database, identifier: string): Promise<any | null
 
   if (isEmailLike(raw)) {
     const email = raw.toLowerCase();
-    const byEmail = await db.get(`SELECT * FROM usuarios WHERE lower(email) = lower(?) LIMIT 1`, [
+    const byEmail = await db.get(`SELECT * FROM usuarios WHERE lower(trim(email)) = lower(trim(?)) LIMIT 1`, [
       email,
     ]);
     if (byEmail) return byEmail;
