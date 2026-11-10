@@ -213,5 +213,5 @@ export function persistDotHttpResponse(res: Response, claim: DotHttpIdempotencyC
         code: 'DOT_IDEMPOTENCY_PERSIST_FAILED',
       });
     });
-  }) as Response['json'];
+  }) as unknown as Response['json'];
 }
