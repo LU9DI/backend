@@ -113,14 +113,28 @@ export async function claimDotHttpRequest(input: {
     if (existing.status === 'ambiguous') return { kind: 'ambiguous' };
 
     if (existing.updated_at < staleBefore) {
-      await tx.run(
+      const staleTransition = await tx.run(
         `UPDATE dot_http_idempotency
             SET status = 'ambiguous', updated_at = ?
           WHERE tenant_id = ? AND endpoint = ? AND idempotency_key = ?
             AND status = 'pending' AND updated_at = ?`,
         [nowIso, tenantId, endpoint, key, existing.updated_at],
       );
-      return { kind: 'ambiguous' };
+      if (staleTransition.changes === 1) return { kind: 'ambiguous' };
+
+      // A request may have completed between the read and stale transition.
+      // Re-read instead of incorrectly hiding a committed response.
+      const raced = await tx.get<IdempotencyRow>(
+        `SELECT tenant_id, endpoint, idempotency_key, request_hash, status,
+                response_status, response_body, created_at, updated_at
+           FROM dot_http_idempotency
+          WHERE tenant_id = ? AND endpoint = ? AND idempotency_key = ?`,
+        [tenantId, endpoint, key],
+      );
+      if (raced?.status === 'completed' && raced.response_body && raced.response_status) {
+        return { kind: 'replay', status: Number(raced.response_status), body: JSON.parse(raced.response_body) };
+      }
+      return raced?.status === 'ambiguous' ? { kind: 'ambiguous' } : { kind: 'in_progress' };
     }
     // A concurrent request is still running. It must not acquire a second
     // provider reservation or execute another call.
