@@ -429,7 +429,7 @@ export async function markDotReservationSent(params: {
     return await withDbTransaction(async (tx) => {
       await lockDotBudget(tx, empresaId);
       const now = nowIso();
-      await tx.run(
+      const updated = await tx.run(
         `UPDATE dot_budget_reservations
             SET sent_at = COALESCE(sent_at, ?), updated_at = ?
           WHERE id = ? AND empresa_id = ? AND status = 'pending'`,
@@ -439,7 +439,12 @@ export async function markDotReservationSent(params: {
         'SELECT * FROM dot_budget_reservations WHERE id = ? AND empresa_id = ?',
         [id, empresaId],
       );
-      return { ok: Boolean(row), reservation: (row as DotReservation) || null };
+      // A existência da linha não prova que a transição ocorreu: ela pode
+      // ter sido expirada/liberada entre reserve e mark. Só autoriza o envio
+      // quando este UPDATE atingiu exatamente uma reserva ainda pending.
+      const marked = Boolean(updated && updated.changes === 1 && row
+        && String(row.status) === 'pending' && row.sent_at);
+      return { ok: marked, reservation: (row as DotReservation) || null };
     });
   } catch (error: any) {
     console.error('[dot-ledger] falha ao marcar reserva como enviada:', error?.message || error);
