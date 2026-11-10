@@ -78,3 +78,52 @@
   classes utilitárias, mas não foi medida em viewport móvel.
 - O failover do chat continua habilitado porque a segurança depende do ledger
   compartilhado; com bases em bancos distintos, ele deve ser desabilitado.
+
+## 5. Atualização de 2026-11-10 (pós-revisão independente)
+
+**HEADs publicados:**
+- Backend PR #144: `7d186ac433e90a0eea4b61f39925bb140db6060c` (branch
+  `reconcile/dot-production-2026-11-06`).
+- Frontend PR #203: `7ac6e043febde7f67c77423038b4ffd32d547a5a` (branch
+  `feat/filtra-dot-conversation`).
+
+**Correções aplicadas após a revisão independente (0 bloqueadores):**
+- A2: recusa estruturada de todos os provedores agora persiste `failed_safe`
+  (retry permitido), não `ambiguous`.
+- A3: identidade da idempotência é `(empresa_id, chave)`; `endpoint` entra no
+  hash, não na unicidade. Conflito em outra rota retorna `key_reused` (409).
+- A4: boot falha fechado se o índice único de escopo estiver ausente, não for
+  `UNIQUE` ou não cobrir `(empresa_id, idempotency_key)`.
+- A5: orçamento único de 30 s para todas as drenagens; force-exit em 45 s,
+  garantindo `closeDB()` antes do término forçado.
+- A6: `POST /api/dot/chat` envolto em `asyncHandler`.
+- A7: `failed_safe` tem retenção limitada (30 dias por padrão); `ambiguous` e
+  `processing` continuam retidos como evidência.
+- A10/A12: falha de persistência marca `ambiguous` imediatamente; logs usam
+  apenas prefixo da chave.
+
+**Evidência executada nesta rodada:**
+- `tests/dotHttpIdempotency.test.ts` + `.http.test.ts` + shutdown: **31/31**.
+- Suíte PostgreSQL completa (`npm run test:postgres`, PostgreSQL 17 real):
+  **41/41**, incluindo multiprocesso e `dotHttpIdempotency.pg`.
+- Frontend: `tsc --noEmit` 0, eslint 0, `npm run build` (Cloudflare Pages)
+  exit 0, `/dot/conversa` gerada.
+- CI do backend: `audit` e `postgres-concurrency` verdes; `test` reexecutado
+  após falha flaky preexistente em `dotMissionLifecycle` (3/3 execuções
+  locais do arquivo passaram).
+- CI do frontend (PR #203): todos os jobs verdes no HEAD `7ac6e043`.
+
+**Bloqueios remanescentes para produção:**
+1. CI do backend verde no HEAD final (aguardando reexecução).
+2. Revisão independente **humana** assinada (a revisão automática encontrou 0
+   bloqueadores e os MÉDIOS A2–A7 foram corrigidos).
+3. Migração `dot_http_idempotency` validada em staging/banco descartável
+   (local: PostgreSQL real via `runCentralMigrations`, mas não em staging).
+4. Observabilidade: alertas externos (erros, ambíguos, divergência
+   reserva/consumo, orçamento, scheduler, health check) ainda não configurados
+   no provedor de monitoramento.
+5. Frontend sem teste automatizado dedicado a `/dot/conversa` (build/tsc/lint
+   verdes; verificação de contrato depende de E2E/staging).
+6. Autorização explícita para merge, deploy Render e `FILTRA_DOT_ENABLED=1`.
+7. Status externo legado `deploy/lu9di/filtra-ai-api-fallback` (integração
+   Deno) permanece vermelho por billing; não é o destino Render.
