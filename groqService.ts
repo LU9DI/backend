@@ -419,6 +419,28 @@ export function setCallAIImpl(impl: typeof callAIReal | null): void {
   callAIImpl = impl;
 }
 
+/**
+ * Agrega as falhas de TODOS os provedores preservando a mensagem e as
+ * propriedades (status/code/body/provider/failover) do erro final, para que
+ * consumidores que liam o último erro continuem funcionando.
+ */
+export function buildProviderAggregateError(attemptErrors: Error[]): AggregateError {
+  const lastError = attemptErrors[attemptErrors.length - 1];
+  const aggregate = new AggregateError(
+    attemptErrors,
+    lastError?.message || 'Falha em todos os providers de IA',
+  );
+  if (lastError) {
+    for (const key of ['status', 'code', 'body', 'provider', 'failover'] as const) {
+      const value = (lastError as any)[key];
+      if (value !== undefined && (aggregate as any)[key] === undefined) {
+        (aggregate as any)[key] = value;
+      }
+    }
+  }
+  return aggregate;
+}
+
 async function callAIReal(
   system: string,
   user: string,
@@ -474,10 +496,7 @@ async function callAIReal(
     }
   }
 
-  throw new AggregateError(
-    attemptErrors,
-    attemptErrors[attemptErrors.length - 1]?.message || 'Falha em todos os providers de IA',
-  );
+  throw buildProviderAggregateError(attemptErrors);
 }
 export async function callAI(
   system: string,

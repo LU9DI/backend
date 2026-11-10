@@ -136,4 +136,29 @@ suite('Provedor de IA: recusa x resultado ambíguo', () => {
     assert.equal(isProvenNotSent('ambiguous', aggregate), false);
   });
 
+  test('AggregateError expõe todas as tentativas e é classificado pela pior', () => {
+    const first = providerError('Groq API error 503: upstream failure', 503);
+    const last = providerError('Gemini API error 429: rate limit', 429);
+    const aggregate = new AggregateError([first, last], last.message);
+    assert.equal(aggregate.errors.length, 2, 'todas as tentativas preservadas');
+    assert.match(aggregate.message, /Gemini API error 429/);
+    assert.equal(classifyDotProviderError(aggregate), 'ambiguous');
+  });
+
+  test('AggregateError vazio nunca libera orçamento', () => {
+    const aggregate = new AggregateError([], 'Falha em todos os providers');
+    assert.equal(classifyDotProviderError(aggregate), 'ambiguous');
+    assert.equal(isProviderHttpRejection(aggregate), false);
+    assert.equal(isProvenNotSent('ambiguous', aggregate), false);
+    assert.equal(isProvenNotSent('rejected', aggregate), false);
+  });
+
+  test('mistura de não-enviado com recusa continua ambígua', () => {
+    const notSent = new Error('Nenhuma IA configurada. Defina GROQ_API_KEY');
+    const rejected = providerError('Groq API error 401: invalid key', 401);
+    const aggregate = new AggregateError([notSent, rejected], 'Falha em todos os providers');
+    assert.equal(classifyDotProviderError(aggregate), 'ambiguous');
+    assert.equal(isProvenNotSent('ambiguous', aggregate), false);
+  });
+
 });
