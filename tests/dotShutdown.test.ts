@@ -153,9 +153,21 @@ suite('Scheduler e worker — encerramento gracioso', () => {
     const shutdownIdx = serverSource.indexOf('async function gracefulShutdown');
     assert.ok(shutdownIdx > 0 && shutdownIdx < closeIdx);
 
+    // Cada subsistema precisa de UMA parada registrada, em qualquer dos dois
+    // grupos do shutdown:
+    //   a) `trackBackground('<nome>'`  → timers com parada síncrona;
+    //   b) `drain('<nome>', ...)`      → drenagem assíncrona com teto.
+    // A versão anterior exigia sempre (a) e quebrou quando os workers de retry,
+    // aquisição e relatório mensal passaram a ser drenados com `drain` — o que
+    // é MAIS seguro (aguarda a execução em voo antes de fechar o pool).
     for (const name of ['retry worker', 'acquisition worker', 'monthly report scheduler']) {
-      const idx = serverSource.indexOf(`trackBackground('${name}'`);
-      assert.ok(idx > 0, `subsistema "${name}" precisa ser registrado para parada`);
+      const tracked = serverSource.indexOf(`trackBackground('${name}'`);
+      const drained = serverSource.indexOf(`drain('${name}'`);
+      const idx = tracked > 0 ? tracked : drained;
+      assert.ok(
+        idx > 0 && idx < closeIdx,
+        `subsistema "${name}" precisa de parada registrada ANTES de closeDB()`,
+      );
     }
     // O DOT NÃO entra em backgroundStops: é drenado explicitamente UMA vez
     // (`stopDotMonitorScheduler`/`stopDotAgentWorkerAndDrain`), antes de closeDB.

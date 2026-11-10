@@ -1,4 +1,5 @@
 import { getDb } from './db.js';
+import { raceWithTimeout } from './gracefulStop.js';
 import { ensureAcquisitionEngineSchema } from './acquisitionEngine.js';
 import { googlePlacesLeads } from './acquisitionGooglePlaces.js';
 import crypto from 'crypto';
@@ -578,6 +579,22 @@ export async function replenishAcquisitionStock(force = false) {
 }
 
 let replenisherTimer: NodeJS.Timeout | null = null;
+let replenisherInFlight: Promise<void> | null = null;
+let replenisherStopped = false;
+
+/** Porta única: timer, tick inicial e drain compartilham a mesma promise. */
+function scheduleReplenisherTick(): Promise<void> {
+  if (replenisherStopped) return Promise.resolve();
+  if (replenisherInFlight) return replenisherInFlight;
+  const promise = replenishAcquisitionStock()
+    .then((r) => { console.log('[acquisition-replenisher]', r); })
+    .catch((e: any) => { console.warn('[acquisition-replenisher]', e?.message || e); })
+    .finally(() => {
+      if (replenisherInFlight === promise) replenisherInFlight = null;
+    });
+  replenisherInFlight = promise;
+  return promise;
+}
 
 export function startAcquisitionReplenisher() {
   // O replenisher faz parte do motor de aquisição. Se o motor estiver
@@ -588,21 +605,35 @@ export function startAcquisitionReplenisher() {
     process.env.ACQUISITION_ENGINE === '1';
   if (started || !enabled) return replenisherTimer ?? undefined;
   started = true;
-  const tick = () => replenishAcquisitionStock()
-    .then(r => console.log('[acquisition-replenisher]', r))
-    .catch(e => console.warn('[acquisition-replenisher]', e?.message || e));
-  tick();
-  replenisherTimer = setInterval(tick, INTERVAL_MS);
+  replenisherStopped = false;
+  void scheduleReplenisherTick();
+  replenisherTimer = setInterval(() => void scheduleReplenisherTick(), INTERVAL_MS);
   // Não pode manter o processo vivo nem disparar depois do encerramento.
   replenisherTimer.unref();
   return replenisherTimer;
 }
 
-/** Para o replenisher (encerramento gracioso). Idempotente. */
+/** Para o replenisher (só o timer). Idempotente. */
 export function stopAcquisitionReplenisher(): boolean {
-  if (!replenisherTimer) return false;
+  replenisherStopped = true;
+  if (!replenisherTimer) {
+    started = false;
+    return false;
+  }
   clearInterval(replenisherTimer);
   replenisherTimer = null;
   started = false;
   return true;
+}
+
+/** Para o timer e aguarda (limitado) a execução em voo antes de fechar o pool. */
+export async function stopAcquisitionReplenisherAndDrain(
+  timeoutMs = 5_000,
+): Promise<{ drained: boolean; in_flight: boolean }> {
+  replenisherStopped = true;
+  stopAcquisitionReplenisher();
+  const inFlight = replenisherInFlight;
+  if (!inFlight) return { drained: true, in_flight: false };
+  const timedOut = await raceWithTimeout(inFlight, timeoutMs);
+  return { drained: !timedOut, in_flight: timedOut && Boolean(replenisherInFlight) };
 }

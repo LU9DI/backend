@@ -223,10 +223,12 @@ test('três processos com PG_POOL_MAX=1 inicializam o mesmo banco sem deadlock',
   const previousUrl = process.env.DATABASE_URL;
   try {
     process.env.DATABASE_URL = url;
+    // Três migrações completas concorrentes num host lento podem passar de 60s
+    // no total; 120s por worker ainda detecta deadlock real sem flakar.
     const results = await Promise.all([
-      runNodeScript(INIT_WORKER, [], { DATABASE_URL: url, PG_POOL_MAX: '1' }, 60_000),
-      runNodeScript(INIT_WORKER, [], { DATABASE_URL: url, PG_POOL_MAX: '1' }, 60_000),
-      runNodeScript(INIT_WORKER, [], { DATABASE_URL: url, PG_POOL_MAX: '1' }, 60_000),
+      runNodeScript(INIT_WORKER, [], { DATABASE_URL: url, PG_POOL_MAX: '1' }, 120_000),
+      runNodeScript(INIT_WORKER, [], { DATABASE_URL: url, PG_POOL_MAX: '1' }, 120_000),
+      runNodeScript(INIT_WORKER, [], { DATABASE_URL: url, PG_POOL_MAX: '1' }, 120_000),
     ]);
 
     for (const [index, result] of results.entries()) {

@@ -63,7 +63,7 @@ import { ensureDotAccessSchema } from './services/dotAccessControl.js';
 import { ensureDotAgentSchema } from './services/dotAgent.js';
 import { ensureMissionTables } from './services/dotAgentMissions.js';
 import { startDotMonitorScheduler, stopDotMonitorScheduler } from './services/dotScheduler.js';
-import { startMonthlyReportScheduler, getMonthlyReportSchedulerStatus, stopMonthlyReportScheduler } from './services/monthlyReportScheduler.js';
+import { startMonthlyReportScheduler, getMonthlyReportSchedulerStatus, stopMonthlyReportSchedulerAndDrain } from './services/monthlyReportScheduler.js';
 import { startDotAgentWorker, stopDotAgentWorkerAndDrain } from './services/dotAgentWorker.js';
 import { assertDotLedgerSchema } from './services/dotLedger.js';
 import { mcpApp } from './filtraMcp.js';
@@ -78,14 +78,14 @@ import { ensurePushSchema, pushConfigured, initWebPush } from './lib/push.js';
 import { ensureAiUsageSchema } from './lib/aiUsage.js';
 import { ensureOpsTables } from './lib/opsLog.js';
 import { ensureAuditSchema } from './lib/auditLog.js';
-import { ensureRetryQueue, startRetryWorker, stopRetryWorker } from './lib/retryQueue.js';
+import { ensureRetryQueue, startRetryWorker, stopRetryWorkerAndDrain } from './lib/retryQueue.js';
 import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
 import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
 import { n8nConfigured } from './lib/n8n.js';
-import { ensureAcquisitionEngineSchema, startAcquisitionWorker, stopAcquisitionWorker } from './lib/acquisitionEngine.js';
-import { startAcquisitionReplenisher, stopAcquisitionReplenisher } from './lib/acquisitionReplenisher.js';
+import { ensureAcquisitionEngineSchema, startAcquisitionWorker, stopAcquisitionWorkerAndDrain } from './lib/acquisitionEngine.js';
+import { startAcquisitionReplenisher, stopAcquisitionReplenisherAndDrain } from './lib/acquisitionReplenisher.js';
 import { startProductHuntAcquisition } from './lib/acquisitionProductHunt.js';
 import { startHubSpotAcquisitionSync } from './lib/hubspotAcquisitionSync.js';
 import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
@@ -312,11 +312,24 @@ async function gracefulShutdown(signal: string) {
     };
     const dotScheduler = await drain('DOT scheduler', () => stopDotMonitorScheduler(5_000));
     const dotWorker = await drain('DOT agent worker', () => stopDotAgentWorkerAndDrain(5_000));
+    // Workers de background: param o timer e aguardam a execução em voo
+    // (com teto individual) antes de fechar o pool.
+    const retryWorker = await drain('retry worker', () => stopRetryWorkerAndDrain(5_000));
+    const acquisitionWorker = await drain('acquisition worker', () => stopAcquisitionWorkerAndDrain(5_000));
+    const replenisher = await drain('acquisition replenisher', () => stopAcquisitionReplenisherAndDrain(5_000));
+    const monthlyReport = await drain('monthly report scheduler', () => stopMonthlyReportSchedulerAndDrain(5_000));
 
     // 4) Fecha o pool UMA única vez, após as drenagens. Se algum drain expirou,
     //    o risco de operação pendente fica explícito no log abaixo.
     await closeDB();
-    console.log('Banco fechado.', { dot_scheduler: dotScheduler, dot_agent_worker: dotWorker });
+    console.log('Banco fechado.', {
+      dot_scheduler: dotScheduler,
+      dot_agent_worker: dotWorker,
+      retry_worker: retryWorker,
+      acquisition_worker: acquisitionWorker,
+      replenisher,
+      monthly_report: monthlyReport,
+    });
     clearTimeout(force);
     process.exit(0);
   } catch (e: any) {
@@ -399,14 +412,12 @@ export async function startServer() {
     await ensureRetryQueue(getDb());
     registerAllRetryHandlers();
     startRetryWorker();
-    trackBackground('retry worker', stopRetryWorker);
   } catch (e) {
     console.warn('retry queue:', e);
   }
   try {
     await ensureAcquisitionEngineSchema(getDb());
     startAcquisitionWorker();
-    trackBackground('acquisition worker', stopAcquisitionWorker);
     // O bootstrap atrasado do replenisher também é cancelado no encerramento:
     // sem isso ele podia nascer DEPOIS do fechamento do pool do PostgreSQL.
     const replenisherBoot = setTimeout(() => {
@@ -416,9 +427,8 @@ export async function startServer() {
         console.warn('[acquisition-replenisher] delayed bootstrap failed:', e?.message || e);
       }
     }, 60_000);
-    trackBackground('acquisition replenisher', () => {
+    trackBackground('acquisition replenisher bootstrap', () => {
       clearTimeout(replenisherBoot);
-      return stopAcquisitionReplenisher();
     });
     await startProductHuntAcquisition();
     await startHubSpotAcquisitionSync();
@@ -511,7 +521,6 @@ export async function startServer() {
 
   // Agendador in-process do relatório mensal (sem cron externo e sem credenciais).
   startMonthlyReportScheduler();
-  trackBackground('monthly report scheduler', stopMonthlyReportScheduler);
 
   mountAdminLoginRoute(app, getDb, { setAuthCookie, JWT_SECRET });
   mountAdminPasswordResetRoutes(app, getDb);

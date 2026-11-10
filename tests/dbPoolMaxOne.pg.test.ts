@@ -9,7 +9,11 @@ import { initPgDatabase } from '../lib/db.pg.js';
 import { runCentralMigrations } from '../lib/migrations.js';
 import { createTestDatabase, dropTestDatabase } from './helpers/pg-test-utils.js';
 
-const MIGRATION_TIMEOUT_MS = 20_000;
+// O objetivo deste teste é detectar DEADLOCK (espera infinita), não impor um
+// orçamento de performance. Em hosts lentos a primeira migração (DDL + índices)
+// pode passar de 20s legitimamente; 60s por execução ainda falha em deadlock
+// real sem flakar por lentidão de I/O.
+const MIGRATION_TIMEOUT_MS = 60_000;
 
 test('PG_POOL_MAX=1 conclui migrações sem deadlock e libera a conexão', async () => {
   const previousMax = process.env.PG_POOL_MAX;
@@ -17,19 +21,24 @@ test('PG_POOL_MAX=1 conclui migrações sem deadlock e libera a conexão', async
   const created = await createTestDatabase('pg_pool_one');
   const db = await initPgDatabase(created.url);
   try {
-    let timer: NodeJS.Timeout | undefined;
-    const deadlock = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`deadlock: migrações não terminaram em ${MIGRATION_TIMEOUT_MS}ms com PG_POOL_MAX=1`)),
-        MIGRATION_TIMEOUT_MS,
-      );
-    });
-    try {
-      await Promise.race([runCentralMigrations(db), deadlock]);
-      await Promise.race([runCentralMigrations(db), deadlock]); // idempotente, ainda com 1 conexão
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
+    // Cada execução tem seu próprio prazo: o timer não deve acumular o tempo
+    // das duas migrações (a segunda é idempotente e rápida).
+    const withDeadline = async <T>(work: Promise<T>): Promise<T> => {
+      let timer: NodeJS.Timeout | undefined;
+      const deadlock = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`deadlock: migrações não terminaram em ${MIGRATION_TIMEOUT_MS}ms com PG_POOL_MAX=1`)),
+          MIGRATION_TIMEOUT_MS,
+        );
+      });
+      try {
+        return await Promise.race([work, deadlock]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+    await withDeadline(runCentralMigrations(db));
+    await withDeadline(runCentralMigrations(db)); // idempotente, ainda com 1 conexão
 
     const columns = await db.all(`SELECT column_name AS name FROM information_schema.columns WHERE table_schema='public' AND table_name='reviews'`);
     const names = columns.map((row: any) => String(row.name).toLowerCase());

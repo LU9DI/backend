@@ -8,6 +8,7 @@
  * (desligada por padrão — ver routes/monthlyReportJobsRoutes.ts).
  */
 import { getDb } from '../lib/db.js';
+import { raceWithTimeout } from '../lib/gracefulStop.js';
 import { runMonthlyReportJob, type MonthlyReportStats } from '../routes/monthlyReportJobsRoutes.js';
 
 const DEFAULT_TICK_MS = 6 * 60 * 60 * 1000;
@@ -47,6 +48,22 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let firstTimer: ReturnType<typeof setTimeout> | null = null;
 let started = false;
 let ticking = false;
+let inFlight: Promise<void> | null = null;
+let stopped = false;
+
+/** Porta única: timers e drain observam a MESMA execução em voo. */
+function scheduleMonthlyTick(): Promise<void> {
+  if (stopped) return Promise.resolve();
+  if (inFlight) return inFlight;
+  const promise = runMonthlyReportSchedulerTick()
+    .then(() => undefined)
+    .catch(() => undefined)
+    .finally(() => {
+      if (inFlight === promise) inFlight = null;
+    });
+  inFlight = promise;
+  return promise;
+}
 let lastPeriod: string | null = null;
 let lastRunDay: string | null = null;
 let lastRunAt: string | null = null;
@@ -112,18 +129,32 @@ export function startMonthlyReportScheduler() {
     return;
   }
   started = true;
+  stopped = false;
   const tickMs = monthlyReportTickMs();
   console.log(
     `[monthly-report] agendador ativo: período alvo ${monthlyReportPeriodFor()} (tick ${tickMs}ms, sem credenciais externas).`
   );
-  firstTimer = setTimeout(() => { void runMonthlyReportSchedulerTick(); }, FIRST_TICK_DELAY_MS);
+  firstTimer = setTimeout(() => { void scheduleMonthlyTick(); }, FIRST_TICK_DELAY_MS);
   firstTimer.unref?.();
-  timer = setInterval(() => { void runMonthlyReportSchedulerTick(); }, tickMs);
+  timer = setInterval(() => { void scheduleMonthlyTick(); }, tickMs);
   timer.unref?.();
 }
 
 export function stopMonthlyReportScheduler() {
+  stopped = true;
   if (firstTimer) { clearTimeout(firstTimer); firstTimer = null; }
   if (timer) { clearInterval(timer); timer = null; }
   started = false;
+}
+
+/** Para os timers e aguarda (limitado) o tick em voo antes de fechar o pool. */
+export async function stopMonthlyReportSchedulerAndDrain(
+  timeoutMs = 5_000,
+): Promise<{ drained: boolean; in_flight: boolean }> {
+  stopped = true;
+  stopMonthlyReportScheduler();
+  const pending = inFlight;
+  if (!pending) return { drained: true, in_flight: false };
+  const timedOut = await raceWithTimeout(pending, timeoutMs);
+  return { drained: !timedOut, in_flight: timedOut && Boolean(inFlight) };
 }
