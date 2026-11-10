@@ -65,7 +65,6 @@ export async function claimDotHttpRequest(input: {
   const now = new Date();
   const nowIso = now.toISOString();
   const staleBefore = new Date(now.getTime() - PENDING_STALE_MS).toISOString();
-  const completedBefore = new Date(now.getTime() - COMPLETED_TTL_MS).toISOString();
 
   return withDbTransaction(async (tx) => {
     // Only completed records are eligible for retention cleanup. Pending and
