@@ -109,6 +109,34 @@ suite('Dot ledger — orçamento durável', () => {
     assert.equal(Number(persisted.c), 1);
   });
 
+  test('markSent só autoriza envio quando a transição pending foi aplicada', async () => {
+    await resetEmpresa(EMPRESA_REI);
+
+    const expired = await ledger.reserveDotExecution({ empresaId: EMPRESA_REI, plan: 'rei' });
+    const expiredId = expired.reservation!.id;
+    await db.run(
+      'UPDATE dot_budget_reservations SET expires_at = ? WHERE empresa_id = ? AND id = ?',
+      [new Date(Date.now() - 60_000).toISOString(), EMPRESA_REI, expiredId],
+    );
+    await ledger.sweepExpiredDotReservations({ empresaId: EMPRESA_REI });
+
+    const refused = await ledger.markDotReservationSent({ empresaId: EMPRESA_REI, reservationId: expiredId });
+    assert.equal(refused.ok, false, 'reserva expirada não pode autorizar chamada ao provedor');
+    assert.equal(refused.reservation?.status, 'expired');
+    assert.equal(refused.reservation?.sent_at ?? null, null);
+
+    const active = await ledger.reserveDotExecution({ empresaId: EMPRESA_REI, plan: 'rei' });
+    const activeId = active.reservation!.id;
+    const marked = await ledger.markDotReservationSent({ empresaId: EMPRESA_REI, reservationId: activeId });
+    assert.equal(marked.ok, true);
+    assert.equal(marked.reservation?.status, 'pending');
+    assert.ok(marked.reservation?.sent_at, 'a reserva precisa persistir a marca de envio');
+
+    const retried = await ledger.markDotReservationSent({ empresaId: EMPRESA_REI, reservationId: activeId });
+    assert.equal(retried.ok, true, 'marcar novamente uma reserva pending já enviada é idempotente');
+    assert.equal(retried.reservation?.sent_at, marked.reservation?.sent_at);
+  });
+
   test('finalize converte a estimativa em consumo real e vincula a linha de ai_usage', async () => {
     await resetEmpresa(EMPRESA_REI);
     const reserved = await ledger.reserveDotExecution({ empresaId: EMPRESA_REI, plan: 'rei' });
