@@ -50,7 +50,7 @@ test('PostgreSQL: migration creates the tenant/endpoint/key unique constraint', 
   assert.ok(index, 'unique idempotency scope index must exist');
 });
 
-test('PostgreSQL: concurrent processes/transactions claim a logical message exactly once', async () => {
+test('PostgreSQL: concurrent transactions claim a logical message exactly once', async () => {
   const input = {
     tenantId,
     endpoint: '/api/dot/chat',
