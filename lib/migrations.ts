@@ -769,6 +769,44 @@ async function migrateDotBudgetLedger(db: Database | PgDatabase): Promise<void> 
 }
 
 /**
+ * Registro durável de idempotência HTTP do Filtra Dot.
+ * Pending/ambiguous são retidos para impedir reexecução depois de crash;
+ * somente respostas concluídas podem expirar pela política de retenção.
+ */
+async function migrateDotHttpIdempotency(db: Database | PgDatabase): Promise<void> {
+  db = db as Database;
+  await createTableIfMissing(
+    db,
+    'dot_http_idempotency',
+    `CREATE TABLE IF NOT EXISTS dot_http_idempotency (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL,
+      endpoint TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      request_hash TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      response_status INTEGER,
+      response_body TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    )`,
+  );
+  await createIndexIfMissing(
+    db,
+    'dot_http_idempotency',
+    'ux_dot_http_idempotency_scope_key',
+    'CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_http_idempotency_scope_key ON dot_http_idempotency(tenant_id, endpoint, idempotency_key)',
+  );
+  await createIndexIfMissing(
+    db,
+    'dot_http_idempotency',
+    'idx_dot_http_idempotency_expiry',
+    "CREATE INDEX IF NOT EXISTS idx_dot_http_idempotency_expiry ON dot_http_idempotency(status, expires_at)",
+  );
+}
+
+/**
  * Sequência central de inicialização. Idempotente.
  * Em PostgreSQL roda inteira sob o advisory lock global, em uma conexão
  * dedicada, garantindo que processos concorrentes não executem DDL ao mesmo
@@ -784,6 +822,7 @@ export async function runCentralMigrations(db: Database | PgDatabase): Promise<v
     await migrateMfaSchema(db);
     await migrateDotActionSchema(db);
     await migrateDotBudgetLedger(db);
+    await migrateDotHttpIdempotency(db);
   };
 
   if (isPgDatabase(db)) {
