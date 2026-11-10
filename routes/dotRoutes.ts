@@ -35,6 +35,7 @@ import {
 import { classifyDotProviderError, describeDotProviderOutcome, isProvenNotSent } from '../services/dotProviderOutcome.js';
 import { selectDotModel } from '../services/dotModelRouting.js';
 import { requireDotAccess, type DotAccessResource, type DotAccessAction } from '../services/dotAccessControl.js';
+import { claimDotHttpRequest, persistDotHttpResponse } from '../services/dotHttpIdempotency.js';
 
 const dotLimiter = rateLimit({
   windowMs: 60_000,
@@ -764,6 +765,66 @@ export function mountDotRoutes(app: Express) {
     const message = cleanMessage(req.body?.message);
     const requestedSessionId = cleanMessage(req.body?.session_id) || 'local-demo';
     if (!message) return res.status(400).json({ error: 'Mensagem obrigatória.' });
+
+    // Idempotência HTTP obrigatória em produção. A chave é reivindicada antes
+    // de contexto, caches, histórico, reserva financeira ou chamada ao provedor.
+    const idempotencyKey = String(req.get('Idempotency-Key') || req.get('X-Idempotency-Key') || '').trim();
+    if (process.env.NODE_ENV === 'production' && !idempotencyKey) {
+      return res.status(428).json({
+        ok: false,
+        error: 'Esta versão do Filtra Dot exige uma chave de idempotência por mensagem.',
+        code: 'DOT_IDEMPOTENCY_KEY_REQUIRED',
+      });
+    }
+    if (idempotencyKey && !/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Chave de idempotência inválida.',
+        code: 'DOT_IDEMPOTENCY_KEY_INVALID',
+      });
+    }
+
+    if (idempotencyKey) {
+      try {
+        const claimed = await claimDotHttpRequest({
+          tenantId: access.empresaId || `user:${access.userId || 'unknown'}`,
+          endpoint: '/api/dot/chat',
+          key: idempotencyKey,
+          payload: { message, session_id: requestedSessionId },
+        });
+        if (claimed.kind === 'replay') return res.status(claimed.status).json(claimed.body);
+        if (claimed.kind === 'in_progress') {
+          res.setHeader('Retry-After', '2');
+          return res.status(409).json({
+            ok: false,
+            error: 'Esta mensagem ainda está sendo processada.',
+            code: 'DOT_IDEMPOTENCY_IN_PROGRESS',
+          });
+        }
+        if (claimed.kind === 'ambiguous') {
+          return res.status(409).json({
+            ok: false,
+            error: 'O resultado desta tentativa é incerto e exige reconciliação. Não envie a mensagem com uma nova chave.',
+            code: 'DOT_IDEMPOTENCY_AMBIGUOUS',
+          });
+        }
+        if (claimed.kind === 'payload_mismatch') {
+          return res.status(409).json({
+            ok: false,
+            error: 'Esta chave já foi usada com outro conteúdo. Gere uma nova chave para uma nova mensagem.',
+            code: 'DOT_IDEMPOTENCY_PAYLOAD_MISMATCH',
+          });
+        }
+        persistDotHttpResponse(res, claimed.claim);
+      } catch (error: any) {
+        console.error('[dot-idempotency] claim falhou:', String(error?.message || error));
+        return res.status(503).json({
+          ok: false,
+          error: 'A proteção contra mensagens duplicadas está indisponível. A solicitação não foi executada.',
+          code: 'DOT_IDEMPOTENCY_UNAVAILABLE',
+        });
+      }
+    }
 
     const sessionId = scopedSessionId(access, requestedSessionId);
     const history = sessionHistory(sessionId);
