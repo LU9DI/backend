@@ -138,6 +138,56 @@ param o timer e agora drenam a promise em voo com teto de 5 s; a corrida
 `start × drain` permanece documentada no scheduler/worker. O expurgo de linhas
 `ambiguous`/`failed_safe` não é automático e exige procedimento operacional.
 
+### 2.4 Failover entre bases da API
+
+O failover do frontend (`apiFetch`) repete o POST do chat em outra base quando
+a primeira responde 502/503/504 ou a conexão cai. A repetição é segura **somente
+se todas as bases compartilharem o mesmo PostgreSQL** (mesma tabela
+`dot_http_idempotency`):
+
+- base compartilhada → a segunda tentativa reencontra a chave e recebe o replay
+  ou `DOT_REQUEST_IN_PROGRESS`/`DOT_REQUEST_AMBIGUOUS`;
+- bases com bancos distintos → a segunda base não conhece a chave e executa a
+  mensagem de novo (cobrança duplicada).
+
+Antes de ativar, confirmar que `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_API_URL_BACKUP`,
+`NEXT_PUBLIC_API_URLS` e o Worker do Cloudflare apontam para o mesmo
+`DATABASE_URL`. Enquanto isso não for verdade, o chat deve ser enviado sem
+failover.
+
+### 2.5 Reconciliação das linhas ambíguas e `failed_safe`
+
+Sinais no log do Render (sem conteúdo de mensagem):
+
+```
+[dot-idempotency] requisição ambígua (reconciliação necessária): {"empresaId":...}
+[dot-idempotency] lease expirado promovido para ambíguo: {"empresaId":...}
+```
+
+Consulta de acompanhamento (somente leitura):
+
+```sql
+SELECT status, count(*) FROM dot_http_idempotency
+ WHERE updated_at > now() - interval '24 hours'
+ GROUP BY status ORDER BY status;
+```
+
+Procedimento manual, executado por pessoa autorizada (nunca pelo backend):
+
+1. listar as linhas `ambiguous` do período e abrir a reserva correspondente em
+   `dot_budget_reservations` (`status = 'pending'`, `ambiguous = 1`);
+2. decidir, pelo consumo real de `ai_usage`/`ai_usage` da reserva, se a chamada
+   chegou ao provedor:
+   - consumiu → fechar a reserva com os tokens reais (`finalizeDotReservation`);
+   - não consumiu → liberar a reserva (`releaseDotReservation`) e marcar a
+     linha como `failed_safe` para permitir um retry auditado;
+3. registrar a decisão em `dot_action_audit` (ou na trilha de auditoria da
+   empresa) com a chave de idempotência e o operador.
+
+Sem esse procedimento, uma linha `ambiguous` bloqueia para sempre a reenvio
+daquela mensagem (comportamento correto: é evidência de segurança) e a reserva
+continua comprometendo o orçamento do tenant até a reconciliação.
+
 ---
 
 ## 3. Variáveis, migrações e inicialização

@@ -2,8 +2,9 @@
 
 **Status:** preparação. Nenhuma flag foi ativada e nada foi publicado.
 **PR:** #144 — `reconcile/dot-production-2026-11-06`
-**HEAD publicado:** `b2c0c504fff88b089233e09f5cc437edf846274b` (as duas
-correções finais de ledger/failover estão no working tree, ainda **não publicadas**)
+**HEAD publicado:** `c890c9ae9b80c641c34d7546786ab3c617eab252` (idempotência HTTP,
+drenagem de workers e failover final **não publicados** — estão em commits
+locais sobre esse HEAD)
 **Documento irmão:** [`DOT_PRODUCTION_READINESS.md`](DOT_PRODUCTION_READINESS.md)
 
 Este runbook é o procedimento operacional para ativar o Dot de forma gradual,
@@ -32,6 +33,14 @@ independente, o CI verde nem a validação em staging.
 - **Migração de autenticação:** a normalização `LOWER(TRIM(email))` é aplicada
   nas consultas e há guarda de duplicados **antes** do índice único — se houver
   colisão, o boot falha fechado sem alterar usuários.
+- **Idempotência HTTP do chat (contrato `DOT_HTTP_IDEMPOTENCY.md`):** claim
+  durável em `dot_http_idempotency` antes de contexto, cache, reserva e
+  provedor; estados `processing`/`completed`/`ambiguous`/`failed_safe`; chave
+  obrigatória em produção (400 `DOT_IDEMPOTENCY_KEY_REQUIRED`); unicidade por
+  `(empresa_id, idempotency_key)`; replay do status/JSON originais; 409
+  `DOT_REQUEST_IN_PROGRESS` / `DOT_REQUEST_AMBIGUOUS` /
+  `DOT_IDEMPOTENCY_KEY_REUSED`; falha de persistência vira 503
+  `DOT_IDEMPOTENCY_PERSIST_FAILED` (nunca sucesso não reproduzível).
 
 ---
 
@@ -44,6 +53,11 @@ independente, o CI verde nem a validação em staging.
       bloqueia o boot se existirem — ver seção 3.5);
 - [ ] owner de cada empresa piloto provisionado e auditado;
 - [ ] frontend atualizado para enviar `X-Dot-Csrf: 1` nas mutações de empresa;
+- [ ] frontend `/dot/conversa` publicado e envia `X-Idempotency-Key` por
+      mensagem lógica, com a mesma chave em retry/failover;
+- [ ] todas as bases de API do failover apontam para o **mesmo** PostgreSQL
+      (ver `DOT_PRODUCTION_READINESS.md` §2.4) — sem isso, o failover do chat
+      pode executar a mesma mensagem duas vezes;
 - [ ] revisão independente do diff concluída;
 - [ ] janela de ativação e rollback acordados.
 
@@ -128,11 +142,16 @@ Não executar migração em produção como parte da validação. O procedimento
 4. Validar objetos criados:
    ```sql
    SELECT indexname FROM pg_indexes
-    WHERE tablename IN ('usuarios','ai_usage','dot_budget_reservations')
+    WHERE tablename IN ('usuarios','ai_usage','dot_budget_reservations','dot_http_idempotency')
     ORDER BY indexname;
    ```
    Esperado: `ux_usuarios_email_normalized`, `ux_dot_budget_reservations_ai_usage`
-   (parcial), `idx_ai_usage_feature` e os índices do ledger.
+   (parcial), `idx_ai_usage_feature`, os índices do ledger e
+   `ux_dot_http_idempotency_empresa_key` (único por
+   `(empresa_id, idempotency_key)`). A migração da tabela de idempotência
+   **falha fechada** se o schema existente for incompatível (por exemplo, com a
+   coluna legada `tenant_id`): o boot para e exige reconciliação manual — não
+   degrada para "best effort".
 5. Rodar uma segunda vez (idempotência) e conferir que não há DDL repetida nem
    erro; a suíte `dbPoolMaxOne.pg.test.ts` cobre esse caminho com
    `PG_POOL_MAX=1`.
@@ -162,8 +181,12 @@ de missões, decisões, ações, casos, follow-ups ou auditoria.
 
 - `/api/health` e `/api/dot/status`;
 - logs `[dot-scheduler]`, `[dot]`;
+- logs `[dot-idempotency] requisição ambígua` e `[dot-idempotency] lease expirado
+  promovido para ambíguo` (nenhum conteúdo de mensagem é registrado);
 - auditoria `dot_action_audit` (`prepared`, `approved`, `execution_started`,
   `executed`, `failed` com `phase`/`rolled_back`);
+- consulta de acompanhamento da idempotência e o procedimento de reconciliação
+  em `DOT_PRODUCTION_READINESS.md` §2.5;
 - alertas a definir: `failed` acima de limiar, ação presa em `executing`,
   auditoria de execução duplicada, erro de scheduler, fila `approved` antiga;
 - retenção de auditoria conforme política aprovada; nenhum expurgo automático
@@ -177,6 +200,10 @@ de missões, decisões, ações, casos, follow-ups ou auditoria.
 - CI ou smoke de staging falhando;
 - e-mails duplicados após `LOWER(TRIM(email))` não corrigidos;
 - frontend sem `X-Dot-Csrf` nas mutações;
+- frontend do chat sem `X-Idempotency-Key` (o backend responderia 400 em
+  produção) ou com chave nova a cada retry;
+- bases de API do failover apontando para bancos diferentes (duplicação
+  garantida em caso de failover do chat);
 - owner/PIN não provisionados;
 - migração sem backup ou com lock suspeito;
 - ação executada sem aprovação, aprovador igual ao preparador sem owner, ou

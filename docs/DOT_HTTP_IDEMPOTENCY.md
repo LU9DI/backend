@@ -59,7 +59,7 @@ A gravação de resposta e a transição para `completed` devem ser atômicas. N
 
 ## Contrato de resposta
 
-- Replays `completed` reproduzem o status HTTP e o JSON original (incluindo `session_id`, campos de orçamento e metadados), com um indicador de replay opcional em header, sem alterar o corpo original.
+- Replays `completed` reproduzem o status HTTP e o JSON original (incluindo `session_id`, campos de orçamento e metadados), com um indicador de replay opcional em header (`Idempotency-Replayed: true`, exposto ao navegador via `Access-Control-Expose-Headers`), sem alterar o corpo original.
 - Conflitos/in-flight/ambiguous usam códigos estáveis e mensagens que não revelem dados de outro tenant.
 - O corpo armazenado não pode conter segredos, credenciais ou dados de outro tenant. Aplicar o mesmo controle de acesso e sanitização da resposta original.
 
