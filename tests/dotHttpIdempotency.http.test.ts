@@ -41,7 +41,7 @@ const USER_B = crypto.randomUUID();
 
 let providerCalls = 0;
 let providerGate: Promise<void> | null = null;
-let mode: 'ok' | 'ambiguous' = 'ok';
+let mode: 'ok' | 'ambiguous' | 'rejected' = 'ok';
 
 let server: any;
 let baseUrl = '';
@@ -134,6 +134,15 @@ suite('Dot HTTP idempotency — contrato de borda', () => {
       providerCalls += 1;
       if (providerGate) await providerGate;
       if (mode === 'ambiguous') throw new Error('socket hang up');
+      if (mode === 'rejected') {
+        // Recusa estruturada dos dois provedores: comprovadamente nada foi
+        // processado, então o ledger libera e a idempotência deve permitir retry.
+        const groqError: any = new Error('Groq API error 401: invalid key');
+        groqError.status = 401;
+        const geminiError: any = new Error('Gemini API error 401: invalid key');
+        geminiError.status = 401;
+        throw new AggregateError([groqError, geminiError], 'all providers rejected');
+      }
       return {
         text: 'Resposta simulada do Dot.',
         provider: 'groq',
@@ -339,5 +348,32 @@ suite('Dot HTTP idempotency — contrato de borda', () => {
     const response = await callDot({ key: null, message: 'Mensagem sem chave', sessionId: 'no-key' });
     assert.equal(response.status, 200);
     assert.equal(providerCalls, 1);
+  });
+
+  test('recusa estruturada do provedor vira failed_safe e permite retry com a mesma chave', async () => {
+    const key = `dot-chat-key-rejected-${crypto.randomUUID()}`;
+    const message = 'Mensagem com provedor recusando';
+    const sessionId = 'rejected-session';
+
+    mode = 'rejected';
+    const first = await callDot({ key, message, sessionId });
+    assert.equal(first.status, 503);
+    assert.equal(providerCalls, 1);
+
+    const row = await db.get(
+      'SELECT status FROM dot_http_idempotency WHERE empresa_id = ? AND idempotency_key = ?',
+      [EMPRESA_A, key],
+    );
+    assert.equal(String(row?.status), 'failed_safe', 'recusa comprovada não pode virar ambígua');
+    // O ledger também liberou a reserva (nada foi processado).
+    const ledgerRows = await reservations(EMPRESA_A);
+    assert.equal(ledgerRows.length, 1);
+    assert.equal(String(ledgerRows[0].status), 'released');
+    assert.equal(Number(ledgerRows[0].ambiguous || 0), 0);
+
+    mode = 'ok';
+    const retry = await callDot({ key, message, sessionId });
+    assert.equal(retry.status, 200, 'retry com a mesma chave deve ser permitido após failed_safe');
+    assert.equal(providerCalls, 2);
   });
 });

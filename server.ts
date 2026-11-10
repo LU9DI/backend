@@ -1,5 +1,5 @@
-/**
- * Filtra.IA — bootstrap da API (produção-ready)
+﻿/**
+ * Filtra.IA � bootstrap da API (produção-ready)
  */
 import express from 'express';
 import cors from 'cors';
@@ -108,7 +108,7 @@ const BUILD = {
  * O Filtra Dot só é montado quando explicitamente habilitado.
  * O DOT continua desativado por padrão em produção: enquanto a validação de
  * segurança e os testes de produção não estiverem completos, as rotas do Dot
- * nem existem no processo — o que impede acesso por engano ou por variável de
+ * nem existem no processo � o que impede acesso por engano ou por variável de
  * ambiente presa a staging.
  *
  * Para habilitar (somente após validação local): FILTRA_DOT_ENABLED=1.
@@ -229,7 +229,7 @@ let shuttingDown = false;
 let dotLedgerReady = false;
 
 /**
- * Componentes de background com parada SÍNCRONA (timer). O DOT NÃO entra aqui:
+ * Componentes de background com parada SÍNCRONA (timer). O DOT NÒO entra aqui:
  * usa drains assíncronos próprios (`stopDotMonitorScheduler`/
  * `stopDotAgentWorkerAndDrain`), que aguardam a execução em voo. Registrar o
  * DOT aqui criaria parada DUPLICADA.
@@ -253,7 +253,7 @@ async function runSentimentBackfillOnBoot() {
       limit,
       useAi: process.env.BACKFILL_SENTIMENT_AI === '1',
     });
-    console.log(`🧠 Backfill sentimento: updated=${r.updated} errors=${r.errors}`);
+    console.log(`�x�� Backfill sentimento: updated=${r.updated} errors=${r.errors}`);
   } catch (e: any) {
     console.warn('Backfill sentimento:', e?.message || e);
   }
@@ -273,12 +273,16 @@ async function runLgpdSweepOnBoot() {
 async function gracefulShutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`⏹  ${signal} — encerramento gracioso iniciado...`);
+  console.log(`⏹  ${signal} � encerramento gracioso iniciado...`);
   const force = setTimeout(() => {
     console.error('Force exit após timeout de shutdown');
     process.exit(1);
-  }, 25_000);
+  }, 45_000);
   force.unref();
+  // Orçamento único para todas as drenagens: força o exit só depois de o
+  // conjunto caber (evita o force disparar antes de closeDB()).
+  const drainDeadline = Date.now() + 30_000;
+  const perDrainCap = () => Math.max(250, Math.min(5_000, drainDeadline - Date.now()));
 
   try {
     // 1) Para de aceitar novas requisições HTTP (o processo segue vivo).
@@ -288,7 +292,7 @@ async function gracefulShutdown(signal: string) {
     }
 
     // 2) Timers dos subsistemas com parada SÍNCRONA. Aqui `stop` significa
-    //    "parar o timer" — nada em voo é aguardado neste grupo.
+    //    "parar o timer" � nada em voo é aguardado neste grupo.
     for (const entry of backgroundStops.slice().reverse()) {
       try {
         const result = entry.stop();
@@ -310,14 +314,14 @@ async function gracefulShutdown(signal: string) {
         return null;
       }
     };
-    const dotScheduler = await drain('DOT scheduler', () => stopDotMonitorScheduler(5_000));
-    const dotWorker = await drain('DOT agent worker', () => stopDotAgentWorkerAndDrain(5_000));
+    const dotScheduler = await drain('DOT scheduler', () => stopDotMonitorScheduler(perDrainCap()));
+    const dotWorker = await drain('DOT agent worker', () => stopDotAgentWorkerAndDrain(perDrainCap()));
     // Workers de background: param o timer e aguardam a execução em voo
     // (com teto individual) antes de fechar o pool.
-    const retryWorker = await drain('retry worker', () => stopRetryWorkerAndDrain(5_000));
-    const acquisitionWorker = await drain('acquisition worker', () => stopAcquisitionWorkerAndDrain(5_000));
-    const replenisher = await drain('acquisition replenisher', () => stopAcquisitionReplenisherAndDrain(5_000));
-    const monthlyReport = await drain('monthly report scheduler', () => stopMonthlyReportSchedulerAndDrain(5_000));
+    const retryWorker = await drain('retry worker', () => stopRetryWorkerAndDrain(perDrainCap()));
+    const acquisitionWorker = await drain('acquisition worker', () => stopAcquisitionWorkerAndDrain(perDrainCap()));
+    const replenisher = await drain('acquisition replenisher', () => stopAcquisitionReplenisherAndDrain(perDrainCap()));
+    const monthlyReport = await drain('monthly report scheduler', () => stopMonthlyReportSchedulerAndDrain(perDrainCap()));
 
     // 4) Fecha o pool UMA única vez, após as drenagens. Se algum drain expirou,
     //    o risco de operação pendente fica explícito no log abaixo.
@@ -346,7 +350,7 @@ export async function startServer() {
   // Bind HTTP immediately so platform health checks can reach liveness while
   // database/schema/worker initialization continues in the same instance.
   server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 API Filtra.IA listening on 0.0.0.0:${PORT}`);
+    console.log(`�xa� API Filtra.IA listening on 0.0.0.0:${PORT}`);
   });
   server.keepAliveTimeout = 65_000;
   server.headersTimeout = 66_000;
@@ -503,7 +507,7 @@ export async function startServer() {
       // Fail-closed: sem schema de orçamento validado, o DOT não é ativado; o
       // restante do servidor segue funcionando normalmente.
       app.get('/api/dot/status', (_req, res) => res.status(503).json({ ok: false, enabled: false, access: false, error: 'Filtra Dot indisponível: schema do orçamento não validado.' }));
-      console.error('[dot] ledger schema inválido — Filtra Dot NÃO ativado (fail-closed).');
+      console.error('[dot] ledger schema inválido � Filtra Dot NÒO ativado (fail-closed).');
     } else {
       mountDotRoutes(app);
       mountDotAccessRoutes(app);
@@ -531,23 +535,24 @@ export async function startServer() {
   app.use(notFoundHandler);
   app.use(errorHandler);
 
-  console.log(`📦 build ${BUILD.version} marker=${BUILD.marker}`);
+  console.log(`�x� build ${BUILD.version} marker=${BUILD.marker}`);
   console.log(
-    `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | WeChat: ${wechatConfigured() ? 'ok' : 'OFF'}`
+    `�x� Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | WeChat: ${wechatConfigured() ? 'ok' : 'OFF'}`
   );
-  console.log(`📧 SMTP: ${smtpConfigured() ? 'configurado' : 'OFF'}`);
-  console.log(`🔗 n8n: ${n8nConfigured() ? 'webhook ON' : 'OFF'}`);
-  console.log(`🧾 NFS-e: ${fiscalConfigured() ? 'configurado' : 'OFF'}`);
-  console.log('📄 Relatórios: structured-json / canais');
+  console.log(`�x� SMTP: ${smtpConfigured() ? 'configurado' : 'OFF'}`);
+  console.log(`�x n8n: ${n8nConfigured() ? 'webhook ON' : 'OFF'}`);
+  console.log(`�x�� NFS-e: ${fiscalConfigured() ? 'configurado' : 'OFF'}`);
+  console.log('�x Relatórios: structured-json / canais');
   if (String(process.env.NODE_ENV || '') === 'production' && String(process.env.ALLOW_PLAN_SWITCH || '').trim()) {
-    console.warn('[seguranca] ALLOW_PLAN_SWITCH definido em produção é IGNORADO — troca de planos de teste permanece desativada.');
+    console.warn('[seguranca] ALLOW_PLAN_SWITCH definido em produção é IGNORADO � troca de planos de teste permanece desativada.');
   }
   if (!wechatConfigured()) {
-    console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
+    console.log('�a�️  WeChat Pay OFF � defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
   }
 
   process.once('SIGTERM', () => void gracefulShutdown('SIGTERM'));
   process.once('SIGINT', () => void gracefulShutdown('SIGINT'));
 }
+
 
 

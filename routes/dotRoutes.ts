@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
+import { asyncHandler } from '../middleware/errorHandler.js';
 import { callAI } from '../groqService.js';
 import { prepareDotAction } from '../services/dotTools.js';
 import { loadDotRealContext, loadDotContextForMessage, buildCachedDotAnswer, getDotResponseCache, putDotResponseCache } from '../services/dotContext.js';
@@ -248,7 +249,7 @@ export async function settleDotCallFailure(params: {
   empresaId: string;
   reservationId: number;
   reservedTokens: number;
-}): Promise<void> {
+}): Promise<{ provenNotSent: boolean; outcome: string }> {
   const { error, providerCalled } = params;
   const outcome = providerCalled ? classifyDotProviderError(error) : 'not_sent';
   const provenNotSent = !providerCalled || isProvenNotSent(outcome, error);
@@ -260,7 +261,7 @@ export async function settleDotCallFailure(params: {
       reason: describeDotProviderOutcome(outcome),
     });
     if (!released.ok) console.error('[dot-ledger] liberação recusada:', released.reason);
-    return;
+    return { provenNotSent: true, outcome };
   }
   const ambiguous = await finalizeDotReservation({
     empresaId: params.empresaId,
@@ -272,6 +273,7 @@ export async function settleDotCallFailure(params: {
   });
   if (!ambiguous.ok) console.error('[dot-ledger] falha ao marcar reserva ambígua:', ambiguous.reason);
   console.warn('[dot-ledger] resultado ambíguo: reserva mantida e orçamento comprometido até reconciliação.');
+  return { provenNotSent: false, outcome };
 }
 
 export function mountDotRoutes(app: Express) {
@@ -760,7 +762,7 @@ export function mountDotRoutes(app: Express) {
     }
   });
 
-  app.post('/api/dot/chat', dotLimiter, async (req: Request, res: Response) => {
+  app.post('/api/dot/chat', dotLimiter, asyncHandler(async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
     if (!access.allowed) return deny(res, access);
 
@@ -1092,13 +1094,16 @@ Entregue uma resposta completa dentro desse orçamento. Priorize, nesta ordem: c
     } catch (error: any) {
       // Só libera com prova de não envio; ambíguo mantém a reserva até reconciliação.
       if (companyId && activeReservation) {
-        await settleDotCallFailure({
+        const settlement = await settleDotCallFailure({
           error,
           providerCalled,
           empresaId: companyId,
           reservationId: activeReservation.id,
           reservedTokens,
         });
+        // Recusa comprovada do provedor (ex.: 401/403 de todas as tentativas)
+        // também é falha segura para a idempotência HTTP, não "ambígua".
+        idempotencyState.providerAttempted = !settlement.provenNotSent;
       }
       const messageText = String(error?.message || error);
       console.error('[Filtra Dot]', messageText);
@@ -1107,5 +1112,5 @@ Entregue uma resposta completa dentro desse orçamento. Priorize, nesta ordem: c
         detail: process.env.NODE_ENV === 'production' ? undefined : messageText,
       });
     }
-  });
+  }));
 }

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Scheduler e worker do Filtra Dot — parada, drenagem e sequência de shutdown.
  *
  * Cobre o que a auditoria pediu:
@@ -171,10 +171,15 @@ suite('Scheduler e worker — encerramento gracioso', () => {
     }
     // O DOT NÃO entra em backgroundStops: é drenado explicitamente UMA vez
     // (`stopDotMonitorScheduler`/`stopDotAgentWorkerAndDrain`), antes de closeDB.
-    for (const call of ['stopDotMonitorScheduler(5_000)', 'stopDotAgentWorkerAndDrain(5_000)']) {
+    // O teto individual agora vem de um orçamento global (`perDrainCap()`).
+    for (const call of ['stopDotMonitorScheduler(perDrainCap())', 'stopDotAgentWorkerAndDrain(perDrainCap())']) {
       const idx = serverSource.indexOf(call);
       assert.ok(idx > 0 && idx < closeIdx, `"${call}" precisa drenar antes de closeDB()`);
     }
+    // O force-exit precisa ser MAIOR que o orçamento total de drenagem (30 s),
+    // senão o processo morre antes de closeDB() e das últimas drenagens.
+    assert.match(serverSource, /drainDeadline = Date\.now\(\) \+ 30_000/);
+    assert.match(serverSource, /\}, 45_000\)/);
     assert.ok(!serverSource.includes("trackBackground('DOT scheduler'"), 'DOT scheduler não deve ser registrado 2x');
     assert.ok(!serverSource.includes("trackBackground('DOT agent worker'"), 'DOT agent worker não deve ser registrado 2x');
     const drainIdx = serverSource.indexOf('for (const entry of backgroundStops.slice().reverse())');

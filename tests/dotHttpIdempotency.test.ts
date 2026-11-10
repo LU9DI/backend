@@ -109,12 +109,17 @@ suite('Dot HTTP idempotency — claim, replay and ambiguity', () => {
     assert.ok(!columns.includes('tenant_id'), 'não pode existir namespace legado tenant_id');
 
     const indexes = (await db.all('PRAGMA index_list(dot_http_idempotency)')).map(
-      (i: any) => String(i.name),
+      (i: any) => i,
     );
-    assert.ok(
-      indexes.includes('ux_dot_http_idempotency_empresa_key'),
-      'índice único por empresa/chave ausente',
+    const uniqueIndex = indexes.find(
+      (i: any) => String(i.name) === 'ux_dot_http_idempotency_empresa_key',
     );
+    assert.ok(uniqueIndex, 'índice único por empresa/chave ausente');
+    assert.equal(Number(uniqueIndex.unique), 1, 'índice de escopo precisa ser UNIQUE');
+    const columnsInIndex = (await db.all('PRAGMA index_info(ux_dot_http_idempotency_empresa_key)')).map(
+      (c: any) => String(c.name),
+    );
+    assert.deepEqual(columnsInIndex, ['empresa_id', 'idempotency_key']);
   });
 
   test('claims a new key once and blocks a concurrent duplicate', async () => {
@@ -151,6 +156,26 @@ suite('Dot HTTP idempotency — claim, replay and ambiguity', () => {
       ).kind,
       'key_reused',
     );
+  });
+
+  test('same key on a different endpoint is key_reused, never a persistence failure', async () => {
+    const key = 'dot-chat-key-endpoint-00001';
+    const first = await idempotency.claimDotHttpRequest({
+      empresaId,
+      endpoint,
+      key,
+      payload: { message: 'Pergunta', session_id: 'session-a' },
+    });
+    assert.equal(first.kind, 'claimed');
+    // A identidade é (empresa, chave); endpoint faz parte do hash, não da
+    // unicidade. Reutilizar a chave em outra rota precisa ser conflito 409.
+    const otherEndpoint = await idempotency.claimDotHttpRequest({
+      empresaId,
+      endpoint: '/api/dot/chat-v2',
+      key,
+      payload: { message: 'Pergunta', session_id: 'session-a' },
+    });
+    assert.equal(otherEndpoint.kind, 'key_reused');
   });
 
   test('canonical hash is independent of object key order', async () => {

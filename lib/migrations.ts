@@ -825,6 +825,21 @@ async function migrateDotHttpIdempotency(db: Database | PgDatabase): Promise<voi
     'ux_dot_http_idempotency_empresa_key',
     'CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_http_idempotency_empresa_key ON dot_http_idempotency(empresa_id, idempotency_key)',
   );
+  // Fail closed: a garantia de "um único vencedor" depende de o índice ser
+  // REALMENTE único em (empresa_id, idempotency_key). `CREATE INDEX IF NOT
+  // EXISTS` não corrige um índice homônimo não-único criado por reparo manual.
+  const idempotencyIndexes = await listIndexDefinitions(db, ['dot_http_idempotency']);
+  const uniqueScope = idempotencyIndexes.find(
+    (index) => index.name === 'ux_dot_http_idempotency_empresa_key',
+  );
+  const uniqueColumnsOk =
+    uniqueScope != null && /empresa_id\s*,\s*idempotency_key/i.test(uniqueScope.definition);
+  if (!uniqueScope || !uniqueScope.unique || !uniqueColumnsOk) {
+    throw new Error(
+      'dot_http_idempotency: índice ux_dot_http_idempotency_empresa_key ausente ou não é UNIQUE(empresa_id, idempotency_key). ' +
+        'Reconcilie o índice manualmente antes de iniciar o serviço; sem ele a idempotência não é garantida entre instâncias.',
+    );
+  }
   await createIndexIfMissing(
     db,
     'dot_http_idempotency',
