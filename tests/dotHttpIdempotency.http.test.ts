@@ -56,6 +56,9 @@ type CallOptions = {
   sessionId?: string;
 };
 
+/** Requisições em voo: o `beforeEach` espera todas terminarem antes de limpar. */
+let inFlight = 0;
+
 async function callDot(options: CallOptions = {}) {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -64,24 +67,31 @@ async function callDot(options: CallOptions = {}) {
   };
   if (options.key) headers['X-Idempotency-Key'] = options.key;
 
-  const res = await fetch(`${baseUrl}/api/dot/chat`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      message: options.message ?? 'Resuma minha reputação agora',
-      session_id: options.sessionId ?? `session-${crypto.randomUUID()}`,
-    }),
-  });
-  const data = await res.json().catch(() => ({}));
-  return {
-    status: res.status,
-    data,
-    replayed: res.headers.get('idempotency-replayed'),
-    retryAfter: res.headers.get('retry-after'),
-  };
+  inFlight += 1;
+  try {
+    const res = await fetch(`${baseUrl}/api/dot/chat`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        message: options.message ?? 'Resuma minha reputação agora',
+        session_id: options.sessionId ?? `session-${crypto.randomUUID()}`,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return {
+      status: res.status,
+      data,
+      replayed: res.headers.get('idempotency-replayed'),
+      retryAfter: res.headers.get('retry-after'),
+    };
+  } finally {
+    inFlight -= 1;
+  }
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 8_000) {
+// Janela generosa: o CI roda a suíte inteira em um runner compartilhado e a
+// primeira chamada paga JWT, gate de plano, contexto e reserva no banco.
+async function waitFor(predicate: () => boolean, timeoutMs = 30_000) {
   const started = Date.now();
   while (!predicate()) {
     if (Date.now() - started > timeoutMs) throw new Error('timeout esperando condição');
@@ -175,6 +185,9 @@ suite('Dot HTTP idempotency — contrato de borda', () => {
     mode = 'ok';
     providerCalls = 0;
     providerGate = null;
+    // Nenhuma requisição do teste anterior pode ficar em voo: ela escreveria
+    // reservas/consumo depois da limpeza e corromperia a próxima asserção.
+    await waitFor(() => inFlight === 0);
     await db.run('DELETE FROM dot_http_idempotency').catch(() => undefined);
     await db.run('DELETE FROM dot_budget_reservations WHERE empresa_id IN (?,?)', [EMPRESA_A, EMPRESA_B]);
     await db.run('DELETE FROM ai_usage WHERE empresa_id IN (?,?)', [EMPRESA_A, EMPRESA_B]);
@@ -245,8 +258,13 @@ suite('Dot HTTP idempotency — contrato de borda', () => {
     const pending = Array.from({ length: 6 }, () =>
       callDot({ key, message, sessionId }),
     );
-    await waitFor(() => providerCalls === 1);
-    release();
+    try {
+      await waitFor(() => providerCalls === 1);
+    } finally {
+      // Liberar o portão mesmo em falha: uma requisição presa quebraria os
+      // testes seguintes (o `beforeEach` apaga as reservas).
+      release();
+    }
     const results = await Promise.all(pending);
     providerGate = null;
 
