@@ -780,29 +780,62 @@ async function migrateDotHttpIdempotency(db: Database | PgDatabase): Promise<voi
     'dot_http_idempotency',
     `CREATE TABLE IF NOT EXISTS dot_http_idempotency (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id TEXT NOT NULL,
+      empresa_id TEXT NOT NULL,
       endpoint TEXT NOT NULL,
       idempotency_key TEXT NOT NULL,
       request_hash TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
+      status TEXT NOT NULL DEFAULT 'processing',
       response_status INTEGER,
-      response_body TEXT,
+      response_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
+      completed_at TEXT,
       expires_at TEXT NOT NULL
     )`,
+  );
+
+  // Fail closed: a table from another schema must never be used with different
+  // semantics (a missing column would turn the idempotency guarantee into a
+  // best-effort). Reconciliation is explicit and manual.
+  const columns = await tableColumns(db, 'dot_http_idempotency');
+  const required = [
+    'empresa_id',
+    'endpoint',
+    'idempotency_key',
+    'request_hash',
+    'status',
+    'response_status',
+    'response_json',
+    'created_at',
+    'updated_at',
+    'completed_at',
+    'expires_at',
+  ];
+  const missing = required.filter((column) => !columns.includes(column));
+  if (missing.length > 0 || columns.includes('tenant_id')) {
+    throw new Error(
+      `dot_http_idempotency com schema incompatível (faltando: ${missing.join(', ') || 'nenhuma'}; legado tenant_id: ${columns.includes('tenant_id') ? 'sim' : 'não'}). ` +
+        'Reconcilie a tabela manualmente antes de iniciar o serviço.',
+    );
+  }
+
+  await createIndexIfMissing(
+    db,
+    'dot_http_idempotency',
+    'ux_dot_http_idempotency_empresa_key',
+    'CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_http_idempotency_empresa_key ON dot_http_idempotency(empresa_id, idempotency_key)',
   );
   await createIndexIfMissing(
     db,
     'dot_http_idempotency',
-    'ux_dot_http_idempotency_scope_key',
-    'CREATE UNIQUE INDEX IF NOT EXISTS ux_dot_http_idempotency_scope_key ON dot_http_idempotency(tenant_id, endpoint, idempotency_key)',
+    'idx_dot_http_idempotency_tenant_status',
+    'CREATE INDEX IF NOT EXISTS idx_dot_http_idempotency_tenant_status ON dot_http_idempotency(empresa_id, status, updated_at)',
   );
   await createIndexIfMissing(
     db,
     'dot_http_idempotency',
     'idx_dot_http_idempotency_expiry',
-    "CREATE INDEX IF NOT EXISTS idx_dot_http_idempotency_expiry ON dot_http_idempotency(status, expires_at)",
+    'CREATE INDEX IF NOT EXISTS idx_dot_http_idempotency_expiry ON dot_http_idempotency(status, expires_at)',
   );
 }
 

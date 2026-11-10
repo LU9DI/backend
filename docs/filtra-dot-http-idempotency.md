@@ -1,61 +1,63 @@
-# Filtra Dot — HTTP idempotency contract
+# Filtra Dot — HTTP idempotency (implementação)
 
-## Scope
+Este documento registra a implementação. O contrato normativo é
+[`docs/DOT_HTTP_IDEMPOTENCY.md`](./DOT_HTTP_IDEMPOTENCY.md); em caso de
+divergência, o contrato prevalece.
 
-The contract currently protects `POST /api/dot/chat`. It is intentionally
-scoped by authenticated tenant, endpoint, and client-generated key. It is not
-a replacement for the token ledger's reservation idempotency.
+## Escopo
 
-## Client requirements
+Protege `POST /api/dot/chat`. A chave de idempotência é independente da
+idempotência de reserva/liquidação do ledger de tokens: as duas camadas são
+necessárias e não se substituem.
 
-- Generate one unpredictable key for each intentional message (UUID is
-  sufficient).
-- Persist the key together with the exact message and session payload before
-  sending.
-- Reuse the same key and payload after timeout, connection loss, HTTP 5xx, or
-  `DOT_IDEMPOTENCY_IN_PROGRESS`.
-- Do not generate a new key while the prior result is pending or ambiguous.
-- A new key is permitted only for a new intentional message, or after a
-  definitive `DOT_TOKEN_LIMIT` rejection (the provider was not called).
-- Send `Idempotency-Key` (the API also accepts `X-Idempotency-Key`).
+## Implementação
 
-## Server state machine
+- `services/dotHttpIdempotency.ts` — claim durável, replay, transições
+  condicionais e classificação da resposta.
+- `lib/migrations.ts` — tabela central `dot_http_idempotency` (SQLite e
+  PostgreSQL), índice único `(empresa_id, idempotency_key)`.
+- `routes/dotRoutes.ts` — claim antes de contexto, caches, histórico, reserva e
+  provedor; rejeição de chave ausente/inválida em produção.
 
-| State | Meaning | Duplicate behavior |
+## Máquina de estados
+
+| Estado | Significado | Comportamento em duplicata |
 | --- | --- | --- |
-| `pending` | The unique request claim is held; processing may be running | HTTP 409 `DOT_IDEMPOTENCY_IN_PROGRESS` |
-| `completed` | HTTP status and JSON response were durably stored before send | Replay the stored status and JSON |
-| `ambiguous` | The outcome cannot be proven safe to execute again | HTTP 409 `DOT_IDEMPOTENCY_AMBIGUOUS`; operator reconciliation required |
+| `processing` | claim único em curso | HTTP 409 `DOT_REQUEST_IN_PROGRESS` (+ `Retry-After`) |
+| `completed` | status e JSON persistidos antes do envio | replay idêntico do status/JSON (`Idempotency-Replayed: true`) |
+| `ambiguous` | o provedor pode ter sido chamado | HTTP 409 `DOT_REQUEST_AMBIGUOUS`; reconciliação manual |
+| `failed_safe` | falha comprovada antes do envio | retry permitido por transição condicional e auditável |
 
-A reused key with a different payload hash returns HTTP 409
-`DOT_IDEMPOTENCY_PAYLOAD_MISMATCH`. Production requests without a key return
-HTTP 428 `DOT_IDEMPOTENCY_KEY_REQUIRED`.
+- Chave ausente em produção: HTTP 400 `DOT_IDEMPOTENCY_KEY_REQUIRED`.
+- Chave malformada: HTTP 400 `DOT_IDEMPOTENCY_KEY_INVALID`.
+- Mesma chave com payload diferente: HTTP 409 `DOT_IDEMPOTENCY_KEY_REUSED`.
+- `processing` mais antigo que 15 min vira `ambiguous` e nunca é retomado.
+- Apenas linhas `completed` expiram (24 h). `processing`, `ambiguous` e
+  `failed_safe` são evidência de segurança e não são apagadas automaticamente.
+- Se a persistência da resposta falhar, a API responde 503
+  `DOT_IDEMPOTENCY_PERSIST_FAILED` e nunca devolve sucesso não reproduzível.
+- Demonstração anônima nunca compartilha namespace: não lê nem grava respostas
+  de outro visitante (e o modo demo é desabilitado em produção).
 
-The claim is acquired before context loading, either response cache, session
-history mutation, token reservation, or provider invocation. The unique
-constraint and transaction make the claim shared across API processes.
+## Evidências
 
-## Crash and retention behavior
+- `tests/dotHttpIdempotency.test.ts` — 14 testes de contrato em SQLite.
+- `tests/dotHttpIdempotency.http.test.ts` — 8 testes HTTP (replay, corrida,
+  conflito, ambíguo, multi-tenant, chave obrigatória).
+- `tests/dotHttpIdempotency.pg.test.ts` — concorrência real em PostgreSQL
+  (requer `DATABASE_URL` descartável).
 
-- A pending request older than 15 minutes becomes ambiguous, never reclaimable.
-- Any 5xx response after a claim is conservatively ambiguous. This includes
-  cases where the provider may not have been reached; safety is preferred over
-  automatic replay.
-- Completed responses are eligible for cleanup after 24 hours.
-- Pending and ambiguous rows are never removed by automatic retention cleanup.
-- If persisting the final response fails, the API returns
-  `DOT_IDEMPOTENCY_PERSIST_FAILED` and does not send the unpersisted success.
+## Gate de ativação
 
-## Rollout gate
+Não definir `FILTRA_DOT_ENABLED=1` em produção antes de:
 
-Do not set `FILTRA_DOT_ENABLED=1` in production until:
-1. backend PR #146 is integrated after its base PR #144;
-2. frontend PR #203 is integrated;
-3. backend unit/integration and PostgreSQL multi-process CI pass;
-4. E2E confirms concurrent duplicate, timeout/retry, completed replay, payload
-   mismatch, and ambiguous outcome behavior against the Render API;
-5. the operational reconciliation procedure for ambiguous rows is agreed.
+1. o backend (PR #144) e a implementação de idempotência estarem integrados;
+2. o frontend `/dot/conversa` estar publicado;
+3. CI verde no HEAD final e revisão independente aprovada;
+4. migração validada em banco descartável/staging;
+5. E2E no Render confirmar duplicata concorrente, timeout/retry, replay,
+   conflito de payload e estado ambíguo;
+6. o procedimento de reconciliação de linhas ambíguas estar acordado.
 
-The schema migration is part of central startup migrations. It has not been
-run against production by this work. No Render configuration or deployment
-was changed.
+Esta implementação não executou migração, deploy nem alteração de configuração
+no Render.

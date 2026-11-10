@@ -35,7 +35,13 @@ import {
 import { classifyDotProviderError, describeDotProviderOutcome, isProvenNotSent } from '../services/dotProviderOutcome.js';
 import { selectDotModel } from '../services/dotModelRouting.js';
 import { requireDotAccess, type DotAccessResource, type DotAccessAction } from '../services/dotAccessControl.js';
-import { claimDotHttpRequest, persistDotHttpResponse } from '../services/dotHttpIdempotency.js';
+import {
+  claimDotHttpRequest,
+  dotIdempotencyTenant,
+  isValidDotIdempotencyKey,
+  persistDotHttpResponse,
+  type DotHttpIdempotencyClaim,
+} from '../services/dotHttpIdempotency.js';
 
 const dotLimiter = rateLimit({
   windowMs: 60_000,
@@ -236,7 +242,7 @@ function deny(res: Response, access: DotAccess) {
  *  - resultado ambíguo (timeout, conexão cortada, 5xx, corpo inválido) ->
  *    a reserva permanece ABERTA com `ambiguous=1` até a reconciliação.
  */
-async function settleDotCallFailure(params: {
+export async function settleDotCallFailure(params: {
   error: unknown;
   providerCalled: boolean;
   empresaId: string;
@@ -766,17 +772,17 @@ export function mountDotRoutes(app: Express) {
     const requestedSessionId = cleanMessage(req.body?.session_id) || 'local-demo';
     if (!message) return res.status(400).json({ error: 'Mensagem obrigatória.' });
 
-    // Idempotência HTTP obrigatória em produção. A chave é reivindicada antes
-    // de contexto, caches, histórico, reserva financeira ou chamada ao provedor.
+    // Idempotência HTTP obrigatória em produção (docs/DOT_HTTP_IDEMPOTENCY.md).
+    // O claim acontece ANTES de contexto, cache, reserva ou provedor.
     const idempotencyKey = String(req.get('Idempotency-Key') || req.get('X-Idempotency-Key') || '').trim();
     if (process.env.NODE_ENV === 'production' && !idempotencyKey) {
-      return res.status(428).json({
+      return res.status(400).json({
         ok: false,
         error: 'Esta versão do Filtra Dot exige uma chave de idempotência por mensagem.',
         code: 'DOT_IDEMPOTENCY_KEY_REQUIRED',
       });
     }
-    if (idempotencyKey && !/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) {
+    if (idempotencyKey && !isValidDotIdempotencyKey(idempotencyKey)) {
       return res.status(400).json({
         ok: false,
         error: 'Chave de idempotência inválida.',
@@ -784,38 +790,59 @@ export function mountDotRoutes(app: Express) {
       });
     }
 
-    if (idempotencyKey) {
+    const idempotencyTenant = dotIdempotencyTenant(access);
+    let idempotencyClaim: DotHttpIdempotencyClaim | undefined;
+    const idempotencyState = { providerAttempted: false };
+
+    if (idempotencyKey && !idempotencyTenant) {
+      // Produção nunca compartilha namespace sem tenant autenticado.
+      // Demonstração anônima é exclusiva de desenvolvimento, não é cobrada e
+      // NUNCA grava/consulta respostas de outro visitante.
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(503).json({
+          ok: false,
+          error: 'Não foi possível determinar o tenant da solicitação com segurança.',
+          code: 'DOT_IDEMPOTENCY_UNAVAILABLE',
+        });
+      }
+    }
+
+    if (idempotencyKey && idempotencyTenant) {
       try {
         const claimed = await claimDotHttpRequest({
-          tenantId: access.empresaId || `user:${access.userId || 'unknown'}`,
+          empresaId: idempotencyTenant,
           endpoint: '/api/dot/chat',
           key: idempotencyKey,
           payload: { message, session_id: requestedSessionId },
         });
-        if (claimed.kind === 'replay') return res.status(claimed.status).json(claimed.body);
+        if (claimed.kind === 'replay') {
+          res.setHeader('Idempotency-Replayed', 'true');
+          return res.status(claimed.status).json(claimed.body);
+        }
         if (claimed.kind === 'in_progress') {
           res.setHeader('Retry-After', '2');
           return res.status(409).json({
             ok: false,
             error: 'Esta mensagem ainda está sendo processada.',
-            code: 'DOT_IDEMPOTENCY_IN_PROGRESS',
+            code: 'DOT_REQUEST_IN_PROGRESS',
           });
         }
         if (claimed.kind === 'ambiguous') {
           return res.status(409).json({
             ok: false,
             error: 'O resultado desta tentativa é incerto e exige reconciliação. Não envie a mensagem com uma nova chave.',
-            code: 'DOT_IDEMPOTENCY_AMBIGUOUS',
+            code: 'DOT_REQUEST_AMBIGUOUS',
           });
         }
-        if (claimed.kind === 'payload_mismatch') {
+        if (claimed.kind === 'key_reused') {
           return res.status(409).json({
             ok: false,
             error: 'Esta chave já foi usada com outro conteúdo. Gere uma nova chave para uma nova mensagem.',
-            code: 'DOT_IDEMPOTENCY_PAYLOAD_MISMATCH',
+            code: 'DOT_IDEMPOTENCY_KEY_REUSED',
           });
         }
-        persistDotHttpResponse(res, claimed.claim);
+        idempotencyClaim = claimed.claim;
+        persistDotHttpResponse(res, idempotencyClaim, idempotencyState);
       } catch (error: any) {
         console.error('[dot-idempotency] claim falhou:', String(error?.message || error));
         return res.status(503).json({
@@ -985,6 +1012,7 @@ Entregue uma resposta completa dentro desse orçamento. Priorize, nesta ordem: c
 
       const routing = selectDotModel(message);
       providerCalled = true;
+      idempotencyState.providerAttempted = true;
       const result = await callAI(
         responseSystem,
         buildConversation(contextResult.context, history, message),

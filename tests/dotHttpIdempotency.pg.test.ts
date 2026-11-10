@@ -1,9 +1,10 @@
 /**
- * Dot HTTP idempotency — PostgreSQL real concurrency test.
+ * Dot HTTP idempotency — PostgreSQL concurrency test.
  *
  * Uses a disposable database and independent pool connections through
- * Promise.all. The unique tenant/endpoint/key constraint must elect exactly
- * one winner even when claims arrive concurrently.
+ * Promise.all. The unique (empresa_id, idempotency_key) index must elect
+ * exactly one winner even when claims arrive concurrently — never an in-memory
+ * mutex.
  */
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -13,7 +14,8 @@ import { createTestDatabase, dropTestDatabase, databaseUrl } from './helpers/pg-
 let created: { name: string; url: string } | null = null;
 let db: any;
 let idempotency: typeof import('../services/dotHttpIdempotency.js');
-const tenantId = `pg-dot-http-${crypto.randomUUID()}`;
+const empresaId = `pg-dot-http-${crypto.randomUUID()}`;
+const endpoint = '/api/dot/chat';
 
 before(async () => {
   assert.ok(databaseUrl(), 'DATABASE_URL local de teste PostgreSQL é obrigatória');
@@ -36,7 +38,7 @@ after(async () => {
   if (created) await dropTestDatabase(created.name);
 });
 
-test('PostgreSQL: migration creates the tenant/endpoint/key unique constraint', async () => {
+test('PostgreSQL: migration creates the empresa/chave unique constraint', async () => {
   const table = await db.get(
     `SELECT 1 AS ok FROM information_schema.tables
       WHERE table_schema = 'public' AND table_name = 'dot_http_idempotency'`,
@@ -45,15 +47,15 @@ test('PostgreSQL: migration creates the tenant/endpoint/key unique constraint', 
 
   const index = await db.get(
     `SELECT 1 AS ok FROM pg_indexes
-      WHERE schemaname = 'public' AND indexname = 'ux_dot_http_idempotency_scope_key'`,
+      WHERE schemaname = 'public' AND indexname = 'ux_dot_http_idempotency_empresa_key'`,
   );
-  assert.ok(index, 'unique idempotency scope index must exist');
+  assert.ok(index, 'unique empresa/chave index must exist');
 });
 
 test('PostgreSQL: concurrent transactions claim a logical message exactly once', async () => {
   const input = {
-    tenantId,
-    endpoint: '/api/dot/chat',
+    empresaId,
+    endpoint,
     key: `pg-dot-key-${crypto.randomUUID()}`,
     payload: { message: 'Qual é a tendência atual?', session_id: 'pg-session' },
   };
@@ -66,8 +68,8 @@ test('PostgreSQL: concurrent transactions claim a logical message exactly once',
 
 test('PostgreSQL: completed response is replayed without changing status or body', async () => {
   const input = {
-    tenantId,
-    endpoint: '/api/dot/chat',
+    empresaId,
+    endpoint,
     key: `pg-dot-replay-${crypto.randomUUID()}`,
     payload: { message: 'Resuma os sinais', session_id: 'pg-session-replay' },
   };
@@ -83,4 +85,21 @@ test('PostgreSQL: completed response is replayed without changing status or body
     assert.equal(replay.status, 200);
     assert.deepEqual(replay.body, body);
   }
+});
+
+test('PostgreSQL: failed_safe retries once and then blocks the duplicate', async () => {
+  const input = {
+    empresaId,
+    endpoint,
+    key: `pg-dot-safe-${crypto.randomUUID()}`,
+    payload: { message: 'Falha comprovada antes do envio', session_id: 'pg-session-safe' },
+  };
+  const first = await idempotency.claimDotHttpRequest(input);
+  assert.equal(first.kind, 'claimed');
+  if (first.kind !== 'claimed') return;
+  await idempotency.markDotHttpRequestFailedSafe(first.claim);
+
+  const retried = await idempotency.claimDotHttpRequest(input);
+  assert.equal(retried.kind, 'claimed');
+  assert.equal((await idempotency.claimDotHttpRequest(input)).kind, 'in_progress');
 });

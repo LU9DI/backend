@@ -2,6 +2,8 @@
 
 **Status:** preparação. Nenhuma flag foi ativada e nada foi publicado.
 **PR:** #144 — `reconcile/dot-production-2026-11-06`
+**HEAD publicado:** `b2c0c504fff88b089233e09f5cc437edf846274b` (as duas
+correções finais de ledger/failover estão no working tree, ainda **não publicadas**)
 **Documento irmão:** [`DOT_PRODUCTION_READINESS.md`](DOT_PRODUCTION_READINESS.md)
 
 Este runbook é o procedimento operacional para ativar o Dot de forma gradual,
@@ -10,11 +12,36 @@ independente, o CI verde nem a validação em staging.
 
 ---
 
+## 0. Evidências técnicas desta revisão (2026-11-08)
+
+- **CI (GitHub Actions):** `test`, `postgres-concurrency` e `audit` verdes no
+  HEAD publicado.
+- **Check externo `deploy/lu9di/filtra-ai-api-fallback`:** status **legado do
+  Deno Deploy** (`console.deno.com`), com a organização suspensa por
+  faturamento. **Não é o serviço de produção** — a API do Dot roda em
+  **Render**. Ação: remover a integração/required check obsoleta do Deno no
+  GitHub; **não** alterar o Render para “fazer o check passar”.
+- **Testes locais (HEAD + correções no working tree):** `tsc --noEmit` 0;
+  suíte SQLite **444/444**; suíte PostgreSQL **37/37**; `npm audit` e
+  `npm audit --omit=dev` **0 vulnerabilidades**.
+- **Ledger:** a corrida `sweepExpiredDotReservations` × `finalizeDotReservation`
+  foi corrigida (predicados de estado no `WHERE` externo impedem
+  `settled → expired`); `markDotReservationSent` agora recusa reserva que não
+  esteja `pending` (nada é enviado ao provedor sem transição durável); o
+  `AggregateError` do failover preserva `status`/`code`/mensagem do erro final.
+- **Migração de autenticação:** a normalização `LOWER(TRIM(email))` é aplicada
+  nas consultas e há guarda de duplicados **antes** do índice único — se houver
+  colisão, o boot falha fechado sem alterar usuários.
+
+---
+
 ## 1. Pré-condições obrigatórias
 
 - [ ] commit aprovado e CI da PR verde (build, SQLite, PostgreSQL);
 - [ ] `npm audit` e `npm audit --omit=dev` em 0;
 - [ ] staging com PostgreSQL real, backup/PITR e migração de boot validados;
+- [ ] ausência de e-mails duplicados após `LOWER(TRIM(email))` (a migração
+      bloqueia o boot se existirem — ver seção 3.5);
 - [ ] owner de cada empresa piloto provisionado e auditado;
 - [ ] frontend atualizado para enviar `X-Dot-Csrf: 1` nas mutações de empresa;
 - [ ] revisão independente do diff concluída;
@@ -81,6 +108,43 @@ Acompanhar `dot-scheduler` (candidatos, processadas, erros, duração) e
 auditoria. Não ligar CRM/WhatsApp/e-mail externos: dependem de outbox/worker
 idempotente ainda não implementado.
 
+### 3.5 Migração em staging (procedimento seguro)
+
+Não executar migração em produção como parte da validação. O procedimento é:
+
+1. **Backup/PITR** do banco de staging e janela aprovada.
+2. **Checagem prévia de e-mails duplicados** (somente leitura):
+   ```sql
+   SELECT LOWER(TRIM(email)) AS normalized, COUNT(*) AS total
+     FROM usuarios
+    WHERE email IS NOT NULL
+    GROUP BY LOWER(TRIM(email))
+   HAVING COUNT(*) > 1;
+   ```
+   Qualquer linha exige correção **auditada** antes do deploy; a migração
+   aborta o boot com `Migração de autenticação bloqueada` e não altera dados.
+3. Rodar o boot da aplicação (ou `runCentralMigrations`) em staging e conferir
+   no log: `Schema inicializado (migrações centrais idempotentes)`.
+4. Validar objetos criados:
+   ```sql
+   SELECT indexname FROM pg_indexes
+    WHERE tablename IN ('usuarios','ai_usage','dot_budget_reservations')
+    ORDER BY indexname;
+   ```
+   Esperado: `ux_usuarios_email_normalized`, `ux_dot_budget_reservations_ai_usage`
+   (parcial), `idx_ai_usage_feature` e os índices do ledger.
+5. Rodar uma segunda vez (idempotência) e conferir que não há DDL repetida nem
+   erro; a suíte `dbPoolMaxOne.pg.test.ts` cobre esse caminho com
+   `PG_POOL_MAX=1`.
+6. Smoke: login com e-mail legado contendo espaços, `/api/health`,
+   `/api/dot/status`, provisionamento de owner e PIN.
+
+Impacto operacional: os índices são criados com `CREATE INDEX` (não
+`CONCURRENTLY`) no boot; em tabelas grandes há uma janela curta de lock de
+escrita. Executar em janela de baixa carga.
+
+---
+
 ## 4. Kill switch e rollback
 
 | Ação | Efeito |
@@ -111,6 +175,7 @@ de missões, decisões, ações, casos, follow-ups ou auditoria.
 ## 6. Critérios de abortar a ativação
 
 - CI ou smoke de staging falhando;
+- e-mails duplicados após `LOWER(TRIM(email))` não corrigidos;
 - frontend sem `X-Dot-Csrf` nas mutações;
 - owner/PIN não provisionados;
 - migração sem backup ou com lock suspeito;

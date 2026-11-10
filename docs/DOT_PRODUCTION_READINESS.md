@@ -1,8 +1,14 @@
 # Filtra Dot — prontidão operacional para ativação
 
 **Status:** documento de preparação. Nenhuma flag foi ativada e nenhum deploy foi executado.
-**Data:** 2026-11-03
-**PR:** #139 — `fix/dot-atomicity-sod`
+**Data:** 2026-11-08
+**PR:** #144 — `reconcile/dot-production-2026-11-06`
+**HEAD publicado:** `b2c0c504fff88b089233e09f5cc437edf846274b` (correções finais de
+ledger/failover no working tree, ainda não publicadas)
+**CI:** GitHub Actions `test`, `postgres-concurrency` e `audit` verdes. O check
+`deploy/lu9di/filtra-ai-api-fallback` é status **legado do Deno Deploy**
+(organização suspensa) e não representa o serviço de produção, que roda em
+**Render**.
 
 Este documento consolida o que precisa estar pronto **antes** de integrar e ativar o
 Dot em produção. Ele complementa [`docs/DOT_PRODUCAO.md`](DOT_PRODUCAO.md) e
@@ -96,6 +102,42 @@ antes da autenticação. O frontend precisa enviar esse header nas chamadas de
 preparar/aprovar/executar/follow-up/eventos/preferências. Detalhes no
 [`DOT_ACTIVATION_RUNBOOK.md`](DOT_ACTIVATION_RUNBOOK.md).
 
+### 2.2 Ledger durável do orçamento
+
+O orçamento do Dot é durável em `dot_budget_reservations` (não em memória):
+
+- reserva (`pending`) → marca de envio (`sent_at`, antes da chamada externa) →
+  `settled`/`ambiguous`/`released`/`expired`;
+- advisory lock por tenant + `SELECT ... FOR UPDATE` serializam
+  reserva/finalização; índice único parcial
+  `ux_dot_budget_reservations_ai_usage` garante um consumo por reserva;
+- `sweep` nunca expira reserva com `sent_at`; falha ambígua mantém a reserva
+  comprometendo o orçamento até reconciliação;
+- `markDotReservationSent` recusa reserva que não esteja `pending` (nenhuma
+  chamada externa sem transição durável);
+- reconciliação administrativa exige sessão PIN, motivo (≥10 caracteres) e,
+  para liberar, confirmação explícita `confirm_not_sent=true`, com auditoria.
+
+### 2.3 Idempotência HTTP do chat
+
+`POST /api/dot/chat` exige `X-Idempotency-Key` (ou `Idempotency-Key`) em
+produção. O claim é durável em `dot_http_idempotency`, com unicidade por
+`(empresa_id, idempotency_key)`, e acontece **antes** de contexto, caches,
+histórico, reserva e provedor. O contrato completo está em
+[`DOT_HTTP_IDEMPOTENCY.md`](DOT_HTTP_IDEMPOTENCY.md) e a implementação em
+[`filtra-dot-http-idempotency.md`](filtra-dot-http-idempotency.md).
+
+- `completed` replica status/JSON originais sem nova cobrança;
+- `processing` responde 409 `DOT_REQUEST_IN_PROGRESS`;
+- `ambiguous` responde 409 `DOT_REQUEST_AMBIGUOUS` e exige reconciliação;
+- `failed_safe` é o único estado retomável, por transição condicional;
+- demo anônima nunca compartilha namespace entre visitantes.
+
+Riscos residuais aceitos nesta etapa: a fila de retry e o worker de aquisição
+param o timer e agora drenam a promise em voo com teto de 5 s; a corrida
+`start × drain` permanece documentada no scheduler/worker. O expurgo de linhas
+`ambiguous`/`failed_safe` não é automático e exige procedimento operacional.
+
 ---
 
 ## 3. Variáveis, migrações e inicialização
@@ -106,9 +148,17 @@ preparar/aprovar/executar/follow-up/eventos/preferências. Detalhes no
   sob **advisory lock global**, em conexão dedicada, antes de liberar o uso.
 - Migrações centrais relevantes para o Dot: `dot_action_queue`,
   `dot_action_audit`, `dot_internal_cases`, `dot_followups`, `dot_events`,
-  `empresa_owners` e índices únicos/parciais.
+  `empresa_owners`, `dot_budget_reservations`, colunas de `ai_usage`
+  (`provider`, `feature`, `tokens_input`, `tokens_output`) e índices
+  únicos/parciais.
+- Autenticação: consultas usam `LOWER(TRIM(email))` e a migração cria
+  `ux_usuarios_email_normalized`. **Antes** do índice há uma guarda de
+  duplicados normalizados: se existir colisão, o boot falha com
+  `Migração de autenticação bloqueada` e nenhum usuário é alterado.
 - Não há migração manual para executar; a aplicação migra no boot. Ainda assim,
   a primeira execução deve ocorrer em staging com backup e janela aprovada.
+- `CREATE INDEX` (não `CONCURRENTLY`) no boot: janela curta de lock de escrita
+  em tabelas grandes (`usuarios`, `ai_usage`); executar em baixa carga.
 - Não executar migração em produção sem backup e sem validar o advisory lock
   (testes `dbInitializationConcurrency.pg.test.ts`, `dbInstances.pg.test.ts`).
 - O bootstrap do primeiro owner é via API de plataforma (seção 1), não por
@@ -230,6 +280,8 @@ homologado pelo gateway". Portanto:
 - [ ] `npm audit` e `npm audit --omit=dev` em 0 (validado localmente);
 - [ ] backup/PITR do PostgreSQL de produção;
 - [ ] migrações verificadas em staging (advisory lock, tabelas e índices);
+- [ ] ausência de e-mails duplicados após `LOWER(TRIM(email))` verificada;
+- [ ] `dot_budget_reservations` e índices do ledger presentes no staging;
 - [ ] owner provisionado e auditado para cada empresa piloto;
 - [ ] PIN definido e sessão administrativa validada;
 - [ ] `FILTRA_DOT_ENABLED=1` com `FORCE_ON` desligado;
@@ -243,6 +295,10 @@ homologado pelo gateway". Portanto:
 ## 8. Pendências remanescentes
 
 1. Política de retenção formal e job de expurgo ainda não implementados.
+2. Idempotência de retry HTTP do cliente (chave por requisição) não existe: um
+   retry do cliente pode criar nova reserva e nova chamada ao provedor.
+3. Integração legada do Deno Deploy deve ser removida do GitHub (required check
+   obsoleto); o alvo de produção é Render.
 2. Outbox/worker externo para CRM/WhatsApp/e-mail ainda não implementados —
    canais externos devem permanecer bloqueados.
 3. Ativação das flags e provisionamento de owners são ações operacionais
