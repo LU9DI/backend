@@ -220,7 +220,13 @@ export async function claimDotHttpRequest(input: {
               AND status = 'processing' AND updated_at = ?`,
           [nowIsoValue, empresaId, endpoint, key, existing.updated_at],
         );
-        if (promoted.changes === 1) return { kind: 'ambiguous' };
+        if (promoted.changes === 1) {
+          console.warn(
+            '[dot-idempotency] lease expirado promovido para ambíguo:',
+            JSON.stringify({ empresaId, endpoint, key }),
+          );
+          return { kind: 'ambiguous' };
+        }
 
         // A concurrent request may have completed between the read and the
         // stale transition; re-read instead of hiding a committed response.
@@ -280,13 +286,21 @@ export async function completeDotHttpRequest(
 export async function markDotHttpRequestAmbiguous(
   claim: DotHttpIdempotencyClaim,
 ): Promise<void> {
-  await getDb().run(
+  const result = await getDb().run(
     `UPDATE dot_http_idempotency
         SET status = 'ambiguous', updated_at = ?
       WHERE empresa_id = ? AND endpoint = ? AND idempotency_key = ?
         AND status = 'processing'`,
     [nowIso(), claim.empresaId, claim.endpoint, claim.key],
   );
+  if (result.changes === 1) {
+    // Sinal operacional: só existe quando o provedor pode ter sido chamado.
+    // Não logar o conteúdo da mensagem.
+    console.warn(
+      '[dot-idempotency] requisição ambígua (reconciliação necessária):',
+      JSON.stringify({ empresaId: claim.empresaId, endpoint: claim.endpoint, key: claim.key }),
+    );
+  }
 }
 
 /** Proven failure before any provider call; a later retry is safe. */
