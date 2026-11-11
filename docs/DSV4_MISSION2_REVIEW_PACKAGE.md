@@ -5,7 +5,7 @@
 > registrada**. Este documento organiza o material para revisão independente;
 > não substitui nem simula uma aprovação.
 
-## 1. Estado das PRs (verificado em 2026-11-10)
+## 1. Estado das PRs (verificado em 2026-11-11, após o fechamento)
 
 | | Backend | Frontend |
 |---|---|---|
@@ -13,15 +13,15 @@
 | PR | [#144](https://github.com/LU9DI/backend/pull/144) | [#203](https://github.com/LU9DI/saas-reputacao-ia/pull/203) |
 | Título | feat(dot): reconcile durable ledger and production safeguards | feat(dot): add authenticated conversation interface |
 | Base ← head | `master` ← `reconcile/dot-production-2026-11-06` | `main` ← `feat/filtra-dot-conversation` |
-| HEAD | `e3ece99c09e49476d60305a1c025304ef2b7aa15` | `7ac6e043febde7f67c77423038b4ffd32d547a5a` |
-| Commits / arquivos | 87 / 115 (+15.427 −970) | 9 / 1 (+850 −0) |
+| HEAD validado (código) | `de722b5a74268717ed7bffc986f57f11c7fe8947` (seguido somente por este commit de documentação) | `c9510330caaff0a72c154d61a62c115b7a6cee00` |
+| Commits / arquivos | 88 / 122 (+16.812 −974), antes deste commit de documentação | 10 / 3 (+1.620 −0) |
 | `mergeable` | `true` (`unstable`) | `true` (`clean`) |
-| Check runs | `test`, `audit`, `postgres-concurrency`: success | 12 check runs: success (inclui backend/typecheck e Vercel) |
+| Check runs | `test` (484/484), `postgres-concurrency` (41/41), `audit`: success | 13 check runs: success, incluindo `e2e` (26 aprovados) e backends/typecheck |
 | Status externo | `deploy/lu9di/filtra-ai-api-fallback`: **failure** (Deno Deploy, org suspensa) | `Vercel`: success |
 | Reviews / revisores solicitados | 0 / nenhum | 0 / nenhum |
 
 O estado `unstable` da #144 vem **exclusivamente** do status do Deno Deploy
-(seção 7). Os jobs do GitHub Actions passam no HEAD informado.
+(seção 7). Os jobs do GitHub Actions passam no HEAD final.
 
 ## 2. Arquitetura do fluxo `/api/dot/chat`
 
@@ -137,9 +137,10 @@ schema idêntico, falha injetada no meio da migração e retomada íntegra
 |---|---|
 | `tests/observability.test.ts` (novo) | 8/8 |
 | `tests/dotLedger.pg.test.ts` | 6/6 |
-| Suíte PostgreSQL completa (`npm run test:postgres`, 41 testes) | 40/41 na 1ª execução; **1 falha real de infraestrutura de teste** causada pelos novos logs JSON em stdout, corrigida em `tests/helpers/pg-test-utils.ts`; reexecução do arquivo afetado 6/6; reexecução completa no fechamento (ver relatório final) |
-| E2E `/dot/conversa` (Playwright, 19 testes cobrindo os 15 cenários) | **19/19 aprovados em duas execuções consecutivas** contra build de produção (`next start`), com todas as bases do failover interceptadas |
-| Suíte E2E completa do frontend (`npx playwright test`, inclui GA4/smoke) | 25 aprovados, 1 ignorado por configuração (`E2E_REVIEW_URL`); 1 flake **pré-existente e não relacionado** em `analytics.spec.ts:84` (ver nota) |
+| Suíte PostgreSQL completa (`npm run test:postgres`, 41 testes) | **41/41** na execução final local e no CI. Histórico honesto: a 1ª execução completa deu 40/41 porque a correção do helper (`parseWorkerJson`) só aceitava objetos JSON — o worker perdedor devolve `null`; corrigida para aceitar qualquer JSON, com 2/2 no arquivo afetado e 41/41 na reexecução |
+| Suíte não-PG completa (`npm test`) | **481/481** local (Node 26.7.0); **484/484** no CI (Node 20.20.2 — 3 testes condicionais de plataforma/Node) |
+| E2E `/dot/conversa` (Playwright, 19 testes cobrindo os 15 cenários) | **19/19** em três execuções locais (duas, mais uma no build final) e no job `e2e` do CI (26 aprovados na suíte completa, 1 skip por `E2E_REVIEW_URL`) |
+| Suíte E2E completa do frontend (`npx playwright test`, inclui GA4/smoke) | 25 aprovados + 1 ignorado localmente; 26 aprovados no CI. 1 flake **pré-existente e não relacionado** em `analytics.spec.ts:84` (ver nota) |
 | `tsc --noEmit` backend | 0 erros |
 | `tsc --noEmit` frontend | 0 erros |
 | `eslint .` frontend | 0 erros (108 avisos pré-existentes) |
