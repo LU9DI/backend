@@ -203,8 +203,9 @@ const RULES: Rule[] = [
       const entry = cfg(ctx, 'A3');
       const delta = deltaSum(ctx, Number(entry.window_seconds), ['dot_ledger_finalize_error']);
       const pending = numberOrNull(at(ctx.cur.metrics, 'dot.pending_sent_over_grace')) ?? 0;
-      if ((delta !== null && delta > Number(entry.threshold)) || pending > 0) {
-        return hit('A3', entry, delta ?? pending, Number(entry.threshold),
+      const firedByCounter = delta !== null && delta > Number(entry.threshold);
+      if (firedByCounter || pending > 0) {
+        return hit('A3', entry, firedByCounter ? (delta as number) : pending, Number(entry.threshold),
           'Liquidação falhou ou há reserva enviada além da carência',
           'Inspecionar dot_budget_reservations e executar a reconciliação manual.');
       }
@@ -217,8 +218,10 @@ const RULES: Rule[] = [
       const entry = cfg(ctx, 'A4');
       const exceeded = deltaSum(ctx, Number(entry.window_seconds), ['dot_budget_exceeded']);
       const critical = deltaSum(ctx, Number(entry.window_seconds), ['dot_budget_alert_critical']);
-      if ((exceeded !== null && exceeded > Number(entry.threshold)) || (critical !== null && critical > 0)) {
-        return hit('A4', entry, exceeded ?? critical ?? 0, Number(entry.threshold),
+      const firedByCounter = exceeded !== null && exceeded > Number(entry.threshold);
+      const firedByCritical = critical !== null && critical > 0;
+      if (firedByCounter || firedByCritical) {
+        return hit('A4', entry, firedByCounter ? (exceeded as number) : (critical as number), Number(entry.threshold),
           'Orçamento esgotado ou alerta crítico de orçamento emitido',
           'Validar plano/limite, comunicar o cliente e verificar abuso.');
       }

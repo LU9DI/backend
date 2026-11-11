@@ -241,7 +241,7 @@ test('coletor lê /api/metrics com token e detecta banco indisponível', async (
   const baseUrl = await listen(server);
   try {
     const result = await collectAndEvaluate({
-      options: { baseUrl, metricsToken: token },
+      options: { baseUrl, metricsToken: token, timeoutMs: 20_000 },
       config,
       now: T0,
     });
@@ -261,7 +261,7 @@ test('coletor recusa métricas sem autorização sem vazar o token', async () =>
   const baseUrl = await listen(server);
   try {
     await assert.rejects(
-      () => collectAndEvaluate({ options: { baseUrl, metricsToken: 'secret-value' }, config, now: T0 }),
+      () => collectAndEvaluate({ options: { baseUrl, metricsToken: 'secret-value', timeoutMs: 20_000 }, config, now: T0 }),
       (error: Error) => error.message.includes('HTTP 401') && !error.message.includes('secret-value'),
     );
   } finally {
@@ -282,7 +282,7 @@ test('webhook recebe apenas o payload de alerta, sem token', async () => {
       snapshot(T0, { counters: { dot_idempotency_key_reused: 1 } }),
     );
     const payload = buildWebhookPayload(hits, new Date(T0));
-    const status = await sendWebhook(url, payload);
+    const status = await sendWebhook(url, payload, fetch, 20_000);
     assert.equal(status, 204);
     const parsed = JSON.parse(body) as { source: string; alerts: Array<{ id: string }> };
     assert.equal(parsed.source, 'filtra-dot-alerts');
