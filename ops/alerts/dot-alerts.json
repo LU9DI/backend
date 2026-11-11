@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "source": "filtra-dot",
+  "endpoints": {
+    "metrics": "/api/metrics",
+    "health": "/api/health"
+  },
+  "alerts": {
+    "A1": {
+      "severity": "critical",
+      "title": "Crescimento anormal de erros HTTP",
+      "window_seconds": 600,
+      "route_error_window_seconds": 300,
+      "ratio_threshold": 0.05,
+      "min_requests": 50,
+      "route_error_threshold": 10
+    },
+    "A2": {
+      "severity": "critical",
+      "title": "Estados ambíguos de chat/idempotência/ledger",
+      "window_seconds": 900,
+      "threshold": 0
+    },
+    "A3": {
+      "severity": "critical",
+      "title": "Divergência reserva x consumo",
+      "window_seconds": 900,
+      "threshold": 0
+    },
+    "A4": {
+      "severity": "high",
+      "title": "Orçamento do Dot excedido",
+      "window_seconds": 3600,
+      "threshold": 10
+    },
+    "A5": {
+      "severity": "high",
+      "title": "Falha do scheduler do monitor",
+      "stale_tick_multiplier": 2
+    },
+    "A6": {
+      "severity": "medium",
+      "title": "Falha do worker de agente",
+      "in_flight_seconds": 1800
+    },
+    "A7": {
+      "severity": "critical",
+      "title": "Falha de health check",
+      "consecutive_failures": 3
+    },
+    "A8": {
+      "severity": "high",
+      "title": "Provedor de IA indisponível",
+      "window_seconds": 300,
+      "failed_threshold": 3
+    },
+    "A9": {
+      "severity": "critical",
+      "title": "Falha de banco de dados",
+      "window_seconds": 900,
+      "threshold": 0
+    },
+    "A10": {
+      "severity": "high",
+      "title": "Idempotência HTTP indisponível",
+      "window_seconds": 900,
+      "threshold": 0
+    },
+    "A11": {
+      "severity": "low",
+      "title": "Chave de idempotência reutilizada",
+      "window_seconds": 3600,
+      "threshold": 0
+    },
+    "A12": {
+      "severity": "medium",
+      "title": "Latência do chat acima do limite",
+      "route": "POST /api/dot/chat",
+      "p95_threshold_ms": 20000,
+      "min_samples": 20
+    }
+  }
+}

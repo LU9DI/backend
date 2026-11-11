@@ -1,10 +1,15 @@
 # Filtra Dot — observabilidade e catálogo de alertas
 
-> Situação: **instrumentação no código concluída nesta missão; nenhum alerta está
-> configurado ou ativo em nenhuma plataforma.** Os limiares abaixo são
-> recomendações para ativação pelo operador. Nenhum canal externo (e-mail,
-> Slack, PagerDuty, Render Notifications etc.) foi conectado e nenhum alerta foi
-> declarado ativo.
+> Situação: **instrumentação no código concluída; configuração operacional
+> pronta e testada localmente; nenhum alerta está ativado em nenhuma
+> plataforma.** Os limiares abaixo são recomendações para ativação pelo
+> operador. Nenhum canal externo (e-mail, Slack, PagerDuty, Render Notifications
+> etc.) foi conectado e nenhum alerta foi declarado ativo.
+>
+> A configuração executável dos A1–A12 (limiares, coletor, envio a webhook e
+> validação com teste controlado) está em `ops/alerts/` — ver
+> `ops/alerts/README.md`. O status continua **não ativado** até que exista
+> webhook/token autorizados.
 
 ## 1. Correlação ponta a ponta
 
@@ -170,9 +175,11 @@ dado sai hoje; a coluna "Ação" é o runbook sugerido.
 4. **Consulta de logs** pelos eventos da seção 3 para investigação (Render
    Dashboard → Logs; busca por `request_id`).
 
-Não há integração de alerta no repositório; a ativação é decisão operacional do
-responsável pela conta Render/observabilidade. Nenhum alerta desta seção foi
-validado em ambiente real.
+Não há integração de alerta ativa no repositório; a ativação é decisão
+operacional do responsável pela conta Render/observabilidade. O coletor de
+`ops/alerts/` está pronto e validado com fixture local (27 testes + execução do
+CLI + webhook local), mas **nenhum canal real** foi conectado. Nenhum alerta
+desta seção foi validado contra produção.
 
 ## 6. Limitações conhecidas
 
