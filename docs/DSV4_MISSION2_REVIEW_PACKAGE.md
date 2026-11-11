@@ -13,10 +13,10 @@
 | PR | [#144](https://github.com/LU9DI/backend/pull/144) | [#203](https://github.com/LU9DI/saas-reputacao-ia/pull/203) |
 | Título | feat(dot): reconcile durable ledger and production safeguards | feat(dot): add authenticated conversation interface |
 | Base ← head | `master` ← `reconcile/dot-production-2026-11-06` | `main` ← `feat/filtra-dot-conversation` |
-| HEAD validado (código) | `de722b5a74268717ed7bffc986f57f11c7fe8947` (seguido somente por este commit de documentação) | `c9510330caaff0a72c154d61a62c115b7a6cee00` |
-| Commits / arquivos | 88 / 122 (+16.812 −974), antes deste commit de documentação | 10 / 3 (+1.620 −0) |
+| HEAD de código validado | `de722b5a` (Missão 2) + `230c372` (alertas, Missão 3); HEAD no momento deste relatório: `fda37601` | `c9510330caaff0a72c154d61a62c115b7a6cee00` |
+| Commits / arquivos | 93 / 132 (+18.543 −974), antes de eventuais commits de documentação | 10 / 3 (+1.620 −0) |
 | `mergeable` | `true` (`unstable`) | `true` (`clean`) |
-| Check runs | `test` (484/484), `postgres-concurrency` (41/41), `audit`: success | 13 check runs: success, incluindo `e2e` (26 aprovados) e backends/typecheck |
+| Check runs | `test` **511/511**, `postgres-concurrency` **41/41**, `audit`: success | 13 check runs: success, incluindo `e2e` (26 aprovados) e backends/typecheck |
 | Status externo | `deploy/lu9di/filtra-ai-api-fallback`: **failure** (Deno Deploy, org suspensa) | `Vercel`: success |
 | Reviews / revisores solicitados | 0 / nenhum | 0 / nenhum |
 
@@ -140,9 +140,10 @@ schema idêntico, falha injetada no meio da migração e retomada íntegra
 | Suíte | Resultado |
 |---|---|
 | `tests/observability.test.ts` (novo) | 8/8 |
+| `tests/dotAlertRules.test.ts` (novo, Missão 3) | **27/27** — cada alerta A1–A12, aquecimento, reinício, token e webhook |
 | `tests/dotLedger.pg.test.ts` | 6/6 |
 | Suíte PostgreSQL completa (`npm run test:postgres`, 41 testes) | **41/41** na execução final local e no CI. Histórico honesto: a 1ª execução completa deu 40/41 porque a correção do helper (`parseWorkerJson`) só aceitava objetos JSON — o worker perdedor devolve `null`; corrigida para aceitar qualquer JSON, com 2/2 no arquivo afetado e 41/41 na reexecução |
-| Suíte não-PG completa (`npm test`) | **481/481** local (Node 26.7.0); **484/484** no CI (Node 20.20.2 — 3 testes condicionais de plataforma/Node) |
+| Suíte não-PG completa (`npm test`) | **481/481** local (Node 26.7.0) antes dos alertas; **511/511** no CI final (Node 20.20.2, 90 arquivos) |
 | E2E `/dot/conversa` (Playwright, 19 testes cobrindo os 15 cenários) | **19/19** em três execuções locais (duas, mais uma no build final) e no job `e2e` do CI (26 aprovados na suíte completa, 1 skip por `E2E_REVIEW_URL`) |
 | Suíte E2E completa do frontend (`npx playwright test`, inclui GA4/smoke) | 25 aprovados + 1 ignorado localmente; 26 aprovados no CI. 1 flake **pré-existente e não relacionado** em `analytics.spec.ts:84` (ver nota) |
 | `tsc --noEmit` backend | 0 erros |
