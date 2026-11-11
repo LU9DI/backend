@@ -14,6 +14,30 @@ reversível. Ele pressupõe:
 - revisão independente concluída nos dois PRs;
 - CI verde no HEAD final de cada PR (incluindo o job `postgres-concurrency`).
 
+## 0. O que foi e o que não foi verificado (2026-11-10)
+
+Verificado a partir do repositório/ambiente local:
+
+- serviço alvo conhecido: `filtra-ia-api` (`srv-dafc88ad0e5s73bqgfm0`),
+  `https://filtra-ia-api.onrender.com`, health `/api/live`;
+- flags e comportamento de boot conferidos no código (`server.ts`,
+  `dotRuntimeEnabled`; Dot desligado por padrão).
+
+**NÃO verificado** (sem acesso): painel do Render, `autoDeploy`, branch
+deployada, Dockerfile/build-start usados pelo serviço, variáveis de ambiente
+reais, CORS, região/plano/recursos, logs do serviço, health real em produção e
+histórico de deploys. Nenhuma chamada à API do Render foi feita.
+
+Acessos necessários para completar a inspeção (sem alterar nada):
+
+1. conta Render com permissão de leitura no time dono de
+   `srv-dafc88ad0e5s73bqgfm0` — ou API key com escopos de leitura de
+   serviço/deploy;
+2. acesso de leitura ao projeto Supabase de produção (schema, backups/PITR);
+3. permissão de administrador no GitHub `LU9DI/backend` para tratar a
+   integração Deno Deploy (seção de check externo do relatório);
+4. janela aprovada para backup e migração (execução futura, fora desta missão).
+
 ---
 
 ## 1. Antes de tocar em produção
@@ -148,6 +172,10 @@ Nenhum rollback apaga reservas, consumos, auditoria ou linhas de idempotência.
 
 ## 7. Observabilidade durante a ativação
 
+- `/api/metrics` (com `X-Metrics-Token`) para contadores, scheduler e worker;
+- logs JSON por evento com `request_id`/`empresa_id`;
+- catálogo de alertas recomendados (nenhum ativo) em
+  `DOT_OBSERVABILITY_ALERTS.md`;
 - `[dot-idempotency] requisição ambígua (reconciliação necessária)`
 - `[dot-idempotency] lease expirado promovido para ambíguo`
 - `[dot-idempotency] falha ao persistir resposta`

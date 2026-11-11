@@ -14,7 +14,8 @@ import { jwtRotationStatus } from './lib/jwtKeys.js';
 import { buildCorsOptions } from './lib/cors.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { requestIdMiddleware, securityHeaders } from './middleware/security.js';
-import { latencyMiddleware, getHttpMetrics } from './lib/metrics.js';
+import { latencyMiddleware, getHttpMetrics, getCounters } from './lib/metrics.js';
+import { runWithObservability, logEvent } from './lib/observability.js';
 import { mountTrialRoutes } from './routes/trialRoutes.js';
 import { mountLeadRoutes } from './routes/leadRoutes.js';
 import { mountLegalAcceptRoutes } from './routes/legalAcceptRoutes.js';
@@ -62,9 +63,9 @@ import { ensureDotAdminSecuritySchema } from './services/dotAdminSecurity.js';
 import { ensureDotAccessSchema } from './services/dotAccessControl.js';
 import { ensureDotAgentSchema } from './services/dotAgent.js';
 import { ensureMissionTables } from './services/dotAgentMissions.js';
-import { startDotMonitorScheduler, stopDotMonitorScheduler } from './services/dotScheduler.js';
+import { startDotMonitorScheduler, stopDotMonitorScheduler, getDotSchedulerStatus } from './services/dotScheduler.js';
 import { startMonthlyReportScheduler, getMonthlyReportSchedulerStatus, stopMonthlyReportSchedulerAndDrain } from './services/monthlyReportScheduler.js';
-import { startDotAgentWorker, stopDotAgentWorkerAndDrain } from './services/dotAgentWorker.js';
+import { startDotAgentWorker, stopDotAgentWorkerAndDrain, getDotAgentWorkerStatus } from './services/dotAgentWorker.js';
 import { assertDotLedgerSchema } from './services/dotLedger.js';
 import { mcpApp } from './filtraMcp.js';
 import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
@@ -119,9 +120,30 @@ function dotRuntimeEnabled() { return process.env.FILTRA_DOT_ENABLED === '1'; }
 const app = express();
 app.set('trust proxy', 1);
 app.use(requestIdMiddleware);
+/**
+ * Contexto de correlação por requisição (AsyncLocalStorage): tudo que for
+ * registrado daqui em diante — inclusive dentro de serviços assíncronos —
+ * carrega o mesmo `request_id`, e o tenant é anexado após a autenticação.
+ */
+app.use((req, _res, next) => {
+  const requestId = String((req as { requestId?: string }).requestId || '');
+  runWithObservability({ requestId: requestId || 'unknown', route: req.path }, next);
+});
 app.use(securityHeaders);
 app.use(cookieParser());
 app.use(latencyMiddleware as any);
+/** Registra falhas de servidor (5xx) com o mesmo request_id da resposta. */
+app.use((req, res, next) => {
+  const requestId = String((req as { requestId?: string }).requestId || '') || 'unknown';
+  const route = req.path;
+  res.on('finish', () => {
+    if (res.statusCode < 500) return;
+    runWithObservability({ requestId, route }, () =>
+      logEvent('error', 'http_request_failed', { method: req.method, status: res.statusCode }),
+    );
+  });
+  next();
+});
 app.use((req, res, next) => {
   // Stripe and Resend need the exact raw payload for signature verification.
   if (req.originalUrl?.startsWith('/api/webhook/stripe') || req.originalUrl?.startsWith('/api/n8n/acquisition/email-events') || req.originalUrl?.startsWith('/mcp')) return next();
@@ -194,6 +216,14 @@ app.get('/api/health', async (_req, res) => {
     fiscal: fiscalConfigured(),
     report_engine: 'structured-json',
     monthly_reports_scheduler: getMonthlyReportSchedulerStatus(),
+    // Somente sinais booleanos: `/api/health` é público e não deve expor
+    // mensagens de erro internas. O detalhe fica em `/api/metrics`.
+    dot: {
+      enabled: dotRuntimeEnabled(),
+      ledger_ready: dotLedgerReady,
+      scheduler_active: dotRuntimeEnabled() && getDotSchedulerStatus().timer_active,
+      agent_worker_active: dotRuntimeEnabled() && getDotAgentWorkerStatus().timer_active,
+    },
     ai_latency: {
       groq: ai.stats.groq.latency,
       gemini: ai.stats.gemini.latency,
@@ -219,6 +249,13 @@ app.get('/api/metrics', (req, res) => {
     build: BUILD,
     http: getHttpMetrics(),
     ai: getAiLoadStats(),
+    counters: getCounters(),
+    dot: {
+      enabled: dotRuntimeEnabled(),
+      ledger_ready: dotLedgerReady,
+      scheduler: getDotSchedulerStatus(),
+      agent_worker: getDotAgentWorkerStatus(),
+    },
   });
 });
 

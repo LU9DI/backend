@@ -16,6 +16,8 @@ import { ensureDotInternalActionSchema } from '../services/dotInternalExecutors.
 import { resumeMissionAfterApprovedExecution } from '../services/dotAgentMissionRunner.js';
 import { DotAdminError, requireDotAdminSession } from '../services/dotAdminSecurity.js';
 import { planLabel, normalizePlan } from '../lib/plans.js';
+import { incCounter } from '../lib/metrics.js';
+import { bindTenant, logEvent } from '../lib/observability.js';
 import { resolveDotGate } from '../services/dotAccessGate.js';
 import { getDotSchedulerStatus } from '../services/dotScheduler.js';
 import { getDotAgentWorkerStatus } from '../services/dotAgentWorker.js';
@@ -685,6 +687,7 @@ export function mountDotRoutes(app: Express) {
 
   app.post('/api/dot/explain', dotLimiter, async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
+    bindTenant(access.demo ? null : access.empresaId || null);
     if (!access.allowed) return deny(res, access);
 
     const responseText = cleanMessage(req.body?.response_text).slice(0, 5000);
@@ -703,8 +706,12 @@ export function mountDotRoutes(app: Express) {
       : undefined;
     if (companyId && reservation && !reservation.ok) {
       if (!reservation.unavailable && reservation.code === 'DOT_TOKEN_LIMIT') {
+        incCounter('dot_budget_exceeded');
+        logEvent('warn', 'dot_budget_exceeded', { route: '/api/dot/explain' });
         return res.status(429).json({ ok: false, error: 'O orçamento de IA do plano para este período foi atingido.', code: 'DOT_TOKEN_LIMIT', token_scope: DOT_FEATURE, response_limit: reservation.snapshot.response_limit });
       }
+      incCounter('dot_budget_unavailable');
+      logEvent('error', 'dot_budget_unavailable', { stage: 'reserve', route: '/api/dot/explain' });
       return res.status(503).json({ ok: false, error: 'O controle de orçamento do Filtra Dot está temporariamente indisponível.', code: 'DOT_BUDGET_UNAVAILABLE' });
     }
 
@@ -750,12 +757,23 @@ export function mountDotRoutes(app: Express) {
       );
       if (companyId && reservationId) {
         const finalized = await finalizeDotReservation({ empresaId: companyId, reservationId, tokens: result.tokens, inputTokens: result.input_tokens, outputTokens: result.output_tokens, provider: result.provider, tipo: 'filtra_dot_explain' });
-        if (!finalized.ok) console.error('[dot-ledger] finalização do explain falhou; reserva mantida para reconciliação:', finalized.reason);
+        if (!finalized.ok) {
+          incCounter('dot_ledger_finalize_failed');
+          logEvent('error', 'dot_ledger_finalize_failed', { route: '/api/dot/explain', reason: finalized.reason });
+          console.error('[dot-ledger] finalização do explain falhou; reserva mantida para reconciliação:', finalized.reason);
+        }
       }
+      incCounter('dot_explain_completed');
+      logEvent('info', 'dot_explain_completed', { provider: result.provider, latency_ms: result.latency_ms, tokens: result.tokens });
       return res.json({ ok: true, explanation: redactSensitive(result.text), demo: access.demo });
     } catch (error: any) {
       if (companyId && reservationId) {
-        await settleDotCallFailure({ error, providerCalled: true, empresaId: companyId, reservationId, reservedTokens: 260 });
+        const settlement = await settleDotCallFailure({ error, providerCalled: true, empresaId: companyId, reservationId, reservedTokens: 260 });
+        incCounter(settlement.provenNotSent ? 'dot_explain_failed_safe' : 'dot_explain_ambiguous');
+        logEvent(settlement.provenNotSent ? 'warn' : 'error', 'dot_explain_failed', {
+          outcome: settlement.outcome,
+          proven_not_sent: settlement.provenNotSent,
+        });
       }
       console.error('[Filtra Dot explain]', error?.message || error);
       return res.status(503).json({ error: 'Não foi possível explicar a evidência desta resposta agora.' });
@@ -764,7 +782,13 @@ export function mountDotRoutes(app: Express) {
 
   app.post('/api/dot/chat', dotLimiter, asyncHandler(async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
-    if (!access.allowed) return deny(res, access);
+    bindTenant(access.demo ? null : access.empresaId || null);
+    incCounter('dot_chat_received');
+    if (!access.allowed) {
+      incCounter('dot_chat_denied');
+      logEvent('warn', 'dot_chat_denied', { reason: access.reason ?? null });
+      return deny(res, access);
+    }
 
     if (process.env.NODE_ENV === 'production' && process.env.FILTRA_DOT_ENABLED !== '1') {
       return res.status(404).json({ error: 'Filtra Dot ainda não está habilitado.' });
@@ -818,10 +842,14 @@ export function mountDotRoutes(app: Express) {
           payload: { message, session_id: requestedSessionId },
         });
         if (claimed.kind === 'replay') {
+          incCounter('dot_idempotency_replay');
+          logEvent('info', 'dot_idempotency_replay', { status: claimed.status });
           res.setHeader('Idempotency-Replayed', 'true');
           return res.status(claimed.status).json(claimed.body);
         }
         if (claimed.kind === 'in_progress') {
+          incCounter('dot_idempotency_in_progress');
+          logEvent('info', 'dot_idempotency_in_progress');
           res.setHeader('Retry-After', '2');
           return res.status(409).json({
             ok: false,
@@ -830,6 +858,8 @@ export function mountDotRoutes(app: Express) {
           });
         }
         if (claimed.kind === 'ambiguous') {
+          incCounter('dot_idempotency_ambiguous');
+          logEvent('warn', 'dot_idempotency_ambiguous');
           return res.status(409).json({
             ok: false,
             error: 'O resultado desta tentativa é incerto e exige reconciliação. Não envie a mensagem com uma nova chave.',
@@ -837,6 +867,8 @@ export function mountDotRoutes(app: Express) {
           });
         }
         if (claimed.kind === 'key_reused') {
+          incCounter('dot_idempotency_key_reused');
+          logEvent('warn', 'dot_idempotency_key_reused');
           return res.status(409).json({
             ok: false,
             error: 'Esta chave já foi usada com outro conteúdo. Gere uma nova chave para uma nova mensagem.',
@@ -844,8 +876,11 @@ export function mountDotRoutes(app: Express) {
           });
         }
         idempotencyClaim = claimed.claim;
+        incCounter('dot_idempotency_claimed');
         persistDotHttpResponse(res, idempotencyClaim, idempotencyState);
       } catch (error: any) {
+        incCounter('dot_idempotency_unavailable');
+        logEvent('error', 'dot_idempotency_claim_failed', { detail: String(error?.message || error) });
         console.error('[dot-idempotency] claim falhou:', String(error?.message || error));
         return res.status(503).json({
           ok: false,
@@ -884,6 +919,8 @@ export function mountDotRoutes(app: Express) {
         history.push({ role: 'dot', text: cachedAnswer, at: Date.now() });
         while (history.length > MAX_HISTORY) history.shift();
         const dotSnapshot = await dotFeatureTokenSnapshot(access.empresaId, access.plan);
+        incCounter('dot_chat_cache_hit');
+        logEvent('info', 'dot_chat_cache_hit', { kind: 'context' });
         return res.json({
           ok: true,
           message: cachedAnswer,
@@ -924,6 +961,8 @@ export function mountDotRoutes(app: Express) {
         const dotSnapshot = await dotFeatureTokenSnapshot(access.empresaId, access.plan);
         const dotLimit = dotSnapshot.limit;
         const dotUsed = dotSnapshot.used;
+        incCounter('dot_chat_cache_hit');
+        logEvent('info', 'dot_chat_cache_hit', { kind: 'semantic' });
         return res.json({
           ok: true,
           message: semanticCached.answer,
@@ -968,6 +1007,11 @@ export function mountDotRoutes(app: Express) {
     const tokenBudget = reservation?.snapshot;
     if (companyId && reservation && !reservation.ok) {
       if (!reservation.unavailable && reservation.code === 'DOT_TOKEN_LIMIT') {
+        incCounter('dot_budget_exceeded');
+        logEvent('warn', 'dot_budget_exceeded', {
+          used: tokenBudget!.used,
+          limit: tokenBudget!.limit,
+        });
         return res.status(429).json({
           ok: false,
           error: 'O orçamento de IA do plano para este período foi atingido.',
@@ -984,6 +1028,8 @@ export function mountDotRoutes(app: Express) {
           feature_tokens_remaining: tokenBudget!.remaining,
         });
       }
+      incCounter('dot_budget_unavailable');
+      logEvent('error', 'dot_budget_unavailable', { stage: 'reserve' });
       return res.status(503).json({
         ok: false,
         error: 'O controle de orçamento do Filtra Dot está temporariamente indisponível.',
@@ -1001,6 +1047,8 @@ export function mountDotRoutes(app: Express) {
     if (companyId && activeReservation) {
       const marked = await markDotReservationSent({ empresaId: companyId, reservationId: activeReservation.id });
       if (!marked.ok) {
+        incCounter('dot_budget_unavailable');
+        logEvent('error', 'dot_budget_unavailable', { stage: 'mark_sent' });
         return res.status(503).json({ ok: false, error: 'O controle de orçamento do Filtra Dot está temporariamente indisponível.', code: 'DOT_BUDGET_UNAVAILABLE' });
       }
     }
@@ -1042,9 +1090,20 @@ Entregue uma resposta completa dentro desse orçamento. Priorize, nesta ordem: c
           tipo: 'filtra_dot_chat',
         });
         if (!finalized.ok) {
+          incCounter('dot_ledger_finalize_failed');
+          logEvent('error', 'dot_ledger_finalize_failed', { reason: finalized.reason });
           console.error('[dot-ledger] finalização falhou; reserva mantida para reconciliação:', finalized.reason);
         }
       }
+      incCounter('dot_chat_completed');
+      logEvent('info', 'dot_chat_completed', {
+        provider: result.provider,
+        model: result.model,
+        latency_ms: result.latency_ms,
+        tokens: result.tokens,
+        demo: access.demo,
+        context_mode: contextResult.decision.mode,
+      });
       const after = await getDotBudgetSnapshot(companyId, access.plan);
       if (companyId) emitDotBudgetAlert(buildDotBudgetAlert(after));
 
@@ -1104,6 +1163,15 @@ Entregue uma resposta completa dentro desse orçamento. Priorize, nesta ordem: c
         // Recusa comprovada do provedor (ex.: 401/403 de todas as tentativas)
         // também é falha segura para a idempotência HTTP, não "ambígua".
         idempotencyState.providerAttempted = !settlement.provenNotSent;
+        incCounter(settlement.provenNotSent ? 'dot_chat_failed_safe' : 'dot_chat_ambiguous');
+        logEvent(settlement.provenNotSent ? 'warn' : 'error', 'dot_chat_failed', {
+          outcome: settlement.outcome,
+          proven_not_sent: settlement.provenNotSent,
+          provider_called: providerCalled,
+        });
+      } else {
+        incCounter('dot_chat_failed_safe');
+        logEvent('warn', 'dot_chat_failed', { outcome: 'no_reservation', provider_called: providerCalled });
       }
       const messageText = String(error?.message || error);
       console.error('[Filtra Dot]', messageText);

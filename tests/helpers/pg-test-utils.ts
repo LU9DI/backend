@@ -162,9 +162,20 @@ export function assertNoDdlErrors(stderr: string, label: string): void {
 export function parseWorkerJson<T>(result: WorkerResult, label: string): T {
   assert.equal(result.code, 0, `${label}: processo terminou com código ${result.code} (sinal ${result.signal})\nstderr:\n${result.stderr}`);
   assertNoDdlErrors(result.stderr, label);
-  try {
-    return JSON.parse(result.stdout) as T;
-  } catch (error) {
-    throw new Error(`${label}: stdout não é JSON (${String(error)}):\n${result.stdout}\nstderr:\n${result.stderr}`);
+  // O processo pode emitir logs estruturados (uma linha JSON por evento) antes
+  // do resultado. O contrato é: o resultado é o ÚLTIMO JSON completo impresso —
+  // inclusive escalares como `null` (a instância que perde a corrida devolve
+  // `null`), por isso a busca aceita qualquer JSON válido, não só objetos.
+  const lines = result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      return JSON.parse(lines[index]) as T;
+    } catch {
+      /* linha de log truncada ou JSON parcial: tenta a anterior */
+    }
   }
+  throw new Error(`${label}: stdout não contém JSON válido:\n${result.stdout}\nstderr:\n${result.stderr}`);
 }

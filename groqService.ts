@@ -10,6 +10,8 @@ import {
 } from './lib/sentiment.js';
 import { estimateTokens, recordAiUsage } from './lib/aiUsage.js';
 import { getDb } from './lib/db.js';
+import { incCounter } from './lib/metrics.js';
+import { logEvent } from './lib/observability.js';
 import { isRateLimitError, recordRateLimitHit } from './lib/aiMonitor.js';
 import {
   normalizeLocale,
@@ -450,6 +452,8 @@ async function callAIReal(
 ): Promise<AiCallResult> {
   const order = buildAttemptOrder();
   if (!order.length) {
+    incCounter('ai_not_configured');
+    logEvent('error', 'ai_not_configured', { tipo: opts?.tipo ?? null });
     throw new Error(
       'Nenhuma IA configurada. Defina GROQ_API_KEY e/ou GEMINI_API_KEY no .env'
     );
@@ -459,13 +463,27 @@ async function callAIReal(
 
   for (let i = 0; i < order.length; i++) {
     const provider = order[i];
+    const usedModel = resolveModel(provider, opts?.model);
     const t0 = process.hrtime.bigint();
+    incCounter('ai_provider_call_attempt');
     try {
-      const usedModel = resolveModel(provider, opts?.model);
       const raw = await invokeProvider(provider, system, user, maxTokens, temperature, usedModel);
       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
       markSuccess(provider, ms);
       if (i > 0) console.warn(`[IA] Fallback: ${provider} (${ms}ms)`);
+      incCounter('ai_provider_call_success');
+      if (i > 0) incCounter('ai_provider_failover_success');
+      // Nunca registra prompt nem resposta: apenas estado operacional da chamada.
+      logEvent('info', 'ai_provider_call_completed', {
+        provider,
+        model: usedModel,
+        latency_ms: ms,
+        tokens: raw.tokens,
+        attempt: i + 1,
+        failover: i > 0,
+        tipo: opts?.tipo ?? null,
+        feature: opts?.feature ?? null,
+      });
 
       // O fluxo do Dot (reserva durável + finalize no ledger único) passa
       // `skipUsageRecord: true`: o consumo é gravado UMA vez, em `ai_usage`, com
@@ -491,6 +509,17 @@ async function callAIReal(
     } catch (e: any) {
       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
       markFail(provider, e, ms);
+      incCounter('ai_provider_call_failed');
+      logEvent('warn', 'ai_provider_call_failed', {
+        provider,
+        model: usedModel,
+        latency_ms: ms,
+        attempt: i + 1,
+        status: e?.status ?? null,
+        code: e?.code ?? null,
+        detail: String(e?.message || e),
+        tipo: opts?.tipo ?? null,
+      });
       attemptErrors.push(e instanceof Error ? e : new Error(String(e)));
       if (i < order.length - 1) continue;
     }

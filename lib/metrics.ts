@@ -16,6 +16,31 @@ const httpByRoute: Map<string, Bucket> = new Map();
 const httpGlobal: Bucket = { samples: [], count: 0, errors: 0, sumMs: 0 };
 const startedAt = Date.now();
 
+/**
+ * Contadores monotônicos do processo. São a base das regras de alerta
+ * (crescimento de erro, estados ambíguos, divergência de orçamento). Nomes são
+ * fixos no código: não há rótulo vindo de requisição, então a cardinalidade é
+ * limitada pelo próprio conjunto de eventos instrumentados.
+ */
+const counters: Map<string, number> = new Map();
+const COUNTER_NAME = /^[a-z0-9_.:-]{1,120}$/;
+
+export function incCounter(name: string, by = 1): void {
+  if (!COUNTER_NAME.test(name) || !Number.isFinite(by) || by === 0) return;
+  counters.set(name, (counters.get(name) || 0) + by);
+}
+
+export function getCounters(): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [name, value] of counters.entries()) out[name] = value;
+  return out;
+}
+
+/** Usado apenas por testes para isolar o estado entre casos. */
+export function resetCounters(): void {
+  counters.clear();
+}
+
 function ensure(route: string): Bucket {
   let b = httpByRoute.get(route);
   if (!b) {
@@ -67,9 +92,13 @@ export function recordHttp(method: string, path: string, status: number, duratio
   const b = ensure(key);
   pushSample(b, durationMs);
   pushSample(httpGlobal, durationMs);
+  incCounter('http_requests_total');
   if (status >= 500) {
     b.errors += 1;
     httpGlobal.errors += 1;
+    incCounter('http_5xx_total');
+  } else if (status >= 400) {
+    incCounter('http_4xx_total');
   }
 }
 

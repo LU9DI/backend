@@ -281,6 +281,11 @@ excepcional de migração, manual e auditada, que deve ser revisada antes de uso
 
 ## 5. Recuperação e observabilidade
 
+- **Correlação e logs estruturados:** `X-Request-Id` saneado, contexto
+  `AsyncLocalStorage` por requisição, eventos JSON com `request_id` e
+  `empresa_id`, redação de credenciais/conteúdo e contadores em
+  `/api/metrics`. Catálogo de alertas (todos **não configurados**) em
+  `docs/DOT_OBSERVABILITY_ALERTS.md`.
 - **Liveness/health:** `GET /api/health` retorna `ok:true`, engine do banco e
   subsistemas; verificado em smoke local.
 - **Status do Dot:** `GET /api/dot/status` mostra scheduler e worker, incluindo
@@ -345,13 +350,20 @@ homologado pelo gateway". Portanto:
 ## 8. Pendências remanescentes
 
 1. Política de retenção formal e job de expurgo ainda não implementados.
-2. Idempotência de retry HTTP do cliente (chave por requisição) não existe: um
-   retry do cliente pode criar nova reserva e nova chamada ao provedor.
+2. `/api/dot/explain` **não** usa a idempotência HTTP (só o `/api/dot/chat`):
+   um retry do cliente no explain pode criar nova reserva e nova chamada ao
+   provedor. O ledger evita consumo duplicado da mesma reserva, mas não
+   deduplica requisições distintas. O frontend de conversa não usa esse
+   endpoint.
 3. Integração legada do Deno Deploy deve ser removida do GitHub (required check
-   obsoleto); o alvo de produção é Render.
-2. Outbox/worker externo para CRM/WhatsApp/e-mail ainda não implementados —
+   obsoleto); o alvo de produção é Render. Detalhes em `DSV4`/relatório da
+   missão: é um status externo do app Deno Deploy ("Organization suspended"),
+   sem nenhuma referência no repositório.
+4. Outbox/worker externo para CRM/WhatsApp/e-mail ainda não implementados —
    canais externos devem permanecer bloqueados.
-3. Ativação das flags e provisionamento de owners são ações operacionais
+5. Ativação das flags e provisionamento de owners são ações operacionais
    externas ao repositório e não foram executadas.
-4. Monitor global e worker devem ser ligados de forma escalonada, com
+6. Monitor global e worker devem ser ligados de forma escalonada, com
    observação de carga.
+7. Catálogo de alertas em `docs/DOT_OBSERVABILITY_ALERTS.md` está pronto, mas
+   **nenhum alerta/canal está configurado ou ativo** em nenhuma plataforma.

@@ -179,7 +179,10 @@ de missões, decisões, ações, casos, follow-ups ou auditoria.
 
 ## 5. Observabilidade mínima
 
-- `/api/health` e `/api/dot/status`;
+- `/api/health`, `/api/dot/status` e `/api/metrics` (contadores + scheduler +
+  worker; protegido por `METRICS_TOKEN`/`JOBS_SECRET` em produção);
+- correlação por `X-Request-Id` em toda resposta e nos logs JSON
+  (`request_id`/`empresa_id`), conforme `DOT_OBSERVABILITY_ALERTS.md`;
 - logs `[dot-scheduler]`, `[dot]`;
 - logs `[dot-idempotency] requisição ambígua` e `[dot-idempotency] lease expirado
   promovido para ambíguo` (nenhum conteúdo de mensagem é registrado);
@@ -187,8 +190,9 @@ de missões, decisões, ações, casos, follow-ups ou auditoria.
   `executed`, `failed` com `phase`/`rolled_back`);
 - consulta de acompanhamento da idempotência e o procedimento de reconciliação
   em `DOT_PRODUCTION_READINESS.md` §2.5;
-- alertas a definir: `failed` acima de limiar, ação presa em `executing`,
-  auditoria de execução duplicada, erro de scheduler, fila `approved` antiga;
+- alertas recomendados (nenhum configurado): `DOT_OBSERVABILITY_ALERTS.md` §5 —
+  crescimento de erro, estados ambíguos, divergência reserva × consumo,
+  orçamento, scheduler, health, provedor e banco;
 - retenção de auditoria conforme política aprovada; nenhum expurgo automático
   está implementado. A CLI `scripts/dot-audit-retention.ts` é manual
   (dry-run/export por padrão); expurgo exige `--purge --yes` e

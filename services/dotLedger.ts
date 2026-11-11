@@ -41,6 +41,8 @@
 import { getDb, withDbTransaction, dbEngine } from '../lib/db.js';
 import { getFeatureTokenLimit, getTokenLimit } from '../lib/quota.js';
 import { normalizePlan } from '../lib/plans.js';
+import { incCounter } from '../lib/metrics.js';
+import { logEvent } from '../lib/observability.js';
 
 /**
  * Plano canônico para cota (#141): só `rei`/`corporativo` têm orçamento de Dot.
@@ -380,9 +382,16 @@ export async function reserveDotExecution(params: {
         ? await tx.get('SELECT * FROM dot_budget_reservations WHERE id = ? AND empresa_id = ? LIMIT 1', [id, empresaId])
         : null;
       if (!reservationRow) throw new Error('reserva inserida sem ID recuperável');
+      incCounter('dot_ledger_reserved');
       return { ok: true, reservation: reservationRow as DotReservation, snapshot };
     });
   } catch (error: any) {
+    incCounter('dot_ledger_reserve_error');
+    logEvent('error', 'dot_ledger_reserve_error', {
+      empresa_id: empresaId,
+      feature,
+      detail: String(error?.message || error),
+    });
     console.error('[dot-ledger] falha ao reservar orçamento:', error?.message || error);
     // ORÇAMENTO DESCONHECIDO nunca vira orçamento disponível, e também não é
     // "limite atingido": são causas distintas e o cliente precisa distingui-las.
@@ -514,6 +523,7 @@ export async function finalizeDotReservation(params: {
       const status = String(current.status);
       if (status === 'settled') {
         // Retry: o consumo já foi registrado por esta reserva.
+        incCounter('dot_ledger_settled_duplicate');
         return { ok: true, reservation: current as DotReservation, duplicate: true };
       }
       if (status !== 'pending') {
@@ -538,6 +548,12 @@ export async function finalizeDotReservation(params: {
           ],
         );
         const updated = await tx.get('SELECT * FROM dot_budget_reservations WHERE id = ? AND empresa_id = ?', [id, empresaId]);
+        incCounter('dot_ledger_ambiguous');
+        logEvent('warn', 'dot_ledger_ambiguous', {
+          empresa_id: empresaId,
+          reservation_id: id,
+          reason: String(params.ambiguousReason || 'resultado ambíguo do provedor'),
+        });
         return { ok: true, reservation: updated as DotReservation, reason: 'resultado ambíguo mantém a reserva aberta' };
       }
 
@@ -590,9 +606,23 @@ export async function finalizeDotReservation(params: {
         throw new Error(`reserva em estado '${final ? String(final.status) : 'inexistente'}' — liquidação não aplicada`);
       }
       const final = await tx.get('SELECT * FROM dot_budget_reservations WHERE id = ? AND empresa_id = ?', [id, empresaId]);
+      incCounter('dot_ledger_settled');
+      logEvent('info', 'dot_ledger_settled', {
+        empresa_id: empresaId,
+        reservation_id: id,
+        tokens_charged: chargedTokens,
+        provider: params.provider ?? null,
+        tipo: params.tipo || 'filtra_dot_chat',
+      });
       return { ok: true, reservation: final as DotReservation };
     });
   } catch (error: any) {
+    incCounter('dot_ledger_finalize_error');
+    logEvent('error', 'dot_ledger_finalize_error', {
+      empresa_id: empresaId,
+      reservation_id: id,
+      detail: String(error?.message || error),
+    });
     console.error('[dot-ledger] falha ao finalizar reserva:', error?.message || error);
     return { ok: false, reservation: null, reason: String(error?.message || error) };
   }
@@ -615,6 +645,8 @@ export async function releaseDotReservation(params: {
   if (!empresaId || !id) return { ok: false, reservation: null, reason: 'reserva inválida' };
   await assertDotLedgerSchema();
   if (!params.provenNotSent) {
+    incCounter('dot_ledger_release_refused');
+    logEvent('warn', 'dot_ledger_release_refused', { empresa_id: empresaId, reservation_id: id });
     return {
       ok: false,
       reservation: await getDotReservation(empresaId, id),
@@ -635,7 +667,16 @@ export async function releaseDotReservation(params: {
         'SELECT * FROM dot_budget_reservations WHERE id = ? AND empresa_id = ?',
         [id, empresaId],
       ) as DotReservation | undefined;
-      return { ok: Boolean(updated && updated.changes === 1) || final?.status === 'released', reservation: final || null };
+      const released = Boolean(updated && updated.changes === 1) || final?.status === 'released';
+      if (released) {
+        incCounter('dot_ledger_released');
+        logEvent('info', 'dot_ledger_released', {
+          empresa_id: empresaId,
+          reservation_id: id,
+          reason: params.reason ?? null,
+        });
+      }
+      return { ok: released, reservation: final || null };
     });
   } catch (error: any) {
     console.error('[dot-ledger] falha ao liberar reserva:', error?.message || error);
@@ -719,12 +760,27 @@ export async function sweepExpiredDotReservations(opts: { empresaId?: string; li
         WHERE status = 'pending' AND ambiguous = 1 AND expires_at <= ?${scope}`,
       heldParams,
     );
+    const expiredCount = Number(expired?.changes || 0);
+    const ambiguousMarked = Number(unterminated?.changes || 0);
+    const ambiguousHeld = Number(held?.c || 0);
+    if (expiredCount || ambiguousMarked) {
+      incCounter('dot_ledger_sweep_expired', expiredCount);
+      incCounter('dot_ledger_sweep_ambiguous', ambiguousMarked);
+      logEvent('warn', 'dot_ledger_sweep', {
+        empresa_id: scopeEmpresa,
+        expired: expiredCount,
+        ambiguous_marked: ambiguousMarked,
+        ambiguous_open: ambiguousHeld,
+      });
+    }
     return {
-      expired: Number(expired?.changes || 0),
-      ambiguous_marked: Number(unterminated?.changes || 0),
-      ambiguous_held: Number(held?.c || 0),
+      expired: expiredCount,
+      ambiguous_marked: ambiguousMarked,
+      ambiguous_held: ambiguousHeld,
     };
   } catch (error: any) {
+    incCounter('dot_ledger_sweep_error');
+    logEvent('error', 'dot_ledger_sweep_error', { detail: String(error?.message || error) });
     console.error('[dot-ledger] falha na varredura de reservas:', error?.message || error);
     return { expired: 0, ambiguous_held: 0, ambiguous_marked: 0 };
   }
@@ -852,6 +908,16 @@ export function buildDotBudgetAlert(snapshot: DotBudgetSnapshot): DotBudgetAlert
 /** Emite o alerta (log estruturado, sanitizado). Nunca lança. */
 export function emitDotBudgetAlert(alert: DotBudgetAlert | null): void {
   if (!alert) return;
+  incCounter('dot_budget_alert_emitted');
+  incCounter(alert.event === 'dot_budget_exhausted' ? 'dot_budget_alert_critical' : 'dot_budget_alert_warning');
+  logEvent(alert.severity === 'critical' ? 'error' : 'warn', 'dot_budget_alert', {
+    alert_event: alert.event,
+    severity: alert.severity,
+    percent: alert.percent,
+    used: alert.used,
+    reserved: alert.reserved,
+    limit: alert.limit,
+  });
   try {
     console.warn('[dot-budget-alert] ' + JSON.stringify(alert));
   } catch {

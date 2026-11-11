@@ -19,6 +19,8 @@
 import { createHash } from 'node:crypto';
 import type { Response } from 'express';
 import { getDb, withDbTransaction } from '../lib/db.js';
+import { incCounter } from '../lib/metrics.js';
+import { logEvent } from '../lib/observability.js';
 
 /** Lease after which an unfinished claim is presumed abandoned. */
 const PROCESSING_STALE_MS = 15 * 60_000;
@@ -290,7 +292,22 @@ export async function completeDotHttpRequest(
       claim.requestHash,
     ],
   );
-  return result.changes === 1;
+  if (result.changes === 1) {
+    incCounter('dot_http_idempotency_completed');
+    logEvent('info', 'dot_http_idempotency_completed', {
+      empresa_id: claim.empresaId,
+      endpoint: claim.endpoint,
+      response_status: status,
+    });
+    return true;
+  }
+  incCounter('dot_http_idempotency_complete_lost');
+  logEvent('warn', 'dot_http_idempotency_complete_lost', {
+    empresa_id: claim.empresaId,
+    endpoint: claim.endpoint,
+    response_status: status,
+  });
+  return false;
 }
 
 /** The provider may have been reached; the retry must never run again. */
@@ -305,8 +322,13 @@ export async function markDotHttpRequestAmbiguous(
     [nowIso(), claim.empresaId, claim.key],
   );
   if (result.changes === 1) {
+    incCounter('dot_http_idempotency_ambiguous');
     // Sinal operacional: só existe quando o provedor pode ter sido chamado.
     // Não logar o conteúdo da mensagem.
+    logEvent('warn', 'dot_http_idempotency_ambiguous', {
+      empresa_id: claim.empresaId,
+      endpoint: claim.endpoint,
+    });
     console.warn(
       '[dot-idempotency] requisição ambígua (reconciliação necessária):',
       JSON.stringify({ empresaId: claim.empresaId, endpoint: claim.endpoint, key_prefix: claim.key.slice(0, 8) }),
@@ -318,13 +340,14 @@ export async function markDotHttpRequestAmbiguous(
 export async function markDotHttpRequestFailedSafe(
   claim: DotHttpIdempotencyClaim,
 ): Promise<void> {
-  await getDb().run(
+  const result = await getDb().run(
     `UPDATE dot_http_idempotency
         SET status = 'failed_safe', updated_at = ?
       WHERE empresa_id = ? AND idempotency_key = ?
         AND status = 'processing'`,
     [nowIso(), claim.empresaId, claim.key],
   );
+  if (result.changes === 1) incCounter('dot_http_idempotency_failed_safe');
 }
 
 /**
