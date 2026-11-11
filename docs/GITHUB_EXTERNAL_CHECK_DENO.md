@@ -65,3 +65,33 @@ como sucesso (mascararia a origem).
   fora do limite desta missão).
 - Enquanto não corrigido, o HEAD da #144 permanecerá `unstable` mesmo com todo
   o CI verde.
+
+## 6. Reconfirmação na DSV4 Missão 3 (2026-11-11)
+
+Verificado novamente no HEAD `5fb46bd4334213938f22ff5232dd6a593d1579e6`:
+
+- `test`, `postgres-concurrency` e `audit`: `completed/success`;
+- `GET /commits/<sha>/status` → `failure`, único contexto
+  `deploy/lu9di/filtra-ai-api-fallback` com a mesma descrição de organização
+  suspensa;
+- `branches/master/protection` → 404; `rulesets` → `[]`; `collaborators` →
+  somente `LU9DI`; `requested_reviewers` → vazio;
+- PR #144 `mergeable: true`, `mergeable_state: unstable`.
+
+**Conclusão:** o check **não é obrigatório** e não bloqueia tecnicamente o
+merge; o único efeito é o rótulo `unstable`. Não há API pública do Deno Deploy
+acessível sem credenciais da conta para remover o projeto; a solução continua
+administrativa (desinstalar o app Deno Deploy do repositório, remover o projeto
+legado ou regularizar a cobrança) e **não foi executada**.
+
+Passos administrativos exatos (para quem tiver a permissão):
+
+1. GitHub → repositório `LU9DI/backend` → Settings → GitHub Apps → Deno Deploy
+   → Configure → remover acesso ao repositório (ou Uninstall, se for o único);
+2. ou Deno Deploy (app.deno.com) → organização `lu9di` → projeto
+   `filtra-ai-api-fallback` → Settings → Disconnect GitHub / Delete project;
+3. verificar: `gh api repos/LU9DI/backend/commits/<sha>/status --jq .state`
+   deve deixar de conter o contexto; o PR passa a `clean` se não houver outro
+   status pendente.
+
+Nenhuma proteção de branch, required check ou regra foi alterada nesta missão.

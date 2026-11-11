@@ -25,8 +25,9 @@ Verificado a partir do repositório/ambiente local:
 
 **NÃO verificado** (sem acesso): painel do Render, `autoDeploy`, branch
 deployada, Dockerfile/build-start usados pelo serviço, variáveis de ambiente
-reais, CORS, região/plano/recursos, logs do serviço, health real em produção e
-histórico de deploys. Nenhuma chamada à API do Render foi feita.
+reais, região/plano/recursos, logs do serviço e histórico de deploys. Os
+endpoints de health e o CORS foram verificados por HTTP público em 2026-11-11
+(seção 0.1). Nenhuma chamada autenticada à API do Render foi feita.
 
 Acessos necessários para completar a inspeção (sem alterar nada):
 
@@ -37,6 +38,24 @@ Acessos necessários para completar a inspeção (sem alterar nada):
 3. permissão de administrador no GitHub `LU9DI/backend` para tratar a
    integração Deno Deploy (seção de check externo do relatório);
 4. janela aprovada para backup e migração (execução futura, fora desta missão).
+
+### 0.1 Evidência pública coletada em 2026-11-11 (somente leitura)
+
+- `/api/live` 200; `/api/ready` 200 com `db_ok:true` (Postgres);
+- `/api/health` 200 **sem o bloco `dot`** → build implantado é anterior ao PR;
+- `/api/dot/status` 200 com `enabled:false` e scheduler/worker
+  `timer_active:true` → no build atual as rotas existem e os timers sobem mesmo
+  com o Dot desligado;
+- `/api/metrics` 401 sem token correto → proteção ativa;
+- CORS: `https://filtraai.com` aceito (204); origem desconhecida rejeitada
+  (404 sem cabeçalho);
+- processo reiniciado em `2026-11-11T20:34:05Z`; causa não atribuível sem o
+  histórico de deploys.
+
+Consequência: **antes do primeiro deploy do PR**, confirmar branch e
+`autoDeploy` e validar que o `/api/health` passa a expor `dot` e que
+`/api/dot/status` responde 403/404 com as flags ausentes. Detalhes e consultas
+em `docs/RENDER_READONLY_ACCESS.md`.
 
 ---
 

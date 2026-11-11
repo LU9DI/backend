@@ -129,6 +129,10 @@ schema idêntico, falha injetada no meio da migração e retomada íntegra
 - **Não houve acesso ao painel/API do Render nesta missão** (nenhuma variável
   `RENDER_*` no ambiente; sem token). Configuração privada (autoDeploy,
   variáveis, plano, disco, região) **não foi inspecionada**.
+- Evidência pública de 2026-11-11: `/api/health` **sem** bloco `dot`,
+  `/api/dot/status` 200 com timers ativos e `/api/metrics` 401 sem token —
+  o build implantado é anterior ao PR. Consultas de leitura e riscos em
+  `docs/RENDER_READONLY_ACCESS.md` e `docs/DOT_RESIDUAL_RISKS.md` (R6).
 - Checklist e lista de acessos necessários: `docs/DOT_RENDER_ACTIVATION_CHECKLIST.md`.
 
 ## 9. Testes relevantes (executados nesta missão)
