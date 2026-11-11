@@ -7,13 +7,18 @@
 
 ## 1. Identificação do projeto
 
-- O repositório não contém `supabase/config.toml`, project ref nem `.env`
-  versionado; nenhuma referência a `*.supabase.co` foi encontrada nos docs.
+- O repositório **não** contém project ref real nem `.env` versionado:
+  `.env.example` traz apenas o placeholder `SUPABASE_DB_HOST=db.seu-projeto.supabase.co`.
+- O código aceita duas formas de conexão (`lib/db.ts`): `DATABASE_URL` ou o
+  conjunto `SUPABASE_DB_HOST`/`_PORT`/`_USER`/`_PASSWORD`/`_NAME`. O script
+  `scripts/migrate-render-to-supabase.ts` usa como padrão o pooler
+  `aws-0-us-west-2.pooler.supabase.com` (região sugerida: us-west-2), mas esse
+  host é compartilhado e **não identifica o projeto**.
 - Evidência pública de que o runtime usa Postgres gerenciado:
   `GET /api/health` de produção → `{db:"postgres", db_ok:true}`;
   `GET /api/ready` → `{ready:true, db:{ok:true, engine:"postgres"}}`.
 - O projeto correto **precisa ser confirmado** no painel (Database → Settings →
-  General → Reference) e confrontado com o `DATABASE_URL` do serviço
+  General → Reference) e confrontado com os **nomes** das variáveis do serviço
   `filtra-ia-api` no Render (host, porta `5432`/pooler, banco).
 
 ## 2. O que o boot espera do schema
