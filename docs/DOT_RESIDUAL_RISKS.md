@@ -122,6 +122,16 @@ inexistentes, timers parados) não vale em produção. A causa do restart de
 fazer o primeiro deploy com as flags do Dot ausentes e validar
 `/api/dot/status` = 403/404 e `/api/health.dot` presente.
 
+**Atualização da Missão 4 (auditoria operacional):** o build em produção
+corresponde ao **master `feac3cd`** (fingerprint de CORS pós-#147), e a análise
+do boot + o estado observado mostram **`FILTRA_DOT_ENABLED=1` e
+`FILTRA_DOT_FORCE_ON=1`** — os timers estão ativos **por configuração**, não por
+bypass. Eles não chamam provedores e processam 0 empresas; o risco financeiro
+residual vem do chat HTTP sem ledger durável/idempotência. Detalhes, matriz de
+cenários e decisão em `docs/DOT_PRODUCTION_TIMER_AUDIT.md`. O PR #144 ganhou
+barreiras `dotSchedulerRuntimeEnabled`/`dotWorkerRuntimeEnabled` e 6 testes de
+regressão (`tests/dotTimerGates.test.ts`).
+
 ## Itens avaliados e considerados aceitáveis
 
 - Rate limit e CSRF do chat: cobertos por código e E2E.

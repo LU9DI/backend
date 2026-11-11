@@ -26,6 +26,7 @@ const tmpDb = path.join(os.tmpdir(), `filtra-dot-tickshare-${Date.now()}-${proce
 
 process.env.NODE_ENV = 'test';
 process.env.SQLITE_DB_PATH = tmpDb;
+process.env.FILTRA_DOT_ENABLED = '1';
 process.env.DOT_AGENT_WORKER_ENABLED = '1';
 process.env.DOT_AGENT_WORKER_INTERVAL_MS = '600000';
 

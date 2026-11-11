@@ -197,12 +197,19 @@ async function runDueDotMonitorsUnlocked() {
   }
 }
 
+/**
+ * Invariante de boot: o monitor só pode rodar com o Dot habilitado E a
+ * validação explícita (`FILTRA_DOT_FORCE_ON=1`). Exportada para teste — o
+ * servidor já chama o start apenas dentro do bloco do Dot.
+ */
+export function dotSchedulerRuntimeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.FILTRA_DOT_ENABLED === '1' && env.FILTRA_DOT_FORCE_ON === '1';
+}
+
 export function startDotMonitorScheduler() {
   if (timer) return;
   // Forçado OFF até validação local do Dot. Para ligar de novo: FILTRA_DOT_ENABLED=1 e FILTRA_DOT_FORCE_ON=1.
-  const forceOn = process.env.FILTRA_DOT_FORCE_ON === '1';
-  const enabled = process.env.FILTRA_DOT_ENABLED === '1' && forceOn;
-  if (!enabled) {
+  if (!dotSchedulerRuntimeEnabled()) {
     console.log('Filtra Dot monitor desativado — teste em localhost primeiro (precisa FILTRA_DOT_ENABLED=1 e FILTRA_DOT_FORCE_ON=1).');
     return;
   }

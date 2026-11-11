@@ -141,6 +141,7 @@ schema idêntico, falha injetada no meio da migração e retomada íntegra
 |---|---|
 | `tests/observability.test.ts` (novo) | 8/8 |
 | `tests/dotAlertRules.test.ts` (novo, Missão 3) | **27/27** — cada alerta A1–A12, aquecimento, reinício, token e webhook |
+| `tests/dotTimerGates.test.ts` (novo, Missão 4) | **6/6** — scheduler/worker só iniciam com `FILTRA_DOT_ENABLED=1` (+ `FILTRA_DOT_FORCE_ON=1` no scheduler) e drenam ao parar |
 | `tests/dotLedger.pg.test.ts` | 6/6 |
 | Suíte PostgreSQL completa (`npm run test:postgres`, 41 testes) | **41/41** na execução final local e no CI. Histórico honesto: a 1ª execução completa deu 40/41 porque a correção do helper (`parseWorkerJson`) só aceitava objetos JSON — o worker perdedor devolve `null`; corrigida para aceitar qualquer JSON, com 2/2 no arquivo afetado e 41/41 na reexecução |
 | Suíte não-PG completa (`npm test`) | **481/481** local (Node 26.7.0) antes dos alertas; **511/511** no CI final (Node 20.20.2, 90 arquivos) |

@@ -81,8 +81,18 @@ function scheduleTick(): Promise<void> {
   return promise;
 }
 
+/**
+ * Invariante de boot: nenhum tick do worker pode rodar sem o Dot habilitado.
+ * O servidor já monta as rotas/worker apenas com `FILTRA_DOT_ENABLED=1`; esta
+ * checagem é a segunda barreira para o caso de uma chamada direta (teste,
+ * script ou regressão de wiring) — a mesma usada pelo scheduler.
+ */
+export function dotWorkerRuntimeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.FILTRA_DOT_ENABLED === '1' && env.DOT_AGENT_WORKER_ENABLED !== '0';
+}
+
 export function startDotAgentWorker() {
-  if (process.env.DOT_AGENT_WORKER_ENABLED === '0') return;
+  if (!dotWorkerRuntimeEnabled()) return;
   if (timer) return;
 
   // Reinício após parada: libera a porta para os próximos ticks.
@@ -96,7 +106,7 @@ export function startDotAgentWorker() {
 }
 
 export function wakeDotAgentWorker() {
-  if (process.env.DOT_AGENT_WORKER_ENABLED === '0') return undefined;
+  if (!dotWorkerRuntimeEnabled()) return undefined;
   return scheduleTick();
 }
 
