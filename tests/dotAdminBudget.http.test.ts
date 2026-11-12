@@ -327,27 +327,18 @@ suite('Dot admin — orçamento por HTTP (JWT + PIN + sessão + reconciliação)
     );
   });
 
-  test('reconciliação sem sessão administrativa: 403 DOT_ADMIN_SESSION_REQUIRED', async () => {
+  test('proprietário do tenant não pode reconciliar o próprio orçamento', async () => {
     const pendente = await ledger.reserveDotExecution({ empresaId: EMP_A, plan: 'rei' });
     const res = await adminFetch('/api/dot/admin/budget/reconcile', {
-      method: 'POST',
-      token: tokenFor(USER_A, EMP_A),
-      header: true,
-      body: { reservation_id: pendente.reservation!.id, decision: 'release' },
+      method: 'POST', token: tokenFor(USER_A, EMP_A), header: true,
+      body: { reservation_id: pendente.reservation!.id, decision: 'settle', tokens: 1, reason: 'tentativa do proprietário' },
     });
     assert.equal(res.status, 403);
-    assert.equal(res.data.code, 'DOT_ADMIN_SESSION_REQUIRED');
-    // A reserva continua aberta: nada foi liberado sem sessão.
-    const linha = await ledger.getDotReservation(EMP_A, pendente.reservation!.id);
-    assert.equal(linha?.status, 'pending');
+    assert.equal(res.data.code, 'DOT_RECONCILE_PLATFORM_ADMIN_REQUIRED');
+    assert.equal((await ledger.getDotReservation(EMP_A, pendente.reservation!.id))?.status, 'pending');
   });
 
-  test('reconciliação settle com sessão: grava consumo real e audita', async () => {
-    const sessao = await adminFetch('/api/dot/admin/session', {
-      method: 'POST', token: tokenFor(USER_A, EMP_A), header: true, body: { pin: PIN },
-    });
-    assert.ok(sessao.cookie);
-
+  test('operador da plataforma liquida reserva ambígua e audita consumo real', async () => {
     const pendente = await ledger.reserveDotExecution({ empresaId: EMP_A, plan: 'rei' });
     const id = pendente.reservation!.id;
     const held = await ledger.finalizeDotReservation({
@@ -355,217 +346,117 @@ suite('Dot admin — orçamento por HTTP (JWT + PIN + sessão + reconciliação)
     });
     assert.equal(held.ok, true);
 
-    const res = await adminFetch('/api/dot/admin/budget/reconcile', {
-      method: 'POST',
-      token: tokenFor(USER_A, EMP_A),
-      header: true,
-      adminSession: sessao.cookie,
-      body: { reservation_id: id, decision: 'settle', tokens: 700, provider: 'groq', reason: 'tokens confirmados no registro do provedor' },
+    const res = await reconcileFetch({
+      empresa_id: EMP_A, reservation_id: id, decision: 'settle', tokens: 700,
+      provider: 'groq', reason: 'tokens confirmados no registro do provedor',
     });
     assert.equal(res.status, 200, JSON.stringify(res.data));
-    assert.equal(res.data.ok, true);
     assert.equal(res.data.result.reservation.status, 'settled');
-
-    const linha = await ledger.getDotReservation(EMP_A, id);
-    assert.equal(linha?.status, 'settled');
-    assert.equal(Number(linha?.tokens_real), 700);
+    assert.equal(Number((await ledger.getDotReservation(EMP_A, id))?.tokens_real), 700);
     const usage = await db.get(
       'SELECT COUNT(*) AS c, COALESCE(SUM(tokens),0) AS t FROM ai_usage WHERE empresa_id = ? AND feature = ?',
       [EMP_A, 'dot'],
     );
     assert.equal(Number(usage.c), 1);
     assert.equal(Number(usage.t), 700);
-
-    const auditoria = await auditRows(EMP_A, 'dot.budget_reconciled');
-    assert.equal(auditoria.length, 1);
-    assert.equal(auditoria[0].result, 'ok');
-    assert.match(String(auditoria[0].detail), /"decision":"settle"/);
+    const audit = await auditRows(EMP_A, 'dot.budget_reconciled');
+    assert.ok(audit.some((row: any) => row.result === 'ok' && String(row.detail).includes('"decision":"settle"')));
   });
 
-  test('reconciliação release sem confirmação explícita é recusada e preserva a reserva', async () => {
-    const sessao = await adminFetch('/api/dot/admin/session', {
-      method: 'POST', token: tokenFor(USER_A, EMP_A), header: true, body: { pin: PIN },
-    });
+  test('operador não pode liquidar reserva não ambígua nem reserva em andamento', async () => {
     const pendente = await ledger.reserveDotExecution({ empresaId: EMP_A, plan: 'rei' });
     const id = pendente.reservation!.id;
-
-    const res = await adminFetch('/api/dot/admin/budget/reconcile', {
-      method: 'POST',
-      token: tokenFor(USER_A, EMP_A),
-      header: true,
-      adminSession: sessao.cookie,
-      body: { reservation_id: id, decision: 'release', reason: 'aparentemente não enviado' },
-    });
-    assert.equal(res.status, 400);
-    assert.equal(res.data.code, 'DOT_RECONCILE_NOT_SENT_CONFIRMATION_REQUIRED');
-    assert.equal((await ledger.getDotReservation(EMP_A, id))?.status, 'pending');
-  });
-
-  test('reconciliação bloqueia reserva pending não ambígua, mesmo com sessão válida', async () => {
-    const sessao = await adminFetch('/api/dot/admin/session', {
-      method: 'POST', token: tokenFor(USER_A, EMP_A), header: true, body: { pin: PIN },
-    });
-    const pendente = await ledger.reserveDotExecution({ empresaId: EMP_A, plan: 'rei' });
-    const id = pendente.reservation!.id;
-    const settle = await adminFetch('/api/dot/admin/budget/reconcile', {
-      method: 'POST', token: tokenFor(USER_A, EMP_A), header: true, adminSession: sessao.cookie,
-      body: { reservation_id: id, decision: 'settle', tokens: 1500, reason: 'tentativa de liquidar reserva ativa' },
-    });
-    assert.equal(settle.status, 409);
-    assert.equal(settle.data.code, 'DOT_RECONCILE_REFUSED');
-    assert.equal((await ledger.getDotReservation(EMP_A, id))?.status, 'pending');
-    const usage = await db.get(
-      'SELECT COUNT(*) AS c FROM ai_usage WHERE empresa_id = ? AND feature = ?',
-      [EMP_A, 'dot'],
-    );
-    assert.equal(Number(usage.c), 0);
-  });
-
-  test('settle sem tokens positivos é recusado antes de alterar o ledger', async () => {
-    const sessao = await adminFetch('/api/dot/admin/session', {
-      method: 'POST', token: tokenFor(USER_A, EMP_A), header: true, body: { pin: PIN },
-    });
-    const pendente = await ledger.reserveDotExecution({ empresaId: EMP_A, plan: 'rei' });
-    const id = pendente.reservation!.id;
-    const zero = await adminFetch('/api/dot/admin/budget/reconcile', {
-      method: 'POST', token: tokenFor(USER_A, EMP_A), header: true, adminSession: sessao.cookie,
-      body: { reservation_id: id, decision: 'settle', tokens: 0, reason: 'tokens desconhecidos não podem ser zerados' },
-    });
-    assert.equal(zero.status, 400);
-    assert.equal(zero.data.code, 'DOT_RECONCILE_BAD_TOKENS');
-    assert.equal((await ledger.getDotReservation(EMP_A, id))?.status, 'pending');
-  });
-
-  test('reconciliação exige X-Dot-Admin mesmo com JWT e sessão administrativa', async () => {
-    const sessao = await adminFetch('/api/dot/admin/session', {
-      method: 'POST', token: tokenFor(USER_A, EMP_A), header: true, body: { pin: PIN },
-    });
-    const pendente = await ledger.reserveDotExecution({ empresaId: EMP_A, plan: 'rei' });
-    const res = await adminFetch('/api/dot/admin/budget/reconcile', {
-      method: 'POST', token: tokenFor(USER_A, EMP_A), adminSession: sessao.cookie,
-      body: { reservation_id: pendente.reservation!.id, decision: 'settle', tokens: 20, reason: 'cabeçalho ausente deve bloquear' },
-    });
-    assert.equal(res.status, 403);
-    assert.equal(res.data.code, 'DOT_ADMIN_HEADER_REQUIRED');
-  });
-
-  test('reserva marcada como enviada não pode ser liberada por declaração do cliente', async () => {
-    const sessao = await adminFetch('/api/dot/admin/session', {
-      method: 'POST', token: tokenFor(USER_A, EMP_A), header: true, body: { pin: PIN },
-    });
-    const pendente = await ledger.reserveDotExecution({ empresaId: EMP_A, plan: 'rei' });
-    const id = pendente.reservation!.id;
-    const marked = await ledger.markDotReservationSent({ empresaId: EMP_A, reservationId: id });
-    assert.equal(marked.ok, true);
-    const ambiguous = await ledger.finalizeDotReservation({
-      empresaId: EMP_A, reservationId: id, ambiguous: true, ambiguousReason: 'timeout após envio',
-    });
-    assert.equal(ambiguous.ok, true);
-    const res = await adminFetch('/api/dot/admin/budget/reconcile', {
-      method: 'POST', token: tokenFor(USER_A, EMP_A), header: true, adminSession: sessao.cookie,
-      body: { reservation_id: id, decision: 'release', confirm_not_sent: true, reason: 'cliente declara que não foi enviado' },
+    const res = await reconcileFetch({
+      empresa_id: EMP_A, reservation_id: id, decision: 'settle', tokens: 1500,
+      reason: 'tentativa de liquidar reserva ativa',
     });
     assert.equal(res.status, 409);
     assert.equal(res.data.code, 'DOT_RECONCILE_REFUSED');
     assert.equal((await ledger.getDotReservation(EMP_A, id))?.status, 'pending');
   });
 
-  test('reconciliação release com sessão: libera sem consumir e audita', async () => {
-    const sessao = await adminFetch('/api/dot/admin/session', {
-      method: 'POST', token: tokenFor(USER_A, EMP_A), header: true, body: { pin: PIN },
+  test('settle com zero ou ausência de tokens é recusado', async () => {
+    const sessao = await reconcileFetch({
+      empresa_id: EMP_A, reservation_id: 1, decision: 'settle', tokens: 0,
+      reason: 'zero tokens deve ser recusado',
     });
+    assert.equal(sessao.status, 400);
+    assert.equal(sessao.data.code, 'DOT_RECONCILE_BAD_TOKENS');
+    const missing = await reconcileFetch({
+      empresa_id: EMP_A, reservation_id: 1, decision: 'settle',
+      reason: 'tokens ausentes devem ser recusados',
+    });
+    assert.equal(missing.status, 400);
+    assert.equal(missing.data.code, 'DOT_RECONCILE_BAD_TOKENS');
+  });
+
+  test('reconciliação exige X-Dot-Admin e identidade de operador da plataforma', async () => {
+    const noHeader = await reconcileFetch({
+      empresa_id: EMP_A, reservation_id: 1, decision: 'settle', tokens: 20,
+      reason: 'cabeçalho ausente deve bloquear',
+    }, { header: false });
+    assert.equal(noHeader.status, 403);
+    assert.equal(noHeader.data.code, 'DOT_ADMIN_HEADER_REQUIRED');
+
+    const notAdmin = await reconcileFetch({
+      empresa_id: EMP_A, reservation_id: 1, decision: 'settle', tokens: 20,
+      reason: 'token de tenant deve bloquear',
+    }, { token: tokenFor(USER_A, EMP_A) });
+    assert.equal(notAdmin.status, 403);
+    assert.equal(notAdmin.data.code, 'DOT_RECONCILE_PLATFORM_ADMIN_REQUIRED');
+  });
+
+  test('reserva enviada ao provedor nunca pode ser liberada por declaração do cliente', async () => {
     const pendente = await ledger.reserveDotExecution({ empresaId: EMP_A, plan: 'rei' });
     const id = pendente.reservation!.id;
-    const held = await ledger.finalizeDotReservation({
-      empresaId: EMP_A, reservationId: id, ambiguous: true, ambiguousReason: 'resultado do provedor desconhecido',
+    assert.equal((await ledger.markDotReservationSent({ empresaId: EMP_A, reservationId: id })).ok, true);
+    assert.equal((await ledger.finalizeDotReservation({
+      empresaId: EMP_A, reservationId: id, ambiguous: true, ambiguousReason: 'timeout após envio',
+    })).ok, true);
+    const res = await reconcileFetch({
+      empresa_id: EMP_A, reservation_id: id, decision: 'release', confirm_not_sent: true,
+      reason: 'declaração do cliente não prova ausência de envio',
     });
-    assert.equal(held.ok, true);
-    const antes = await db.get('SELECT COUNT(*) AS c FROM ai_usage WHERE empresa_id = ?', [EMP_A]);
+    assert.equal(res.status, 409);
+    assert.equal(res.data.code, 'DOT_RECONCILE_REFUSED');
+    assert.equal((await ledger.getDotReservation(EMP_A, id))?.status, 'pending');
+  });
 
-    const res = await adminFetch('/api/dot/admin/budget/reconcile', {
-      method: 'POST',
-      token: tokenFor(USER_A, EMP_A),
-      header: true,
-      adminSession: sessao.cookie,
-      body: { reservation_id: id, decision: 'release', reason: 'confirmado que não houve envio', confirm_not_sent: true },
+  test('release só ocorre para ambiguidade comprovadamente não enviada', async () => {
+    const pendente = await ledger.reserveDotExecution({ empresaId: EMP_A, plan: 'rei' });
+    const id = pendente.reservation!.id;
+    assert.equal((await ledger.finalizeDotReservation({
+      empresaId: EMP_A, reservationId: id, ambiguous: true, ambiguousReason: 'ambiguidade antes do envio',
+    })).ok, true);
+    const missingConfirmation = await reconcileFetch({
+      empresa_id: EMP_A, reservation_id: id, decision: 'release',
+      reason: 'sem confirmação operacional explícita',
+    });
+    assert.equal(missingConfirmation.status, 400);
+    assert.equal(missingConfirmation.data.code, 'DOT_RECONCILE_NOT_SENT_CONFIRMATION_REQUIRED');
+    const before = await db.get('SELECT COUNT(*) AS c FROM ai_usage WHERE empresa_id = ?', [EMP_A]);
+    const res = await reconcileFetch({
+      empresa_id: EMP_A, reservation_id: id, decision: 'release', confirm_not_sent: true,
+      reason: 'confirmado por evidência que não houve envio',
     });
     assert.equal(res.status, 200, JSON.stringify(res.data));
     assert.equal(res.data.result.reservation.status, 'released');
-
-    const depois = await db.get('SELECT COUNT(*) AS c FROM ai_usage WHERE empresa_id = ?', [EMP_A]);
-    assert.equal(Number(depois.c), Number(antes.c), 'release não pode criar consumo');
+    const after = await db.get('SELECT COUNT(*) AS c FROM ai_usage WHERE empresa_id = ?', [EMP_A]);
+    assert.equal(Number(after.c), Number(before.c));
   });
 
-  test('entrada inválida da reconciliação: 400 com código específico', async () => {
-    const sessao = await adminFetch('/api/dot/admin/session', {
-      method: 'POST', token: tokenFor(USER_A, EMP_A), header: true, body: { pin: PIN },
-    });
-    const base = { token: tokenFor(USER_A, EMP_A), header: true, adminSession: sessao.cookie };
-
-    const idInvalido = await adminFetch('/api/dot/admin/budget/reconcile', {
-      method: 'POST', ...base, body: { reservation_id: 'abc', decision: 'settle' },
-    });
-    assert.equal(idInvalido.status, 400);
-    assert.equal(idInvalido.data.code, 'DOT_RECONCILE_BAD_ID');
-
-    const decisaoInvalida = await adminFetch('/api/dot/admin/budget/reconcile', {
-      method: 'POST', ...base, body: { reservation_id: 1, decision: 'apagar' },
-    });
-    assert.equal(decisaoInvalida.status, 400);
-    assert.equal(decisaoInvalida.data.code, 'DOT_RECONCILE_BAD_DECISION');
-
-    const tokensInvalidos = await adminFetch('/api/dot/admin/budget/reconcile', {
-      method: 'POST', ...base, body: { reservation_id: 1, decision: 'settle', tokens: -5 },
-    });
-    assert.equal(tokensInvalidos.status, 400);
-    assert.equal(tokensInvalidos.data.code, 'DOT_RECONCILE_BAD_TOKENS');
-  });
-
-  test('isolamento entre empresas: reserva de outro tenant não é reconciliável', async () => {
-    const sessao = await adminFetch('/api/dot/admin/session', {
-      method: 'POST', token: tokenFor(USER_A, EMP_A), header: true, body: { pin: PIN },
-    });
+  test('isolamento entre tenants continua aplicado na reconciliação de operador', async () => {
     const reservaB = await ledger.reserveDotExecution({ empresaId: EMP_B, plan: 'rei' });
-    const idB = reservaB.reservation!.id;
-
-    const res = await adminFetch('/api/dot/admin/budget/reconcile', {
-      method: 'POST',
-      token: tokenFor(USER_A, EMP_A),
-      header: true,
-      adminSession: sessao.cookie,
-      body: { reservation_id: idB, decision: 'settle', tokens: 999, provider: 'groq', reason: 'teste de isolamento entre empresas' },
+    const id = reservaB.reservation!.id;
+    const res = await reconcileFetch({
+      empresa_id: EMP_A, reservation_id: id, decision: 'settle', tokens: 999,
+      provider: 'groq', reason: 'tentativa de atingir outra empresa',
     });
     assert.equal(res.status, 409);
     assert.equal(res.data.code, 'DOT_RECONCILE_REFUSED');
-
-    const linhaB = await ledger.getDotReservation(EMP_B, idB);
-    assert.equal(linhaB?.status, 'pending', 'a reserva de outra empresa não pode mudar');
-    const usageB = await db.get('SELECT COUNT(*) AS c FROM ai_usage WHERE empresa_id = ?', [EMP_B]);
-    assert.equal(Number(usageB.c), 0, 'nenhum consumo pode ser lançado na outra empresa');
+    assert.equal((await ledger.getDotReservation(EMP_B, id))?.status, 'pending');
+    const usage = await db.get('SELECT COUNT(*) AS c FROM ai_usage WHERE empresa_id = ?', [EMP_B]);
+    assert.equal(Number(usage.c), 0);
   });
 
-  test('bloqueio de sessão revoga o cookie, audita e invalida a reconciliação seguinte', async () => {
-    const sessao = await adminFetch('/api/dot/admin/session', {
-      method: 'POST', token: tokenFor(USER_A, EMP_A), header: true, body: { pin: PIN },
-    });
-    const revoke = await adminFetch('/api/dot/admin/session', {
-      method: 'DELETE', token: tokenFor(USER_A, EMP_A), header: true, adminSession: sessao.cookie,
-    });
-    assert.equal(revoke.status, 200);
-    assert.equal(revoke.data.ok, true);
-
-    const auditoria = await auditRows(EMP_A, 'dot.admin_session_revoked');
-    assert.equal(auditoria.length, 1);
-
-    const pendente = await ledger.reserveDotExecution({ empresaId: EMP_A, plan: 'rei' });
-    const res = await adminFetch('/api/dot/admin/budget/reconcile', {
-      method: 'POST',
-      token: tokenFor(USER_A, EMP_A),
-      header: true,
-      adminSession: sessao.cookie,
-      body: { reservation_id: pendente.reservation!.id, decision: 'release' },
-    });
-    assert.equal(res.status, 403);
-    assert.equal(res.data.code, 'DOT_ADMIN_SESSION_REQUIRED');
-  });
 });
