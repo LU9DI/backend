@@ -120,10 +120,6 @@ function dotRuntimeEnabled() { return process.env.FILTRA_DOT_ENABLED === '1'; }
 const app = express();
 app.set('trust proxy', 1);
 
-app.get('/api/live', (_req, res) => {
-  res.status(200).json({ ok: true, live: true, build: BUILD, time: new Date().toISOString() });
-});
-
 // Liveness is deliberately registered before parsers, CORS, metrics and
 // application middleware. Render's health check must remain a tiny, DB-free
 // response even while optional middleware or startup work is under pressure.
@@ -169,6 +165,10 @@ app.use((req, res, next) => {
     return mcpApp(req, res, next);
   }
   return next();
+});
+
+app.get('/api/live', (_req, res) => {
+  res.status(200).json({ ok: true, live: true, build: BUILD, time: new Date().toISOString() });
 });
 
 app.get('/api/ready', async (_req, res) => {
