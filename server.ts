@@ -119,6 +119,10 @@ function dotRuntimeEnabled() { return process.env.FILTRA_DOT_ENABLED === '1'; }
 
 const app = express();
 app.set('trust proxy', 1);
+
+// Liveness is deliberately registered before parsers, CORS, metrics and
+// application middleware. Render's health check must remain a tiny, DB-free
+// response even while optional middleware or startup work is under pressure.
 app.use(requestIdMiddleware);
 /**
  * Contexto de correlação por requisição (AsyncLocalStorage): tudo que for
