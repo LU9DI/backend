@@ -109,6 +109,36 @@ suite('Dot ledger — orçamento durável', () => {
     assert.equal(Number(persisted.c), 1);
   });
 
+  test('reserva cobre prompt estimado + teto de saída, e recusa quando a soma não cabe', async () => {
+    await resetEmpresa(EMPRESA_REI);
+    const accepted = await ledger.reserveDotExecution({
+      empresaId: EMPRESA_REI,
+      plan: 'rei',
+      inputTokensEstimate: 700,
+    });
+    assert.equal(accepted.ok, true);
+    assert.equal(accepted.snapshot.response_limit, 1800);
+    assert.equal(accepted.reservation?.tokens_reserved, 2500);
+    assert.equal((await ledger.getDotBudgetSnapshot(EMPRESA_REI, 'rei')).reserved, 2500);
+
+    await resetEmpresa(EMPRESA_REI);
+    await db.run(
+      "INSERT INTO ai_usage (empresa_id, tipo, tokens, provider, feature, criado_em) VALUES (?,?,?,?,?,datetime('now'))",
+      [EMPRESA_REI, 'dot_existing_usage', 598_500, 'groq', 'dot'],
+    );
+    const refused = await ledger.reserveDotExecution({
+      empresaId: EMPRESA_REI,
+      plan: 'rei',
+      inputTokensEstimate: 700,
+    });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.code, 'DOT_TOKEN_LIMIT');
+    assert.equal(refused.snapshot.remaining, 1500);
+    assert.equal(refused.snapshot.response_limit, 1800);
+    const rows = await db.all('SELECT id FROM dot_budget_reservations WHERE empresa_id = ?', [EMPRESA_REI]);
+    assert.equal(rows.length, 0, 'não deve iniciar chamada quando input + output estimados excedem o saldo');
+  });
+
   test('markSent só autoriza envio quando a transição pending foi aplicada', async () => {
     await resetEmpresa(EMPRESA_REI);
 
