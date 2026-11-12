@@ -47,7 +47,9 @@ export function buildCorsOptions(): CorsOptions {
       if (!origin) return callback(null, true);
       if (allowlist.includes(origin)) return callback(null, true);
       console.warn(`[cors] origem bloqueada: ${origin}`);
-      callback(new Error(`Origin não permitida: ${origin}`));
+      // Origem não autorizada não é erro interno: omite os cabeçalhos CORS.
+      // O navegador continuará impedido de ler a resposta, sem gerar HTTP 500.
+      callback(null, false);
     },
     credentials: true,
     exposedHeaders: EXPOSED_HEADERS,
