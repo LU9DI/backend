@@ -315,6 +315,7 @@ export function mountDotAdminRoutes(app: Express) {
       await writeAudit(getDb(), {
         action: 'dot.budget_reconciled',
         actor_user_id: req.user?.id || null,
+        actor_role: 'admin',
         empresa_id: empresaId,
         result: result.ok ? 'ok' : 'error',
         ip: clientIp(req),
