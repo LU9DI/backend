@@ -635,9 +635,10 @@ export async function finalizeDotReservation(params: {
 
 /**
  * Libera a reserva — SOMENTE quando houver comprovação de que a solicitação
- * não foi enviada ao provedor (ex.: falta de provedor configurado, rejeição
- * antes do envio). Chamadas com `provenNotSent=false` são recusadas: a
- * reserva continua comprometendo o orçamento até reconciliação segura.
+ * não foi processada pelo provedor. `provenNotSent` só é fornecido pelo
+ * caminho interno de falha após classificação do resultado do provedor; não
+ * existe endpoint público que permita ao tenant declarar essa evidência.
+ * Reconciliação manual usa sua própria guarda estrita de `sent_at`.
  */
 export async function releaseDotReservation(params: {
   empresaId: string;
@@ -665,7 +666,7 @@ export async function releaseDotReservation(params: {
       const updated = await tx.run(
         `UPDATE dot_budget_reservations
             SET status = 'released', tokens_real = 0, updated_at = ?, settled_at = ?
-          WHERE id = ? AND empresa_id = ? AND status = 'pending' AND sent_at IS NULL`,
+          WHERE id = ? AND empresa_id = ? AND status = 'pending'`,
         [now, now, id, empresaId],
       );
       const final = await tx.get(

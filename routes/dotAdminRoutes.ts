@@ -49,6 +49,15 @@ const pinSetupLimiter = rateLimit({
   message: { ok: false, error: 'Muitas tentativas. Aguarde alguns minutos.' },
 });
 
+// Limite próprio para operações de reconciliação auditadas por operador.
+const reconcileLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Muitas reconciliações. Aguarde alguns minutos.' },
+});
+
 function adminFail(res: Response, error: unknown) {
   const known = error instanceof DotAdminError;
   const status = known ? error.status : 500;
@@ -272,7 +281,7 @@ export function mountDotAdminRoutes(app: Express) {
 
   // Reconciliação controlada por operador da plataforma. O tenant e a decisão
   // são explicitados no corpo; o ledger ainda valida estado/ambiguidade sob lock.
-  app.post('/api/admin/dot/budget/reconcile', autenticarToken, pinSetupLimiter, async (req: AuthRequest, res: Response) => {
+  app.post('/api/admin/dot/budget/reconcile', autenticarToken, reconcileLimiter, async (req: AuthRequest, res: Response) => {
     try {
       if (!isAdminUser(req.user)) {
         return res.status(403).json({ ok: false, error: 'Somente operador da plataforma.', code: 'DOT_RECONCILE_PLATFORM_ADMIN_REQUIRED' });
