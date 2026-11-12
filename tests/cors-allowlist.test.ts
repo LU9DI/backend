@@ -35,8 +35,8 @@ test('allows the exact production frontend origins and rejects unknown origins',
     }
 
     const denied = await check('https://unknown-preview.example');
-    assert.ok(denied.error);
-    assert.notEqual(denied.allowed, true);
+    assert.equal(denied.error, null);
+    assert.equal(denied.allowed, false);
   } finally {
     if (saved.nodeEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = saved.nodeEnv;
     if (saved.cors === undefined) delete process.env.CORS_ORIGINS; else process.env.CORS_ORIGINS = saved.cors;
