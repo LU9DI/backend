@@ -324,6 +324,8 @@ export async function reserveDotExecution(params: {
   empresaId: string;
   plan?: string | null;
   responseLimit?: number;
+  /** Estimativa conservadora dos tokens de entrada (system + contexto + histórico + mensagem). */
+  inputTokensEstimate?: number;
   executionRef?: string | null;
   feature?: string;
 }): Promise<ReserveResult> {
@@ -332,11 +334,14 @@ export async function reserveDotExecution(params: {
   const normalizedPlan = normalizePlanForQuota(params.plan);
   const limit = getFeatureTokenLimit(normalizedPlan, feature);
   const feedbackLimit = getTokenLimit(normalizedPlan);
-  const needed = int(params.responseLimit) || dotResponseTokenLimit(normalizedPlan);
+  const responseLimit = int(params.responseLimit) || dotResponseTokenLimit(normalizedPlan);
+  // A reserva cobre o pior caso da chamada inteira: prompt de entrada + teto de saída.
+  const inputTokensEstimate = int(params.inputTokensEstimate);
+  const needed = responseLimit + inputTokensEstimate;
   const base: DotBudgetSnapshot = {
     empresa_id: empresaId, plan: normalizedPlan, feature, limit,
     feedback_limit: feedbackLimit, used: 0, reserved: 0, ambiguous: 0,
-    remaining: 0, response_limit: needed, warning: false,
+    remaining: 0, response_limit: responseLimit, warning: false,
     exhausted: limit <= 0, percent: 0, pending_reservations: 0,
   };
   if (!empresaId || limit <= 0) {
