@@ -84,6 +84,7 @@ async function fetchPosts(): Promise<ProductHuntPost[]> {
       authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ query, variables: { first: BATCH_SIZE } }),
+    signal: AbortSignal.timeout(Math.max(3_000, Math.min(30_000, Number(process.env.PRODUCT_HUNT_REQUEST_TIMEOUT_MS || 15_000)))),
   });
 
   const body: any = await response.json().catch(() => ({}));
@@ -194,7 +195,9 @@ export async function runProductHuntAcquisitionOnce(): Promise<{ ok: boolean; fe
 export async function startProductHuntAcquisition() {
   if (started || !ENABLED) return;
   started = true;
-  await runProductHuntAcquisitionOnce();
+  // Never block API bootstrap on a third-party provider. Schedule the first
+  // sync after startup and keep the recurring timer active independently.
   setInterval(() => void runProductHuntAcquisitionOnce(), INTERVAL_MS);
+  setTimeout(() => void runProductHuntAcquisitionOnce(), 0);
   console.log(`[product-hunt-acquisition] enabled; interval=${INTERVAL_MS}ms batch=${BATCH_SIZE}`);
 }
