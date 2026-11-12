@@ -6,6 +6,8 @@ const BATCH_SIZE = Math.max(1, Math.min(50, Number(process.env.PRODUCT_HUNT_ACQU
 const TOKEN = () => (process.env.PRODUCT_HUNT_ACCESS_TOKEN || '').trim();
 const COMMERCIAL_APPROVED = () => process.env.PRODUCT_HUNT_COMMERCIAL_APPROVED === '1';
 const WEBSITE_TIMEOUT_MS = Math.max(5000, Number(process.env.PRODUCT_HUNT_WEBSITE_TIMEOUT_MS || 12000));
+const REQUEST_TIMEOUT_MS = Math.max(3_000, Math.min(30_000, Number(process.env.PRODUCT_HUNT_REQUEST_TIMEOUT_MS) || 15_000));
+const STARTUP_DELAY_MS = 30_000;
 const CONTACT_RE = /(?:contact|contato|contacto|fale|sales|commercial|business|partnership|support|about)/i;
 
 let started = false;
@@ -84,7 +86,7 @@ async function fetchPosts(): Promise<ProductHuntPost[]> {
       authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ query, variables: { first: BATCH_SIZE } }),
-    signal: AbortSignal.timeout(Math.max(3_000, Math.min(30_000, Number(process.env.PRODUCT_HUNT_REQUEST_TIMEOUT_MS || 15_000)))),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 
   const body: any = await response.json().catch(() => ({}));
@@ -198,6 +200,6 @@ export async function startProductHuntAcquisition() {
   // Never block API bootstrap on a third-party provider. Schedule the first
   // sync after startup and keep the recurring timer active independently.
   setInterval(() => void runProductHuntAcquisitionOnce(), INTERVAL_MS);
-  setTimeout(() => void runProductHuntAcquisitionOnce(), 0);
-  console.log(`[product-hunt-acquisition] enabled; interval=${INTERVAL_MS}ms batch=${BATCH_SIZE}`);
+  setTimeout(() => void runProductHuntAcquisitionOnce(), STARTUP_DELAY_MS);
+  console.log(`[product-hunt-acquisition] enabled; interval=${INTERVAL_MS}ms initial_delay=${STARTUP_DELAY_MS}ms batch=${BATCH_SIZE}`);
 }
