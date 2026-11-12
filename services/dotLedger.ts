@@ -812,7 +812,7 @@ export async function reconcileDotBudget(params: {
   if (params.decision !== 'settle' && params.decision !== 'release') {
     return { ok: false, reservation: null, reason: 'decisão de reconciliação inválida' };
   }
-  if (params.decision === 'settle' && (!Number.isSafeInteger(params.tokens) || Number(params.tokens) <= 0)) {
+  if (params.decision === 'settle' && (!Number.isSafeInteger(Number(params.tokens)) || Number(params.tokens) <= 0)) {
     return { ok: false, reservation: null, reason: 'settle exige tokens reais inteiros maiores que zero' };
   }
   await assertDotLedgerSchema();

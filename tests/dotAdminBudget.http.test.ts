@@ -337,6 +337,10 @@ suite('Dot admin — orçamento por HTTP (JWT + PIN + sessão + reconciliação)
 
     const pendente = await ledger.reserveDotExecution({ empresaId: EMP_A, plan: 'rei' });
     const id = pendente.reservation!.id;
+    const held = await ledger.finalizeDotReservation({
+      empresaId: EMP_A, reservationId: id, ambiguous: true, ambiguousReason: 'resultado do provedor desconhecido',
+    });
+    assert.equal(held.ok, true);
 
     const res = await adminFetch('/api/dot/admin/budget/reconcile', {
       method: 'POST',
@@ -459,6 +463,10 @@ suite('Dot admin — orçamento por HTTP (JWT + PIN + sessão + reconciliação)
     });
     const pendente = await ledger.reserveDotExecution({ empresaId: EMP_A, plan: 'rei' });
     const id = pendente.reservation!.id;
+    const held = await ledger.finalizeDotReservation({
+      empresaId: EMP_A, reservationId: id, ambiguous: true, ambiguousReason: 'resultado do provedor desconhecido',
+    });
+    assert.equal(held.ok, true);
     const antes = await db.get('SELECT COUNT(*) AS c FROM ai_usage WHERE empresa_id = ?', [EMP_A]);
 
     const res = await adminFetch('/api/dot/admin/budget/reconcile', {
