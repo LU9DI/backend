@@ -7,6 +7,7 @@
  * autorização de outras rotas: quem autoriza é a sessão emitida aqui.
  */
 import type { Express, Request, Response } from 'express';
+import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
 import rateLimit from 'express-rate-limit';
 import { resolveDotGate, type DotGateResult } from '../services/dotAccessGate.js';
 import {
@@ -255,22 +256,36 @@ export function mountDotAdminRoutes(app: Express) {
     }
   });
 
-  // Reconciliação explícita de reservas abertas/ambíguas. Exige a SESSÃO
-  // administrativa do Dot (PIN) além do JWT do proprietário — mesma barreira
-  // das demais operações sensíveis. Sem sessão, o Dot continua desbloqueável
-  // só pelo PIN, nunca por esta rota.
+  // Reconciliação por proprietário de tenant foi desativada: o proprietário
+  // é parte interessada no próprio orçamento e não pode declarar o consumo.
+  // A consulta continua disponível em GET /api/dot/admin/budget.
   app.post('/api/dot/admin/budget/reconcile', async (req: Request, res: Response) => {
+    const gate = await resolveDotGate(req);
+    if (!gate.allowed) return denyGate(res, gate);
+    ensureOwner(gate);
+    return res.status(403).json({
+      ok: false,
+      error: 'A reconciliação do ledger é exclusiva de operador da plataforma.',
+      code: 'DOT_RECONCILE_PLATFORM_ADMIN_REQUIRED',
+    });
+  });
+
+  // Reconciliação controlada por operador da plataforma. O tenant e a decisão
+  // são explicitados no corpo; o ledger ainda valida estado/ambiguidade sob lock.
+  app.post('/api/admin/dot/budget/reconcile', autenticarToken, pinSetupLimiter, async (req: AuthRequest, res: Response) => {
     try {
-      const gate = await resolveDotGate(req);
-      if (!gate.allowed) return denyGate(res, gate);
-      ensureOwner(gate);
-      const empresaId = gate.empresaId as string;
+      if (!isAdminUser(req.user)) {
+        return res.status(403).json({ ok: false, error: 'Somente operador da plataforma.', code: 'DOT_RECONCILE_PLATFORM_ADMIN_REQUIRED' });
+      }
       ensureHeader(req);
-      await requireDotAdminSession(req, empresaId, gate.userId || null);
       const body = req.body || {};
+      const empresaId = typeof body?.empresa_id === 'string' ? body.empresa_id.trim() : '';
+      if (!empresaId || empresaId.length > 128) {
+        return res.status(400).json({ ok: false, error: 'empresa_id inválido.', code: 'DOT_RECONCILE_BAD_TENANT' });
+      }
       const reservationId = Number(body?.reservation_id);
       const decision = String(body?.decision || '');
-      if (!Number.isFinite(reservationId) || reservationId <= 0 || !Number.isInteger(reservationId)) {
+      if (!Number.isSafeInteger(reservationId) || reservationId <= 0) {
         return res.status(400).json({ ok: false, error: 'reservation_id inválido (inteiro positivo obrigatório).', code: 'DOT_RECONCILE_BAD_ID' });
       }
       if (decision !== 'settle' && decision !== 'release') {
@@ -278,26 +293,15 @@ export function mountDotAdminRoutes(app: Express) {
       }
       const tokensRaw = decision === 'settle' ? body?.tokens : undefined;
       const tokens = tokensRaw === undefined || tokensRaw === null ? null : Number(tokensRaw);
-      if (decision === 'settle' && (!Number.isSafeInteger(tokens) || Number(tokens) <= 0)) {
+      if (decision === 'settle' && (!Number.isSafeInteger(Number(tokens)) || Number(tokens) <= 0)) {
         return res.status(400).json({ ok: false, error: 'settle exige tokens inteiros maiores que zero.', code: 'DOT_RECONCILE_BAD_TOKENS' });
       }
       const reason = typeof body?.reason === 'string' ? body.reason.trim().slice(0, 500) : '';
       if (reason.length < 10) {
-        return res.status(400).json({
-          ok: false,
-          error: 'Informe o motivo operacional da reconciliação (mínimo de 10 caracteres).',
-          code: 'DOT_RECONCILE_REASON_REQUIRED',
-        });
+        return res.status(400).json({ ok: false, error: 'Informe o motivo operacional (mínimo de 10 caracteres).', code: 'DOT_RECONCILE_REASON_REQUIRED' });
       }
-      // "release" é uma declaração operacional de que a chamada não foi
-      // enviada/processada. Exigir confirmação explícita evita liberar por
-      // engano uma reserva que pode representar cobrança real do provedor.
       if (decision === 'release' && body?.confirm_not_sent !== true) {
-        return res.status(400).json({
-          ok: false,
-          error: 'Para liberar, confirme explicitamente que a chamada não foi enviada ao provedor.',
-          code: 'DOT_RECONCILE_NOT_SENT_CONFIRMATION_REQUIRED',
-        });
+        return res.status(400).json({ ok: false, error: 'Confirme que a chamada não foi enviada ao provedor.', code: 'DOT_RECONCILE_NOT_SENT_CONFIRMATION_REQUIRED' });
       }
       const provider = typeof body?.provider === 'string' ? body.provider.slice(0, 20) : null;
       const result = await reconcileDotBudget({
@@ -310,7 +314,7 @@ export function mountDotAdminRoutes(app: Express) {
       });
       await writeAudit(getDb(), {
         action: 'dot.budget_reconciled',
-        actor_user_id: gate.userId || null,
+        actor_user_id: req.user?.id || null,
         empresa_id: empresaId,
         result: result.ok ? 'ok' : 'error',
         ip: clientIp(req),

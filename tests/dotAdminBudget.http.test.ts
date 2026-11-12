@@ -67,6 +67,19 @@ function tokenFor(userId: string, empresaId: string, role?: string) {
   return signAccessToken({ id: userId, nome_funcionario: 'Dono Teste', empresa_id: empresaId, role });
 }
 
+function platformAdminToken() {
+  return signAccessToken({ id: 'platform-admin-test', nome_funcionario: 'Operador Plataforma', empresa_id: 'admin', role: 'admin' });
+}
+
+async function reconcileFetch(body: unknown, opts: { header?: boolean; token?: string } = {}) {
+  return adminFetch('/api/admin/dot/budget/reconcile', {
+    method: 'POST',
+    token: opts.token || platformAdminToken(),
+    header: opts.header !== false,
+    body,
+  });
+}
+
 function cookieFrom(res: Response): string {
   const raw = typeof (res.headers as any).getSetCookie === 'function'
     ? (res.headers as any).getSetCookie()
