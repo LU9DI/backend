@@ -4,6 +4,8 @@ const ENABLED = process.env.HUBSPOT_ACQUISITION_SYNC_ENABLED === '1';
 const INTERVAL_MS = Math.max(60_000, Number(process.env.HUBSPOT_ACQUISITION_SYNC_INTERVAL_MS || 300_000));
 const BATCH_SIZE = Math.max(1, Math.min(10, Number(process.env.HUBSPOT_ACQUISITION_SYNC_BATCH_SIZE || 10)));
 const TOKEN = () => (process.env.HUBSPOT_PRIVATE_APP_TOKEN || process.env.HUBSPOT_ACCESS_TOKEN || '').trim();
+const REQUEST_TIMEOUT_MS = Math.max(3_000, Math.min(30_000, Number(process.env.HUBSPOT_ACQUISITION_REQUEST_TIMEOUT_MS) || 15_000));
+const STARTUP_DELAY_MS = 30_000;
 
 let started = false;
 let running = false;
@@ -19,7 +21,11 @@ async function hubspot(path: string, init: RequestInit = {}) {
   headers.set('Authorization', `Bearer ${token}`);
   headers.set('Content-Type', 'application/json');
   headers.set('Accept', 'application/json');
-  const response = await fetch(`https://api.hubapi.com${path}`, { ...init, headers });
+  const response = await fetch(`https://api.hubapi.com${path}`, {
+    ...init,
+    headers,
+    signal: init.signal || AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
   const body: any = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`HubSpot HTTP ${response.status}: ${clean(body?.message || body?.error || 'unknown', 800)}`);
   return body;
@@ -107,7 +113,9 @@ export async function runHubSpotAcquisitionSyncOnce() {
 export async function startHubSpotAcquisitionSync() {
   if (started || !ENABLED) return;
   started = true;
-  await runHubSpotAcquisitionSyncOnce();
+  // Never block API bootstrap on a third-party provider. Schedule the first
+  // sync after startup and keep the recurring timer active independently.
   setInterval(() => void runHubSpotAcquisitionSyncOnce(), INTERVAL_MS);
-  console.log(`[hubspot-acquisition] enabled; interval=${INTERVAL_MS}ms batch=${BATCH_SIZE}`);
+  setTimeout(() => void runHubSpotAcquisitionSyncOnce(), STARTUP_DELAY_MS);
+  console.log(`[hubspot-acquisition] enabled; interval=${INTERVAL_MS}ms initial_delay=${STARTUP_DELAY_MS}ms batch=${BATCH_SIZE}`);
 }
