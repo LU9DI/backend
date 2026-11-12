@@ -993,6 +993,18 @@ export function mountDotRoutes(app: Express) {
       }
     }
 
+    // Prepara exatamente o prompt que será enviado antes de admitir a chamada.
+    // A estimativa usa 1 token por 3 caracteres (mais conservadora que /4) e
+    // inclui system, contexto, histórico e mensagem; a reserva soma ainda o teto de saída.
+    const responseLimit = dotResponseTokenLimit(access.plan);
+    const responseSystem = `${SYSTEM}
+ORÇAMENTO DESTA RESPOSTA: até ${responseLimit} tokens de saída.
+CONTEXTO: ${contextResult.decision.mode}. ${contextResult.decision.reason}
+REGRA DE FRESCOR: use fatos persistidos do contexto quando suficientes; quando a pergunta pedir estado atual, causa, impacto, comparação, recomendação ou decisão, raciocine novamente com os dados verificados nesta solicitação.
+Entregue uma resposta completa dentro desse orçamento. Priorize, nesta ordem: conclusão, evidências, impacto, recomendação e próximo passo. Evite introduções e repetições desnecessárias.`;
+    const conversationPrompt = buildConversation(contextResult.context, history, message);
+    const inputTokensEstimate = Math.ceil((responseSystem.length + conversationPrompt.length) / 3) + 64;
+
     // Trava final: reserva DURÁVEL (`services/dotLedger.ts`). Demonstração não
     // reserva (não há empresa para debitar); conta autenticada segue o ledger
     // completo: reserva -> envio marcado -> finalização com consumo real.
@@ -1001,6 +1013,7 @@ export function mountDotRoutes(app: Express) {
       ? await reserveDotExecution({
           empresaId: companyId,
           plan: access.plan,
+          inputTokensEstimate,
           executionRef: 'dot_chat:' + sessionId + ':' + Date.now(),
         })
       : undefined;
@@ -1038,8 +1051,7 @@ export function mountDotRoutes(app: Express) {
     }
 
     const activeReservation = reservation?.reservation as DotReservation | undefined;
-    const responseLimit = tokenBudget?.response_limit ?? dotResponseTokenLimit(access.plan);
-    const reservedTokens = responseLimit;
+    const reservedTokens = activeReservation?.tokens_reserved ?? responseLimit;
     let providerCalled = false;
 
     // Marca o envio ANTES do provedor: o sweep nunca libera esta reserva sem
@@ -1054,18 +1066,12 @@ export function mountDotRoutes(app: Express) {
     }
 
     try {
-      const responseSystem = `${SYSTEM}
-ORÇAMENTO DESTA RESPOSTA: até ${responseLimit} tokens de saída.
-CONTEXTO: ${contextResult.decision.mode}. ${contextResult.decision.reason}
-REGRA DE FRESCOR: use fatos persistidos do contexto quando suficientes; quando a pergunta pedir estado atual, causa, impacto, comparação, recomendação ou decisão, raciocine novamente com os dados verificados nesta solicitação.
-Entregue uma resposta completa dentro desse orçamento. Priorize, nesta ordem: conclusão, evidências, impacto, recomendação e próximo passo. Evite introduções e repetições desnecessárias.`;
-
       const routing = selectDotModel(message);
       providerCalled = true;
       idempotencyState.providerAttempted = true;
       const result = await callAI(
         responseSystem,
-        buildConversation(contextResult.context, history, message),
+        conversationPrompt,
         responseLimit,
         0.45,
         {
