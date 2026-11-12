@@ -446,7 +446,7 @@ export async function markDotReservationSent(params: {
       const updated = await tx.run(
         `UPDATE dot_budget_reservations
             SET sent_at = COALESCE(sent_at, ?), updated_at = ?
-          WHERE id = ? AND empresa_id = ? AND status = 'pending' AND sent_at IS NULL`,
+          WHERE id = ? AND empresa_id = ? AND status = 'pending'`,
         [now, now, id, empresaId],
       );
       const row = await tx.get(
@@ -665,7 +665,7 @@ export async function releaseDotReservation(params: {
       const updated = await tx.run(
         `UPDATE dot_budget_reservations
             SET status = 'released', tokens_real = 0, updated_at = ?, settled_at = ?
-          WHERE id = ? AND empresa_id = ? AND status = 'pending'`,
+          WHERE id = ? AND empresa_id = ? AND status = 'pending' AND sent_at IS NULL`,
         [now, now, id, empresaId],
       );
       const final = await tx.get(
