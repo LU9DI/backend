@@ -770,7 +770,13 @@ export function mountDotRoutes(app: Express) {
       return res.json({ ok: true, explanation: redactSensitive(result.text), demo: access.demo });
     } catch (error: any) {
       if (companyId && reservationId) {
-        const settlement = await settleDotCallFailure({ error, providerCalled: true, empresaId: companyId, reservationId, reservedTokens: 260 });
+        const settlement = await settleDotCallFailure({
+          error,
+          providerCalled: true,
+          empresaId: companyId,
+          reservationId,
+          reservedTokens: reservation?.reservation?.tokens_reserved ?? 260,
+        });
         incCounter(settlement.provenNotSent ? 'dot_explain_failed_safe' : 'dot_explain_ambiguous');
         logEvent(settlement.provenNotSent ? 'warn' : 'error', 'dot_explain_failed', {
           outcome: settlement.outcome,
