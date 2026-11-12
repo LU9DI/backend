@@ -693,29 +693,7 @@ export function mountDotRoutes(app: Express) {
     const responseText = cleanMessage(req.body?.response_text).slice(0, 5000);
     if (!responseText) return res.status(400).json({ error: 'Resposta do Dot obrigatória.' });
 
-    // Demonstração não reserva (não há empresa para debitar); conta autenticada
-    // usa o MESMO ledger da conversa: reserva -> envio -> finalização real.
     const companyId = access.demo ? null : access.empresaId || null;
-    const reservation = companyId
-      ? await reserveDotExecution({
-          empresaId: companyId,
-          plan: access.plan,
-          executionRef: 'dot_explain:' + companyId + ':' + Date.now(),
-          responseLimit: 260,
-        })
-      : undefined;
-    if (companyId && reservation && !reservation.ok) {
-      if (!reservation.unavailable && reservation.code === 'DOT_TOKEN_LIMIT') {
-        incCounter('dot_budget_exceeded');
-        logEvent('warn', 'dot_budget_exceeded', { route: '/api/dot/explain' });
-        return res.status(429).json({ ok: false, error: 'O orçamento de IA do plano para este período foi atingido.', code: 'DOT_TOKEN_LIMIT', token_scope: DOT_FEATURE, response_limit: reservation.snapshot.response_limit });
-      }
-      incCounter('dot_budget_unavailable');
-      logEvent('error', 'dot_budget_unavailable', { stage: 'reserve', route: '/api/dot/explain' });
-      return res.status(503).json({ ok: false, error: 'O controle de orçamento do Filtra Dot está temporariamente indisponível.', code: 'DOT_BUDGET_UNAVAILABLE' });
-    }
-
-    const reservationId = reservation?.reservation?.id ?? null;
 
     // Fase 1 — contexto e prompt (antes de qualquer envio): se falhar, nada foi
     // enviado ao provedor e a reserva pode ser liberada com segurança.
@@ -737,6 +715,30 @@ export function mountDotRoutes(app: Express) {
       console.error('[Filtra Dot explain]', error?.message || error);
       return res.status(503).json({ error: 'Não foi possível explicar a evidência desta resposta agora.' });
     }
+
+    // Admissão financeira cobre prompt completo (system + contexto + resposta)
+    // e o teto de saída, antes de qualquer envio ao provedor.
+    const inputTokensEstimate = Math.ceil((EXPLAIN_SYSTEM_PROMPT.length + prompt.length) / 3) + 64;
+    const reservation = companyId
+      ? await reserveDotExecution({
+          empresaId: companyId,
+          plan: access.plan,
+          responseLimit: 260,
+          inputTokensEstimate,
+          executionRef: 'dot_explain:' + companyId + ':' + Date.now(),
+        })
+      : undefined;
+    if (companyId && reservation && !reservation.ok) {
+      if (!reservation.unavailable && reservation.code === 'DOT_TOKEN_LIMIT') {
+        incCounter('dot_budget_exceeded');
+        logEvent('warn', 'dot_budget_exceeded', { route: '/api/dot/explain' });
+        return res.status(429).json({ ok: false, error: 'O orçamento de IA do plano para este período foi atingido.', code: 'DOT_TOKEN_LIMIT', token_scope: DOT_FEATURE, response_limit: reservation.snapshot.response_limit });
+      }
+      incCounter('dot_budget_unavailable');
+      logEvent('error', 'dot_budget_unavailable', { stage: 'reserve', route: '/api/dot/explain' });
+      return res.status(503).json({ ok: false, error: 'O controle de orçamento do Filtra Dot está temporariamente indisponível.', code: 'DOT_BUDGET_UNAVAILABLE' });
+    }
+    const reservationId = reservation?.reservation?.id ?? null;
 
     // Fase 2 — chamada ao provedor. A marca precede o envio; o sweep nunca
     // libera esta reserva sem finalização.
