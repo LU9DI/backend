@@ -855,6 +855,29 @@ async function migrateDotHttpIdempotency(db: Database | PgDatabase): Promise<voi
 }
 
 /**
+ * Ledger e idempotência são privados do backend. Na Data API do Supabase,
+ * clientes anon/authenticated não devem ler nem gravar estas tabelas.
+ * O backend usa a conexão privilegiada; RLS permanece habilitado como defesa
+ * adicional contra grants acidentais.
+ */
+async function migrateDotPrivateLedgerRls(db: Database | PgDatabase): Promise<void> {
+  if (!isPgDatabase(db)) return;
+  await db.run('ALTER TABLE public.dot_budget_reservations ENABLE ROW LEVEL SECURITY');
+  await db.run('ALTER TABLE public.dot_http_idempotency ENABLE ROW LEVEL SECURITY');
+  await db.run(`REVOKE ALL ON TABLE public.dot_budget_reservations, public.dot_http_idempotency FROM PUBLIC`);
+  // PostgreSQL local de CI não necessariamente possui roles do Supabase.
+  // No Supabase, revoga explicitamente os grants dos papéis da Data API.
+  await db.run(`DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+      EXECUTE 'REVOKE ALL ON TABLE public.dot_budget_reservations, public.dot_http_idempotency FROM anon';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+      EXECUTE 'REVOKE ALL ON TABLE public.dot_budget_reservations, public.dot_http_idempotency FROM authenticated';
+    END IF;
+  END $$`);
+}
+
+/**
  * Sequência central de inicialização. Idempotente.
  * Em PostgreSQL roda inteira sob o advisory lock global, em uma conexão
  * dedicada, garantindo que processos concorrentes não executem DDL ao mesmo
@@ -871,6 +894,7 @@ export async function runCentralMigrations(db: Database | PgDatabase): Promise<v
     await migrateDotActionSchema(db);
     await migrateDotBudgetLedger(db);
     await migrateDotHttpIdempotency(db);
+    if (isPgDatabase(db)) await migrateDotPrivateLedgerRls(db);
   };
 
   if (isPgDatabase(db)) {

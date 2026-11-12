@@ -265,6 +265,7 @@ export function mountDotAdminRoutes(app: Express) {
       if (!gate.allowed) return denyGate(res, gate);
       ensureOwner(gate);
       const empresaId = gate.empresaId as string;
+      ensureHeader(req);
       await requireDotAdminSession(req, empresaId, gate.userId || null);
       const body = req.body || {};
       const reservationId = Number(body?.reservation_id);
@@ -277,8 +278,8 @@ export function mountDotAdminRoutes(app: Express) {
       }
       const tokensRaw = decision === 'settle' ? body?.tokens : undefined;
       const tokens = tokensRaw === undefined || tokensRaw === null ? null : Number(tokensRaw);
-      if (tokens !== null && (!Number.isFinite(tokens) || tokens < 0)) {
-        return res.status(400).json({ ok: false, error: 'tokens deve ser um número >= 0.', code: 'DOT_RECONCILE_BAD_TOKENS' });
+      if (decision === 'settle' && (!Number.isSafeInteger(tokens) || Number(tokens) <= 0)) {
+        return res.status(400).json({ ok: false, error: 'settle exige tokens inteiros maiores que zero.', code: 'DOT_RECONCILE_BAD_TOKENS' });
       }
       const reason = typeof body?.reason === 'string' ? body.reason.trim().slice(0, 500) : '';
       if (reason.length < 10) {
