@@ -190,3 +190,36 @@ Condições para encerrar a contenção:
    como pré-requisito para escalar/uso pleno;
 4. manter a instância única até o ledger durável estar implantado;
 5. ativar observabilidade/alertas (A1–A12) para cobrir F6.
+
+## 8. Fechamento da Missão 5 (contenção e preparação)
+
+**Intenção da habilitação:** não há registro de aprovação; pelo contrário,
+`docs/DOT_PRODUCAO.md` §2 instrui “manter `FILTRA_DOT_FORCE_ON` desligado até
+validar carga/idempotência/recuperação em produção” e o checklist de ativação
+está “preparado, não aplicado”. Logo, a presença das flags **não** representa
+aprovação.
+
+**Contenção:** procedimento exato em
+`docs/DOT_PRODUCTION_CONTAINMENT_RUNBOOK.md`, com ferramenta somente leitura
+`scripts/dot-containment-check.ts` (`--expect disabled`). Execução do script
+contra produção em 2026-11-11:
+
+```json
+{"expect":"enabled","ok":true,"summary":{"live_status":200,"health_status":200,
+ "dot_status_status":200,"dot_status_enabled":false,
+ "scheduler_timer_active":true,"worker_timer_active":true,"preferences_status":403}}
+```
+
+e, para `--expect disabled`, exit **1** com os problemas esperados (status 200,
+timers ativos, preferences 403) — confirmando que a contenção ainda **não** foi
+aplicada.
+
+**Correção técnica:** `8ae072f` está no PR #144 (HEAD anterior a este commit);
+os 6 testes de `tests/dotTimerGates.test.ts` passam, e todos os pontos de
+start/wake do código de produção estão em `server.ts` dentro do bloco
+`FILTRA_DOT_ENABLED=1`; o shutdown do PR drena scheduler e worker antes de
+fechar o pool. Nenhuma rota monta timers por conta própria.
+
+**Financeiro:** revisão em `docs/DOT_FINANCIAL_CONTROLS.md` — chat com
+idempotência + ledger; `explain` com ledger e **sem** idempotência; background
+sem consumo; contadores não são usados como proteção.
