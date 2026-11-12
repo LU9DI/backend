@@ -239,20 +239,32 @@ async function osmWebsiteEmails(url: string) {
     return [...found].slice(0, 5);
   } catch { return []; }
 }
+const OSM_RUN_TIMEOUT_MS = Math.max(15_000, Math.min(90_000, Number(process.env.ACQUISITION_OSM_RUN_TIMEOUT_MS) || 45_000));
+const OSM_ENDPOINT_TIMEOUT_MS = Math.max(3_000, Math.min(20_000, Number(process.env.ACQUISITION_OSM_ENDPOINT_TIMEOUT_MS) || 12_000));
+const OSM_MAX_WEBSITE_CANDIDATES = Math.max(1, Math.min(16, Number(process.env.ACQUISITION_OSM_MAX_WEBSITE_CANDIDATES) || 8));
+
 async function openStreetMapProvider(limit: number, existingEmails = new Set<string>()) {
+  const startedAt = Date.now();
+  const deadline = startedAt + OSM_RUN_TIMEOUT_MS;
   const target = Math.min(100, Math.max(1, limit));
   const elements: any[] = [];
   for (const city of OSM_CITIES) {
+    if (Date.now() >= deadline) {
+      console.warn('[acquisition-osm] discovery deadline reached; stopping remaining cities');
+      break;
+    }
     try {
       let data: any = null;
       let lastError: unknown = null;
       for (const endpoint of OSM_URLS) {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) break;
         try {
           const response = await fetch(endpoint, {
             method: 'POST',
             headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
             body: 'data=' + encodeURIComponent(osmQuery(city)),
-            signal: AbortSignal.timeout(75000),
+            signal: AbortSignal.timeout(Math.max(1_000, Math.min(OSM_ENDPOINT_TIMEOUT_MS, remainingMs))),
           });
           if (!response.ok) throw new Error(`Overpass HTTP ${response.status}`);
           data = await response.json();
@@ -288,7 +300,7 @@ async function openStreetMapProvider(limit: number, existingEmails = new Set<str
   }).slice(0,target*4);
   const leads:any[]=[]; const seen=new Set<string>();
   const direct = ranked.filter(({element}: any) => { const email=osmEmail(element?.tags || {}); return Boolean(email) && !existingEmails.has(email); }).slice(0, target);
-  const website = ranked.filter(({element}: any) => !osmEmail(element?.tags || {}) && Boolean(osmWebsite(element?.tags || {}))).slice(0, 48);
+  const website = ranked.filter(({element}: any) => !osmEmail(element?.tags || {}) && Boolean(osmWebsite(element?.tags || {}))).slice(0, OSM_MAX_WEBSITE_CANDIDATES);
   const candidates = [...direct, ...website];
   for(let i=0;i<candidates.length && leads.length<target;i+=8){
     const results=await Promise.all(candidates.slice(i,i+8).map(async ({element,city})=>{
@@ -311,7 +323,7 @@ async function openStreetMapProvider(limit: number, existingEmails = new Set<str
       if(leads.length>=target) break;
     }
   }
-  console.log(`[acquisition-osm] done leads=${leads.length}`);
+  console.log(`[acquisition-osm] done leads=${leads.length} discovery_ms=${Math.min(Date.now() - startedAt, OSM_RUN_TIMEOUT_MS)} website_candidates=${website.length}`);
   return {leads};
 }
 
