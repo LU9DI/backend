@@ -73,6 +73,48 @@ test('PostgreSQL: a tabela do ledger e o índice único parcial existem após as
   assert.ok(index, 'índice único ux_dot_budget_reservations_ai_usage deve existir');
 });
 
+test('PostgreSQL: migrações habilitam RLS nas tabelas privadas do ledger', async () => {
+  const rows = await db.all(
+    `SELECT c.relname, c.relrowsecurity
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public'
+        AND c.relname IN ('dot_budget_reservations', 'dot_http_idempotency')`,
+  );
+  assert.equal(rows.length, 2, 'as duas tabelas privadas devem existir');
+  for (const row of rows) assert.equal(row.relrowsecurity, true, `RLS deve estar ativo em ${row.relname}`);
+});
+
+test('PostgreSQL: reconciliação exige ambiguidade e liquida tokens dentro da transação', async () => {
+  await reset(EMPRESA);
+  const reserved = await ledger.reserveDotExecution({ empresaId: EMPRESA, plan: 'rei' });
+  const id = reserved.reservation!.id;
+
+  const premature = await ledger.reconcileDotBudget({
+    empresaId: EMPRESA, reservationId: id, decision: 'settle', tokens: 1500,
+  });
+  assert.equal(premature.ok, false);
+  assert.match(String(premature.reason), /ambíguas/);
+  assert.equal((await ledger.getDotReservation(EMPRESA, id))?.status, 'pending');
+
+  const ambiguous = await ledger.finalizeDotReservation({
+    empresaId: EMPRESA, reservationId: id, ambiguous: true, ambiguousReason: 'resultado incerto',
+  });
+  assert.equal(ambiguous.ok, true);
+
+  const settled = await ledger.reconcileDotBudget({
+    empresaId: EMPRESA, reservationId: id, decision: 'settle', tokens: 333, provider: 'groq',
+  });
+  assert.equal(settled.ok, true);
+  assert.equal(settled.reservation?.status, 'settled');
+  const usage = await db.get(
+    'SELECT COUNT(*) AS c, COALESCE(SUM(tokens),0) AS t FROM ai_usage WHERE empresa_id = ? AND feature = ?',
+    [EMPRESA, 'dot'],
+  );
+  assert.equal(Number(usage.c), 1);
+  assert.equal(Number(usage.t), 333);
+});
+
 test('PostgreSQL: reserva e finalização gravam consumo real e liberam a reserva', async () => {
   await reset(EMPRESA);
   const reserved = await ledger.reserveDotExecution({ empresaId: EMPRESA, plan: 'rei' });
