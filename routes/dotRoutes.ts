@@ -709,9 +709,7 @@ export function mountDotRoutes(app: Express) {
         'Explique apenas as evidências e limitações observáveis que sustentam a resposta. Não revele raciocínio interno.',
       ].join('\n\n');
     } catch (error: any) {
-      if (companyId && reservationId) {
-        await releaseDotReservation({ empresaId: companyId, reservationId, provenNotSent: true, reason: 'falha antes do envio ao provedor' });
-      }
+      // O prompt ainda não foi admitido no ledger nem enviado ao provedor.
       console.error('[Filtra Dot explain]', error?.message || error);
       return res.status(503).json({ error: 'Não foi possível explicar a evidência desta resposta agora.' });
     }
