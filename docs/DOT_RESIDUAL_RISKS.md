@@ -122,15 +122,7 @@ inexistentes, timers parados) não vale em produção. A causa do restart de
 fazer o primeiro deploy com as flags do Dot ausentes e validar
 `/api/dot/status` = 403/404 e `/api/health.dot` presente.
 
-**Atualização da Missão 4 (auditoria operacional):** o build em produção
-corresponde ao **master `feac3cd`** (fingerprint de CORS pós-#147), e a análise
-do boot + o estado observado mostram **`FILTRA_DOT_ENABLED=1` e
-`FILTRA_DOT_FORCE_ON=1`** — os timers estão ativos **por configuração**, não por
-bypass. Eles não chamam provedores e processam 0 empresas; o risco financeiro
-residual vem do chat HTTP sem ledger durável/idempotência. Detalhes, matriz de
-cenários e decisão em `docs/DOT_PRODUCTION_TIMER_AUDIT.md`. O PR #144 ganhou
-barreiras `dotSchedulerRuntimeEnabled`/`dotWorkerRuntimeEnabled` e 6 testes de
-regressão (`tests/dotTimerGates.test.ts`).
+**Atualização operacional (12/11/2026):** a verificação mais recente do serviço Render `filtra-ia-api` registrou o plano Free, uma instância e o deploy ativo `feac3cd6e3ccd757c81a706b45e594d6be22a5cd` (PR #147). As flags de contenção do Dot foram verificadas como `FILTRA_DOT_ENABLED=0` e `FILTRA_DOT_FORCE_ON=0`. Os PRs #144/#149 não foram implantados. Esta atualização substitui as afirmações anteriores deste documento sobre flags `1/1` e sobre o risco de produção então descrito. Revalidar o serviço e as flags antes de qualquer ativação; este documento não é uma leitura em tempo real do Render.
 
 ## Itens avaliados e considerados aceitáveis
 
