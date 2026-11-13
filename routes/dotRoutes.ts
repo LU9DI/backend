@@ -745,7 +745,16 @@ export function mountDotRoutes(app: Express) {
     if (companyId && reservationId) {
       const marked = await markDotReservationSent({ empresaId: companyId, reservationId });
       if (!marked.ok) {
-        return res.status(503).json({ ok: false, error: 'O controle de orçamento do Filtra Dot está temporariamente indisponível.', code: 'DOT_BUDGET_UNAVAILABLE' });
+        // O provedor ainda não foi chamado; liberar com prova explícita de não envio.
+        await releaseDotReservation({
+          empresaId: companyId,
+          reservationId,
+          provenNotSent: true,
+          reason: 'Falha ao marcar envio do explain antes da chamada ao provedor',
+        });
+        incCounter('dot_budget_unavailable');
+        logEvent('error', 'dot_budget_unavailable', { stage: 'explain_mark_sent' });
+        return res.status(503).json({ ok: false, error: 'O controle de orçamento do Filtra Dot está temporariamente indisponível. A chamada não foi enviada.', code: 'DOT_BUDGET_UNAVAILABLE' });
       }
     }
 
@@ -760,9 +769,40 @@ export function mountDotRoutes(app: Express) {
       if (companyId && reservationId) {
         const finalized = await finalizeDotReservation({ empresaId: companyId, reservationId, tokens: result.tokens, inputTokens: result.input_tokens, outputTokens: result.output_tokens, provider: result.provider, tipo: 'filtra_dot_explain' });
         if (!finalized.ok) {
-          incCounter('dot_ledger_finalize_failed');
-          logEvent('error', 'dot_ledger_finalize_failed', { route: '/api/dot/explain', reason: finalized.reason });
-          console.error('[dot-ledger] finalização do explain falhou; reserva mantida para reconciliação:', finalized.reason);
+          // A resposta já veio do provedor: nunca apresentar sucesso sem
+          // contabilização confirmada. Tentar registrar ambiguidade com tokens
+          // reais; se o primeiro COMMIT ocorreu e apenas o ACK se perdeu,
+          // reconhecer a reserva já liquidada sem duplicar ai_usage.
+          const ambiguity = await finalizeDotReservation({
+            empresaId: companyId,
+            reservationId,
+            ambiguous: true,
+            estimatedTokens: result.tokens,
+            provider: result.provider,
+            ambiguousReason: 'Resposta recebida do provedor, mas a liquidação do explain falhou: ' + String(finalized.reason || 'erro desconhecido').slice(0, 300),
+          });
+          const settled = ambiguity.reservation?.status === 'settled'
+            ? ambiguity.reservation
+            : await getDotReservation(companyId, reservationId).catch(() => null);
+          if (settled?.status !== 'settled') {
+            incCounter('dot_ledger_finalize_failed');
+            logEvent('error', 'dot_ledger_finalize_failed', {
+              route: '/api/dot/explain',
+              reason: finalized.reason,
+              ambiguity_recorded: ambiguity.ok && Number(ambiguity.reservation?.ambiguous) === 1,
+            });
+            console.error('[dot-ledger] finalização do explain falhou; resposta não será apresentada como sucesso:', finalized.reason);
+            return res.status(503).json({
+              ok: false,
+              error: 'A resposta foi processada, mas o registro seguro do consumo está pendente de reconciliação. Não repita esta solicitação.',
+              code: 'DOT_LEDGER_FINALIZE_PENDING_RECONCILIATION',
+            });
+          }
+          logEvent('warn', 'dot_ledger_finalize_ack_recovered', {
+            route: '/api/dot/explain',
+            reservation_id: reservationId,
+            provider: result.provider,
+          });
         }
       }
       incCounter('dot_explain_completed');
