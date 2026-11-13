@@ -89,7 +89,8 @@ async function createAcquisitionEngineSchema(db: any) {
     ['acquisition_contact_basis', `TEXT`]
   ];
   for (const [name, type] of leadColumns) {
-    try { await db.exec(`ALTER TABLE leads ADD COLUMN ${name} ${type}`); } catch {}
+    try { await db.exec(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS ${name} ${type}`); }
+    catch { try { await db.exec(`ALTER TABLE leads ADD COLUMN ${name} ${type}`); } catch { /* coluna já existe */ } }
   }
   await db.exec('CREATE INDEX IF NOT EXISTS idx_acq_leads_ready ON leads(acquisition_eligible, acquisition_suppressed, acquisition_next_at)');
   await db.exec('CREATE INDEX IF NOT EXISTS idx_acq_sends_day ON acquisition_sends(status, scheduled_at)');

@@ -31,7 +31,7 @@ function authWebhook(req: Request, res: Response): boolean {
 async function ensureTelegramColumns() {
   const db = getDb();
   await db.exec('CREATE TABLE IF NOT EXISTS leads (id TEXT PRIMARY KEY, nome_empresa TEXT, email TEXT, telefone TEXT, fonte TEXT, maps_url TEXT, raw_json TEXT, criado_em TIMESTAMPTZ NOT NULL)');
-  try { await db.exec('ALTER TABLE leads ADD COLUMN telegram_chat_id TEXT'); } catch {}
+  try { await db.exec('ALTER TABLE leads ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT'); } catch { try { await db.exec('ALTER TABLE leads ADD COLUMN telegram_chat_id TEXT'); } catch {} }
   try { await db.exec('CREATE INDEX IF NOT EXISTS idx_leads_telegram_chat_id ON leads(telegram_chat_id)'); } catch {}
 }
 async function telegramApi(method: string, body: Record<string, unknown>) {
