@@ -58,6 +58,7 @@ type IdempotencyRow = {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  expires_at: string | null;
 };
 
 export type DotHttpIdempotencyClaim = {
@@ -70,6 +71,7 @@ export type DotHttpIdempotencyClaim = {
 export type DotHttpIdempotencyClaimResult =
   | { kind: 'claimed'; claim: DotHttpIdempotencyClaim }
   | { kind: 'replay'; status: number; body: unknown }
+  | { kind: 'result_expired' }
   | { kind: 'in_progress' }
   | { kind: 'ambiguous' }
   | { kind: 'key_reused' };
@@ -128,7 +130,7 @@ function nowIso(): string {
 
 function rowSelect(): string {
   return `SELECT empresa_id, endpoint, idempotency_key, request_hash, status,
-                 response_status, response_json, created_at, updated_at, completed_at
+                 response_status, response_json, created_at, updated_at, completed_at, expires_at
             FROM dot_http_idempotency
            WHERE empresa_id = ? AND idempotency_key = ?`;
 }
@@ -175,18 +177,18 @@ export async function claimDotHttpRequest(input: {
   const now = new Date();
   const nowIsoValue = now.toISOString();
   const staleBefore = new Date(now.getTime() - PROCESSING_STALE_MS).toISOString();
-  const failedSafeBefore = new Date(now.getTime() - FAILED_SAFE_TTL_MS).toISOString();
   const expiresAt = new Date(now.getTime() + COMPLETED_TTL_MS).toISOString();
 
   return withDbTransaction(async (tx) => {
-    // Only replayable rows are retention candidates. Processing, ambiguous and
-    // recent failed_safe rows are safety evidence and are never silently
-    // discarded; failed_safe has a bounded (30d default) retry window.
+    // Expire response content, never the idempotency tombstone. The tenant,
+    // key, request hash and terminal status remain so an old outbox retry can
+    // never become a fresh provider execution. failed_safe rows are retained
+    // too: deleting them would also reopen the key namespace.
     await tx.run(
-      `DELETE FROM dot_http_idempotency
-        WHERE (status = 'completed' AND expires_at < ?)
-           OR (status = 'failed_safe' AND updated_at < ?)`,
-      [nowIsoValue, failedSafeBefore],
+      `UPDATE dot_http_idempotency
+          SET response_json = NULL
+        WHERE status = 'completed' AND expires_at < ? AND response_json IS NOT NULL`,
+      [nowIsoValue],
     );
 
     const inserted = await tx.run(
@@ -206,7 +208,12 @@ export async function claimDotHttpRequest(input: {
       throw new Error('Dot HTTP idempotency row disappeared after unique conflict');
     }
     if (existing.request_hash !== claim.requestHash) return { kind: 'key_reused' };
-    if (existing.status === 'completed') return replayFrom(existing);
+    if (existing.status === 'completed') {
+      if (!existing.expires_at || existing.expires_at < nowIsoValue || existing.response_json == null || existing.response_status == null) {
+        return { kind: 'result_expired' };
+      }
+      return replayFrom(existing);
+    }
     if (existing.status === 'ambiguous') return { kind: 'ambiguous' };
 
     if (existing.status === 'failed_safe') {
