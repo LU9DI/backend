@@ -513,4 +513,66 @@ suite('Dot admin — orçamento por HTTP (JWT + PIN + sessão + reconciliação)
   });
 
 
+  test('falha ao persistir auditoria reverte a reconciliação financeira inteira', async () => {
+    const http = await import('../services/dotHttpIdempotency.js');
+    const reservation = await ledger.reserveDotExecution({ empresaId: EMP_A, plan: 'rei' });
+    assert.equal(reservation.ok, true);
+    const claim = await http.claimDotHttpRequest({
+      empresaId: EMP_A,
+      endpoint: '/api/dot/chat',
+      key: `http-audit-failure-${crypto.randomUUID()}`,
+      payload: { message: 'auditoria obrigatória', session_id: 'audit-failure' },
+    });
+    assert.equal(claim.kind, 'claimed');
+    if (claim.kind !== 'claimed') throw new Error('claim expected');
+    assert.equal(await http.attachDotHttpReservation(claim.claim, reservation.reservation!.id), true);
+    assert.equal((await ledger.markDotReservationSent({ empresaId: EMP_A, reservationId: reservation.reservation!.id })).ok, true);
+    assert.equal((await ledger.finalizeDotReservation({
+      empresaId: EMP_A,
+      reservationId: reservation.reservation!.id,
+      ambiguous: true,
+      ambiguousReason: 'timeout após envio',
+    })).ok, true);
+    await http.markDotHttpRequestAmbiguous(claim.claim);
+
+    await db.exec(`
+      CREATE TRIGGER fail_dot_reconcile_audit
+      BEFORE INSERT ON audit_logs
+      WHEN NEW.action = 'dot.http_idempotency_reconciled'
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated audit persistence failure');
+      END;
+    `);
+    try {
+      const queue = await adminFetch('/api/admin/dot/http-idempotency', { token: platformAdminToken() });
+      const item = queue.data.records.find((record: any) => record.reservation_id === reservation.reservation!.id);
+      assert.ok(item);
+      const response = await adminFetch('/api/admin/dot/http-idempotency/reconcile', {
+        method: 'POST',
+        token: platformAdminToken(),
+        header: true,
+        body: {
+          idempotency_id: item.id,
+          decision: 'settle',
+          tokens: 456,
+          provider: 'groq',
+          reason: 'uso confirmado no extrato do provedor',
+        },
+      });
+      assert.equal(response.status, 409);
+      assert.equal(response.data.code, 'DOT_HTTP_RECONCILE_REFUSED');
+      assert.equal((await ledger.getDotReservation(EMP_A, reservation.reservation!.id))?.status, 'pending');
+      const usage = await db.get(
+        'SELECT COUNT(*) AS c FROM ai_usage WHERE empresa_id = ? AND feature = ?',
+        [EMP_A, 'dot'],
+      );
+      assert.equal(Number(usage.c), 1, 'o INSERT de consumo da tentativa revertida não pode persistir');
+      const audit = await auditRows(EMP_A, 'dot.http_idempotency_reconciled');
+      assert.equal(audit.length, 0, 'nenhuma auditoria persistida deve significar rollback total');
+    } finally {
+      await db.exec('DROP TRIGGER IF EXISTS fail_dot_reconcile_audit');
+    }
+  });
+
+
 });
