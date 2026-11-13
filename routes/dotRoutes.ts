@@ -1097,6 +1097,15 @@ Entregue uma resposta completa dentro desse orçamento. Priorize, nesta ordem: c
     if (companyId && activeReservation) {
       const marked = await markDotReservationSent({ empresaId: companyId, reservationId: activeReservation.id });
       if (!marked.ok) {
+        // A chamada ao provedor ainda não começou. Tente liberar a reserva
+        // imediatamente; se o banco continuar indisponível, ela permanece
+        // conservadoramente pendente e o sweep a expira pelo TTL (sent_at NULL).
+        await releaseDotReservation({
+          empresaId: companyId,
+          reservationId: activeReservation.id,
+          provenNotSent: true,
+          reason: 'Falha ao marcar envio antes de chamar o provedor',
+        });
         incCounter('dot_budget_unavailable');
         logEvent('error', 'dot_budget_unavailable', { stage: 'mark_sent' });
         return res.status(503).json({ ok: false, error: 'O controle de orçamento do Filtra Dot está temporariamente indisponível.', code: 'DOT_BUDGET_UNAVAILABLE' });
