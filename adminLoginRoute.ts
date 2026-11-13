@@ -16,11 +16,7 @@ const adminLoginLimiter = rateLimit({
 });
 
 function isAdminUser(usuario: any): boolean {
-  const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
-  return (
-    usuario.empresa_id === 'admin' ||
-    String(usuario.email || '').trim().toLowerCase() === adminMail
-  );
+  return usuario?.empresa_id === 'admin';
 }
 
 export function mountAdminLoginRoute(
