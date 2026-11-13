@@ -403,7 +403,7 @@ export async function markDotHttpRequestFailedSafe(
 ): Promise<void> {
   const result = await getDb().run(
     `UPDATE dot_http_idempotency
-        SET status = 'failed_safe', updated_at = ?
+        SET status = 'failed_safe', reservation_id = NULL, updated_at = ?
       WHERE empresa_id = ? AND idempotency_key = ?
         AND status = 'processing'`,
     [nowIso(), claim.empresaId, claim.key],
