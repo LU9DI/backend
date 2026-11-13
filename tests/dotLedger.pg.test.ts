@@ -239,6 +239,61 @@ test('PostgreSQL: falha na auditoria reverte consumo e liquidação da reconcili
   }
 });
 
+
+test('PostgreSQL: falha na auditoria também reverte a liberação manual', async () => {
+  await reset(EMPRESA);
+  const audit = await import('../lib/auditLog.js');
+  await audit.ensureAuditSchema(db);
+  const reserved = await ledger.reserveDotExecution({ empresaId: EMPRESA, plan: 'rei' });
+  assert.equal(reserved.ok, true);
+  const id = reserved.reservation!.id;
+  const ambiguous = await ledger.finalizeDotReservation({
+    empresaId: EMPRESA,
+    reservationId: id,
+    ambiguous: true,
+    ambiguousReason: 'resultado incerto antes do envio confirmado',
+  });
+  assert.equal(ambiguous.ok, true);
+
+  await db.run(`
+    CREATE OR REPLACE FUNCTION fail_dot_release_audit_test()
+    RETURNS trigger AS $$
+    BEGIN
+      RAISE EXCEPTION 'simulated release audit persistence failure';
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+  await db.run(`
+    CREATE TRIGGER fail_dot_release_audit_test
+    BEFORE INSERT ON audit_logs
+    FOR EACH ROW
+    WHEN (NEW.action = 'dot.budget_reconciled')
+    EXECUTE FUNCTION fail_dot_release_audit_test()
+  `);
+
+  try {
+    const result = await ledger.reconcileDotBudget({
+      empresaId: EMPRESA,
+      reservationId: id,
+      decision: 'release',
+      reason: 'evidência confirma que o provedor não recebeu a chamada',
+      audit: {
+        action: 'dot.budget_reconciled',
+        actorUserId: 'platform-admin-test',
+        actorRole: 'admin',
+        ip: '127.0.0.1',
+        userAgent: 'dot-ledger-pg-test',
+        detail: { confirm_not_sent: true },
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.equal((await ledger.getDotReservation(EMPRESA, id))?.status, 'pending');
+  } finally {
+    await db.run('DROP TRIGGER IF EXISTS fail_dot_release_audit_test ON audit_logs');
+    await db.run('DROP FUNCTION IF EXISTS fail_dot_release_audit_test()');
+  }
+});
+
 test('PostgreSQL: reserva e finalização gravam consumo real e liberam a reserva', async () => {
   await reset(EMPRESA);
   const reserved = await ledger.reserveDotExecution({ empresaId: EMPRESA, plan: 'rei' });
