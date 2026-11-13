@@ -62,7 +62,7 @@ export function extrairToken(req: Request): string | null {
 }
 
 export interface AuthRequest extends Request {
-  user?: { id: string; nome_funcionario: string; empresa_id: string; role?: string };
+  user?: { id: string; nome_funcionario: string; empresa_id: string; role?: string; platform_admin?: boolean };
 }
 
 export async function autenticarToken(req: AuthRequest, res: Response, next: NextFunction) {
@@ -98,7 +98,8 @@ export async function autenticarToken(req: AuthRequest, res: Response, next: Nex
       nome_funcionario: payload.nome_funcionario,
       empresa_id: payload.empresa_id,
       role: payload.role,
-    };
+      platform_admin: payload.platform_admin === true,
+}    };
     return next();
   } catch {
     return res.status(401).json({
@@ -108,8 +109,14 @@ export async function autenticarToken(req: AuthRequest, res: Response, next: Nex
   }
 }
 
-function isAdminPayload(payload?: { empresa_id?: string; role?: string }): boolean {
-  return payload?.empresa_id === 'admin' || payload?.role === 'admin';
+export function isPlatformAdminPrincipal(principal?: { empresa_id?: string; platform_admin?: boolean; email?: string }): boolean {
+  const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
+  return principal?.empresa_id === 'admin' || principal?.platform_admin === true || (!!principal?.email && String(principal.email).trim().toLowerCase() === adminMail);
+}
+
+function isAdminPayload(payload?: { empresa_id?: string; role?: string; platform_admin?: boolean }): boolean {
+  // Legacy role is display data, never proof of platform privilege.
+  return isPlatformAdminPrincipal(payload);
 }
 
 
@@ -119,12 +126,12 @@ export function empresaInformadaPertenceAoToken(req: Request, empresaId: string)
   if (!token) return false;
   try {
     const payload = verifyAccessToken(token);
-    return payload.empresa_id === 'admin' || payload.role === 'admin' || String(payload.empresa_id || '') === String(empresaId);
+    return isPlatformAdminPrincipal(payload) || String(payload.empresa_id || '') === String(empresaId);
   } catch {
     return false;
   }
 }
 
-export function isAdminUser(user?: { empresa_id?: string; role?: string }): boolean {
-  return user?.empresa_id === 'admin' || user?.role === 'admin';
+export function isAdminUser(user?: { empresa_id?: string; role?: string; platform_admin?: boolean; email?: string }): boolean {
+  return isPlatformAdminPrincipal(user);
 }
