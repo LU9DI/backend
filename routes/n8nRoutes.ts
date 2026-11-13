@@ -156,15 +156,12 @@ export function mountN8nRoutes(app: Express) {
       });
 
       if (qualification) {
-        try {
-          await db.exec('ALTER TABLE leads ADD COLUMN IF NOT EXISTS score INTEGER');
-        } catch {}
-        try {
-          await db.exec('ALTER TABLE leads ADD COLUMN IF NOT EXISTS qualification TEXT');
-        } catch {}
-        try {
-          await db.exec('ALTER TABLE leads ADD COLUMN IF NOT EXISTS ai_reason TEXT');
-        } catch {}
+        try { await db.exec('ALTER TABLE leads ADD COLUMN IF NOT EXISTS score INTEGER'); }
+        catch { try { await db.exec('ALTER TABLE leads ADD COLUMN score INTEGER'); } catch {} }
+        try { await db.exec('ALTER TABLE leads ADD COLUMN IF NOT EXISTS qualification TEXT'); }
+        catch { try { await db.exec('ALTER TABLE leads ADD COLUMN qualification TEXT'); } catch {} }
+        try { await db.exec('ALTER TABLE leads ADD COLUMN IF NOT EXISTS ai_reason TEXT'); }
+        catch { try { await db.exec('ALTER TABLE leads ADD COLUMN ai_reason TEXT'); } catch {} }
         await db.run(
           'UPDATE leads SET score = ?, qualification = ?, ai_reason = ? WHERE id = ?',
           [qualification.score, qualification.qualification, qualification.reason, id]
@@ -294,9 +291,9 @@ export function mountN8nRoutes(app: Express) {
 
       if (!lead) return res.status(404).json({ error: 'Lead não encontrado.', lead_id: leadId });
 
-      try { await db.exec('ALTER TABLE leads ADD COLUMN IF NOT EXISTS crm_status TEXT DEFAULT \'pending\''); } catch {}
-      try { await db.exec('ALTER TABLE leads ADD COLUMN IF NOT EXISTS crm_id TEXT'); } catch {}
-      try { await db.exec('ALTER TABLE leads ADD COLUMN IF NOT EXISTS followup_status TEXT DEFAULT \'pending\''); } catch {}
+      try { await db.exec('ALTER TABLE leads ADD COLUMN IF NOT EXISTS crm_status TEXT DEFAULT \'pending\''); } catch { try { await db.exec('ALTER TABLE leads ADD COLUMN crm_status TEXT DEFAULT \'pending\''); } catch {} }
+      try { await db.exec('ALTER TABLE leads ADD COLUMN IF NOT EXISTS crm_id TEXT'); } catch { try { await db.exec('ALTER TABLE leads ADD COLUMN crm_id TEXT'); } catch {} }
+      try { await db.exec('ALTER TABLE leads ADD COLUMN IF NOT EXISTS followup_status TEXT DEFAULT \'pending\''); } catch { try { await db.exec('ALTER TABLE leads ADD COLUMN followup_status TEXT DEFAULT \'pending\''); } catch {} }
 
       if (action === 'hubspot_sync') {
         await db.run(
