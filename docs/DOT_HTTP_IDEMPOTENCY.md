@@ -8,7 +8,7 @@ Impedir que timeout, reconexão, retry do navegador, failover de API ou repetiç
 
 ## Cabeçalho e escopo
 
-- O cliente envia `X-Idempotency-Key` em toda chamada de chat e explain em produção.
+- O cliente envia `X-Idempotency-Key` em toda chamada de chat e explain em produção (o backend também aceita `Idempotency-Key`).
 - A chave é um UUID aleatório (ou valor criptograficamente aleatório equivalente), gerado uma vez por envio lógico.
 - O cliente persiste a chave junto ao payload pendente e reutiliza exatamente a mesma chave e payload em qualquer retry/failover.
 - Uma nova mensagem intencional recebe chave nova, mesmo se o texto for igual.
@@ -95,6 +95,20 @@ A gravação de resposta e a transição para `completed` devem ser atômicas. A
 10. PostgreSQL multi-processo: claim concorrente usa índice único e transação real; não depender de mutex em memória.
 11. Chave ausente/inválida em produção: recusada antes de qualquer efeito colateral.
 12. Migração idempotente em SQLite de teste e PostgreSQL; schema ausente deve falhar fechado.
+
+## Cobertura automatizada registrada
+
+`tests/dotHttpIdempotency.test.ts` cobre claim concorrente, replay, payload
+divergente, endpoint divergente, expiração/tombstone, tenant isolado,
+`failed_safe`, ambiguidade e persistência da resposta.
+
+`tests/dotChatLedger.http.test.ts` cobre, para `/api/dot/explain`, replay
+sem segunda chamada ou débito, chave reutilizada com conteúdo diferente,
+duas chamadas simultâneas, timeout ambíguo sem retry, falha ao vincular a
+reserva e falha ao marcar envio antes do provedor. O provedor é simulado;
+nenhuma chamada externa é feita. A presença dos testes no repositório não
+significa que tenham sido executados ou aprovados: exigir CI verde no HEAD
+final, incluindo build e PostgreSQL multi-processo.
 
 ## Bloqueio de produção
 
