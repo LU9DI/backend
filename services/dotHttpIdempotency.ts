@@ -308,6 +308,64 @@ export async function completeDotHttpRequest(
   return false;
 }
 
+/** Attach the financial reservation before marking/sending to a provider. */
+export async function attachDotHttpReservation(
+  claim: DotHttpIdempotencyClaim,
+  reservationId: number,
+): Promise<boolean> {
+  if (!Number.isSafeInteger(reservationId) || reservationId <= 0) return false;
+  const result = await getDb().run(
+    `UPDATE dot_http_idempotency
+        SET reservation_id = ?, updated_at = ?
+      WHERE empresa_id = ? AND idempotency_key = ? AND request_hash = ?
+        AND status = 'processing' AND reservation_id IS NULL`,
+    [reservationId, nowIso(), claim.empresaId, claim.key, claim.requestHash],
+  );
+  return result.changes === 1;
+}
+
+export type DotHttpAmbiguousRecord = {
+  id: number;
+  empresa_id: string;
+  endpoint: string;
+  key_prefix: string;
+  request_hash_prefix: string;
+  created_at: string;
+  updated_at: string;
+  reservation_id: number | null;
+};
+
+/** Metadata-only operator queue; never returns message, full key or response. */
+export async function listAmbiguousDotHttpRequests(limit = 100): Promise<DotHttpAmbiguousRecord[]> {
+  const safeLimit = Math.min(100, Math.max(1, Math.floor(Number(limit) || 100)));
+  return getDb().all(
+    `SELECT id, empresa_id, endpoint,
+            SUBSTR(idempotency_key, 1, 8) AS key_prefix,
+            SUBSTR(request_hash, 1, 12) AS request_hash_prefix,
+            created_at, updated_at, reservation_id
+       FROM dot_http_idempotency
+      WHERE status = 'ambiguous'
+      ORDER BY updated_at ASC, id ASC
+      LIMIT ?`,
+    [safeLimit],
+  ) as Promise<DotHttpAmbiguousRecord[]>;
+}
+
+/** Look up an ambiguous record for an operator decision without exposing its key. */
+export async function getAmbiguousDotHttpRequest(id: number): Promise<DotHttpAmbiguousRecord | null> {
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  const row = await getDb().get(
+    `SELECT id, empresa_id, endpoint,
+            SUBSTR(idempotency_key, 1, 8) AS key_prefix,
+            SUBSTR(request_hash, 1, 12) AS request_hash_prefix,
+            created_at, updated_at, reservation_id
+       FROM dot_http_idempotency
+      WHERE id = ? AND status = 'ambiguous'`,
+    [id],
+  );
+  return (row as DotHttpAmbiguousRecord | undefined) || null;
+}
+
 /** The provider may have been reached; the retry must never run again. */
 export async function markDotHttpRequestAmbiguous(
   claim: DotHttpIdempotencyClaim,
