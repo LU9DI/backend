@@ -26,15 +26,6 @@ import { logEvent } from '../lib/observability.js';
 const PROCESSING_STALE_MS = 15 * 60_000;
 /** Retention window for replayable completed responses. */
 const COMPLETED_TTL_MS = 24 * 60 * 60_000;
-/**
- * Retention window for `failed_safe` rows. They remain retryable well beyond a
- * normal client outbox window, but cannot grow forever (anti-storage-abuse).
- * `ambiguous` and `processing` are never auto-deleted: they are safety evidence.
- */
-const FAILED_SAFE_TTL_MS = Math.max(
-  24 * 60 * 60_000,
-  Number(process.env.DOT_IDEMPOTENCY_FAILED_SAFE_TTL_HOURS || 720) * 60 * 60_000,
-);
 /** Hard cap for a stored response body, mirroring the chat payload budget. */
 const MAX_RESPONSE_BYTES = 256_000;
 export const MAX_IDEMPOTENCY_KEY_LENGTH = 128;
