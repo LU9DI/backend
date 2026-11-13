@@ -11,7 +11,7 @@
 |---|---|---|---|---|
 | R1 | Histórico de conversa em memória por processo | **média** | contexto inconsistente entre instâncias/reinícios; memória cresce sem TTL | condicional (bloqueante se houver > 1 instância) |
 | R2 | Contadores/métricas por processo zeram no deploy | **baixa** | dashboards e alertas sem continuidade | não (operacional) |
-| R3 | `/api/dot/explain` sem idempotência HTTP | **média** | retry pode gerar nova reserva e nova chamada ao provedor | condicional (bloqueante se exposto a cliente com retry) |
+| R3 | `/api/dot/explain` sem integração cliente/validação final | **média** | contrato novo ainda precisa de validação e adoção pelo cliente | sim, antes de expor a rota |
 | R4 | Service worker cacheia APIs por URL | **baixa/média** | dados antigos de painel/assinatura offline; não afeta o Dot | não (fora do escopo do Dot) |
 | R5 | Consistência financeira em crash/reinício | **alta** | reserva ambígua exige reconciliação manual; orçamento temporariamente preso | sim, com runbook + alertas antes de ligar o Dot |
 | R6 | Build de produção atual difere do PR | **alta para ativação** | scheduler/worker já ativos no build antigo; `/api/dot/status` público 200 | sim (confirmar branch/autoDeploy e deploy controlado) |
@@ -46,26 +46,31 @@ histórico só existe se houver scraper externo.
 scraper externo, e aceitar que séries históricas são responsabilidade da
 plataforma. Sem correção de código.
 
-## R3 — `/api/dot/explain` sem idempotência HTTP
+## R3 — `/api/dot/explain`: idempotência implementada, validação pendente
 
-**Evidência:** `/api/dot/explain` agora chama `claimDotHttpRequest` antes
-de carregar contexto ou criar reserva, exige chave em produção, inclui
+**Evidência:** `/api/dot/explain` chama `claimDotHttpRequest` antes de
+carregar contexto ou criar reserva, exige chave em produção, inclui
 `response_text` no hash do payload, reproduz respostas concluídas e bloqueia
 chaves em processamento/ambíguas/expiradas. A reserva é vinculada ao claim
-antes da marcação de envio. O handler também libera a reserva se a marcação
-falhar antes do envio e retorna 503 (sem apresentar sucesso) quando a
-liquidação falha após a resposta do provedor.
+antes da marcação de envio. Falhas de vínculo ou marcação antes do provedor
+tentam liberar a reserva com prova de não envio; falhas após possível chamada
+retornam 503 e mantêm a chave bloqueada.
 
-**Impacto residual:** a implementação foi registrada, mas ainda não foi
-validada por testes HTTP de integração, typecheck ou CI no HEAD atual. A
-idempotência depende da disponibilidade do banco; falhas de persistência
-após possível chamada externa permanecem conservadoramente ambíguas. O
-frontend de conversa não usa `explain`, portanto o contrato do cliente
-dessa rota ainda precisa ser integrado antes de sua exposição.
+**Cobertura adicionada em** `tests/dotChatLedger.http.test.ts`: replay sem
+segunda chamada/débito, chave reutilizada com payload diferente, concorrência
+com mesma chave, resultado ambíguo sem retry, falha de vínculo e falha ao
+marcar envio. Os testes usam provedor simulado e não fazem chamadas externas.
 
-**Recomendação:** adicionar testes cobrindo replay, chave reutilizada com
-payload diferente, concorrência, timeout ambíguo, falha de vínculo da reserva
-e liquidação falha; executar typecheck e CI antes de qualquer ativação.
+**Impacto residual:** os testes foram adicionados ao repositório, mas ainda
+não foram executados nem aprovados por CI no HEAD atual. O frontend de
+conversa não chama `explain`; qualquer cliente futuro precisa enviar a mesma
+chave e payload em retries. Falhas de persistência após possível chamada
+externa continuam conservadoramente ambíguas e exigem reconciliação manual.
+
+**Recomendação:** executar a suíte HTTP, build/typecheck, testes PostgreSQL
+multi-processo e CI no HEAD final; integrar o cabeçalho no cliente que vier a
+usar `explain`. Manter o endpoint indisponível a clientes com retry até essa
+validação.
 
 ## R4 — Service worker e cache de APIs
 
