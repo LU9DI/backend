@@ -7,7 +7,7 @@ import type { Database } from 'sqlite';
 import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
 import { ensureMfaColumns, issueMfaChallenge } from './mfa.js';
-import { signAccessToken, verifyAccessToken } from './lib/auth.js';
+import { signAccessToken, verifyAccessToken, isPlatformAdminPrincipal } from './lib/auth.js';
 
 const adminLoginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -76,6 +76,7 @@ export function mountAdminLoginRoute(
         nome_funcionario: usuario.nome_funcionario,
         empresa_id: usuario.empresa_id,
         role: 'admin',
+        platform_admin: true,
       });
 
       opts.setAuthCookie(res, token);
@@ -111,7 +112,7 @@ export function mountAdminLoginRoute(
       }
 
       const decoded = verifyAccessToken(raw);
-      if (decoded.role !== 'admin' && decoded.empresa_id !== 'admin') {
+      if (!isPlatformAdminPrincipal(decoded)) {
         return res.status(403).json({ error: 'Não é admin.' });
       }
 
