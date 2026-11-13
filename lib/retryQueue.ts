@@ -50,7 +50,7 @@ export async function ensureRetryQueue(db: Database = getDb()) {
       `CREATE INDEX IF NOT EXISTS idx_retry_pending ON retry_queue(status, next_run_at)`
     );
     try {
-      await db.exec(`ALTER TABLE retry_queue ADD COLUMN processing_at TEXT`);
+      await db.exec(`ALTER TABLE retry_queue ADD COLUMN IF NOT EXISTS processing_at TEXT`);
     } catch {
       /* coluna já existe */
     }
