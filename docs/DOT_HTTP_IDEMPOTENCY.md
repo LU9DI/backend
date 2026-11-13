@@ -62,6 +62,7 @@ A gravação de resposta e a transição para `completed` devem ser atômicas. A
 - Replays `completed` reproduzem o status HTTP e o JSON original (incluindo `session_id`, campos de orçamento e metadados), com um indicador de replay opcional em header (`Idempotency-Replayed: true`, exposto ao navegador via `Access-Control-Expose-Headers`), sem alterar o corpo original.
 - Conflitos/in-flight/ambiguous usam códigos estáveis e mensagens que não revelem dados de outro tenant.
 - O corpo armazenado não pode conter segredos, credenciais ou dados de outro tenant. Aplicar o mesmo controle de acesso e sanitização da resposta original.
+- Cada execução reivindicada recebe um `attempt_id` aleatório e exclusivo. O token muda em toda transição `failed_safe → processing`; completar resposta, anexar reserva e marcar `ambiguous`/`failed_safe` exige o token da geração atual. Callbacks atrasados de uma tentativa anterior não podem alterar o retry que reutilizou a mesma chave/hash.
 
 ## Reconciliação operacional de tentativas HTTP ambíguas
 
@@ -97,6 +98,8 @@ A gravação de resposta e a transição para `completed` devem ser atômicas. A
 12. Migração idempotente em SQLite de teste e PostgreSQL; schema ausente deve falhar fechado.
 
 ## Cobertura automatizada registrada
+
+A corrida de callback tardio entre gerações é coberta em SQLite e PostgreSQL: depois do retry, operações da reivindicação anterior não podem concluir, tornar ambígua, liberar ou anexar reserva à execução atual.
 
 `tests/dotHttpIdempotency.test.ts` cobre claim concorrente, replay, payload
 divergente, endpoint divergente, expiração/tombstone, tenant isolado,
