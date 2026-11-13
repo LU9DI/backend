@@ -3,7 +3,7 @@
 **Status:** documento de preparação. Nenhuma flag foi ativada e nenhum deploy foi executado.
 **Última revisão:** 2026-11-13
 **PR:** #144 — `reconcile/dot-production-2026-11-06`
-**HEAD verificado da branch:** `b7d1f4cf0854a17a9d67abfece8bb714743b148e`
+**HEAD de código validado:** `b7d1f4cf0854a17a9d67abfece8bb714743b148e` (o commit posterior nesta branch altera somente este documento).
 (inclui as correções dos PRs #149 e #150).
 **CI do HEAD:** Backend CI run [43424516563](https://github.com/LU9DI/backend/actions/runs/43424516563)
 e Dependency audit run [43424516530](https://github.com/LU9DI/backend/actions/runs/43424516530)
@@ -387,7 +387,7 @@ homologado pelo gateway". Portanto:
 
 ## 9. Estado verificado em 13/11/2026
 
-- Backend PR #144 HEAD `b7d1f4cf0854a17a9d67abfece8bb714743b148e`: Backend CI e dependency audit concluídos com sucesso nos runs listados acima.
+- Código do backend PR #144 validado em `b7d1f4cf0854a17a9d67abfece8bb714743b148e`: Backend CI e dependency audit concluídos com sucesso nos runs listados acima. O commit documental posterior não altera código de runtime.
 - Frontend PR #203 HEAD `2438974495ee32d9bc1d015a5cf6f4eb6a44c0f7`: CI, dependency audit e Browser E2E concluídos com sucesso; E2E com mocks não substitui integração real.
 - Render `filtra-ia-api` permanece no commit de produção anterior (`feac3cd6e3ccd757c81a706b45e594d6be22a5cd`), plano Free, serviço live. Nenhum deploy do PR #144 foi executado.
 - Supabase produção: `dot_budget_reservations` e `dot_http_idempotency` presentes com RLS; `reservation_id` e `attempt_id` presentes; índices de idempotência verificados. Nenhum grant direto para `anon` ou `authenticated` nas duas tabelas privadas.
