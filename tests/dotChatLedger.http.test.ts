@@ -295,6 +295,27 @@ suite('Dot HTTP + ledger (provedor simulado)', () => {
     assert.equal((await reservations(EMPRESA)).length, 1);
   });
 
+  test('produção com DOT desativado: explain retorna 404 sem reserva ou chamada ao provedor', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousEnabled = process.env.FILTRA_DOT_ENABLED;
+    const callsBefore = providerCalls;
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.FILTRA_DOT_ENABLED = '0';
+      const response = await callExplain('Não deve ser processado com DOT desligado.', `explain-disabled-${crypto.randomUUID()}`);
+      assert.equal(response.status, 404);
+      assert.equal(response.data.code, 'DOT_DISABLED');
+      assert.equal(providerCalls, callsBefore);
+      assert.equal((await reservations(EMPRESA)).length, 0);
+      assert.equal((await usageCount(EMPRESA)).rows, 0);
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+      if (previousEnabled === undefined) delete process.env.FILTRA_DOT_ENABLED;
+      else process.env.FILTRA_DOT_ENABLED = previousEnabled;
+    }
+  });
+
   test('explain: mesma chave reproduz resposta sem segunda chamada nem débito', async () => {
     const key = `explain-replay-${crypto.randomUUID()}`;
     const beforeCalls = providerCalls;
