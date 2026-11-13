@@ -306,6 +306,7 @@ export function mountMfaRoutes(
           nome_funcionario: usuario.nome_funcionario,
           empresa_id: usuario.empresa_id,
           role: 'admin',
+          platform_admin: true,
           mfa: true,
         },
         opts.JWT_SECRET,
