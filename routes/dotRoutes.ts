@@ -1133,9 +1133,29 @@ Entregue uma resposta completa dentro desse orçamento. Priorize, nesta ordem: c
           tipo: 'filtra_dot_chat',
         });
         if (!finalized.ok) {
+          // A resposta do provedor já existe, mas sem liquidação confirmada
+          // não podemos devolver sucesso nem concluir a chave HTTP. Converta
+          // a reserva em ambígua para mantê-la bloqueada e permitir settle
+          // auditado pelo operador, usando os tokens reais já recebidos.
+          const ambiguity = await finalizeDotReservation({
+            empresaId: companyId,
+            reservationId: activeReservation.id,
+            ambiguous: true,
+            estimatedTokens: result.tokens,
+            provider: result.provider,
+            ambiguousReason: 'Resposta recebida do provedor, mas a liquidação do consumo falhou: ' + String(finalized.reason || 'erro desconhecido').slice(0, 300),
+          });
           incCounter('dot_ledger_finalize_failed');
-          logEvent('error', 'dot_ledger_finalize_failed', { reason: finalized.reason });
-          console.error('[dot-ledger] finalização falhou; reserva mantida para reconciliação:', finalized.reason);
+          logEvent('error', 'dot_ledger_finalize_failed', {
+            reason: finalized.reason,
+            ambiguity_recorded: ambiguity.ok && Number(ambiguity.reservation?.ambiguous) === 1,
+          });
+          console.error('[dot-ledger] finalização falhou; resposta não será concluída como sucesso idempotente:', finalized.reason);
+          return res.status(503).json({
+            ok: false,
+            error: 'A resposta foi processada, mas o registro seguro do consumo está pendente de reconciliação. Não reenvie esta mensagem.',
+            code: 'DOT_LEDGER_FINALIZE_PENDING_RECONCILIATION',
+          });
         }
       }
       incCounter('dot_chat_completed');
