@@ -786,9 +786,17 @@ export function mountDotRoutes(app: Express) {
 
     // Vincula a reserva ao claim antes de qualquer marcação/envio.
     if (companyId && reservationId && idempotencyClaim) {
-      const linked = await attachDotHttpReservation(idempotencyClaim, reservationId);
+      let linked = false;
+      try {
+        linked = await attachDotHttpReservation(idempotencyClaim, reservationId);
+      } catch (error: any) {
+        logEvent('error', 'dot_explain_idempotency_link_failed', { detail: String(error?.message || error).slice(0, 240) });
+      }
       if (!linked) {
-        await releaseDotReservation({ empresaId: companyId, reservationId, provenNotSent: true, reason: 'Falha ao vincular reserva do explain à chave HTTP antes do envio' });
+        await releaseDotReservation({ empresaId: companyId, reservationId, provenNotSent: true, reason: 'Falha ao vincular reserva do explain à chave HTTP antes do envio' }).catch((error: any) => {
+          logEvent('error', 'dot_explain_pre_send_release_failed', { detail: String(error?.message || error).slice(0, 240) });
+        });
+        incCounter('dot_budget_unavailable');
         return res.status(503).json({ ok: false, error: 'Não foi possível vincular a reserva à proteção contra duplicidade. A chamada não foi enviada.', code: 'DOT_IDEMPOTENCY_RESERVATION_LINK_FAILED' });
       }
     }
@@ -796,14 +804,21 @@ export function mountDotRoutes(app: Express) {
     // Fase 2 — chamada ao provedor. A marca precede o envio; o sweep nunca
     // libera esta reserva sem finalização.
     if (companyId && reservationId) {
-      const marked = await markDotReservationSent({ empresaId: companyId, reservationId });
-      if (!marked.ok) {
+      let marked: Awaited<ReturnType<typeof markDotReservationSent>> | null = null;
+      try {
+        marked = await markDotReservationSent({ empresaId: companyId, reservationId });
+      } catch (error: any) {
+        logEvent('error', 'dot_explain_mark_sent_failed', { detail: String(error?.message || error).slice(0, 240) });
+      }
+      if (!marked?.ok) {
         // O provedor ainda não foi chamado; liberar com prova explícita de não envio.
         await releaseDotReservation({
           empresaId: companyId,
           reservationId,
           provenNotSent: true,
           reason: 'Falha ao marcar envio do explain antes da chamada ao provedor',
+        }).catch((error: any) => {
+          logEvent('error', 'dot_explain_pre_send_release_failed', { detail: String(error?.message || error).slice(0, 240) });
         });
         incCounter('dot_budget_unavailable');
         logEvent('error', 'dot_budget_unavailable', { stage: 'explain_mark_sent' });
