@@ -109,7 +109,7 @@ export async function autenticarToken(req: AuthRequest, res: Response, next: Nex
   }
 }
 
-export function isPlatformAdminPrincipal(principal?: { empresa_id?: string; platform_admin?: boolean; email?: string }): boolean {
+export function isPlatformAdminPrincipal(principal?: { empresa_id?: string; platform_admin?: boolean; email?: string; role?: string }): boolean {
   const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
   return principal?.empresa_id === 'admin' || principal?.platform_admin === true || (!!principal?.email && String(principal.email).trim().toLowerCase() === adminMail);
 }
