@@ -1,5 +1,5 @@
 /**
- * Durable HTTP idempotency for the Filtra Dot chat endpoint.
+ * Durable HTTP idempotency for Filtra Dot chat and explain endpoints.
  *
  * Implements the contract in `docs/DOT_HTTP_IDEMPOTENCY.md`:
  *  - singleton key per authenticated tenant (`empresa_id`), never from body;
