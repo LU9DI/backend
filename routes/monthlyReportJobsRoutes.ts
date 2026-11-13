@@ -77,12 +77,12 @@ export async function resolveMonthlyReportRecipients(db: any, empresaId: string,
 
 async function ensureMonthlyReportSchema(db: any) {
   try { await db.exec('ALTER TABLE empresas ADD COLUMN IF NOT EXISTS relatorio_destinatarios TEXT'); }
-  catch { try { await db.exec('ALTER TABLE empresas ADD COLUMN relatorio_destinatarios TEXT'); } catch { /* coluna já existe ou engine não permite */ } }
-  try { await db.exec('ALTER TABLE relatorio_envios_mensais ADD COLUMN report_json TEXT'); } catch { /* coluna já existe ou tabela ainda não foi criada */ }
+  catch { try { await db.exec('ALTER TABLE empresas ADD COLUMN IF NOT EXISTS relatorio_destinatarios TEXT'); } catch { /* coluna já existe ou engine não permite */ } }
+  try { await db.exec('ALTER TABLE relatorio_envios_mensais ADD COLUMN IF NOT EXISTS report_json TEXT'); } catch { /* coluna já existe ou tabela ainda não foi criada */ }
   try { await db.exec('ALTER TABLE empresas ADD COLUMN IF NOT EXISTS relatorio_dia_assinatura INTEGER'); }
-  catch { try { await db.exec('ALTER TABLE empresas ADD COLUMN relatorio_dia_assinatura INTEGER'); } catch { /* coluna já existe */ } }
+  catch { try { await db.exec('ALTER TABLE empresas ADD COLUMN IF NOT EXISTS relatorio_dia_assinatura INTEGER'); } catch { /* coluna já existe */ } }
   try { await db.exec('ALTER TABLE empresas ADD COLUMN IF NOT EXISTS billing_cycle TEXT'); }
-  catch { try { await db.exec('ALTER TABLE empresas ADD COLUMN billing_cycle TEXT'); } catch { /* coluna já existe */ } }
+  catch { try { await db.exec('ALTER TABLE empresas ADD COLUMN IF NOT EXISTS billing_cycle TEXT'); } catch { /* coluna já existe */ } }
   await db.exec(`CREATE TABLE IF NOT EXISTS relatorio_envios_mensais (
     id TEXT PRIMARY KEY,
     empresa_id TEXT NOT NULL,
