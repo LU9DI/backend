@@ -110,8 +110,10 @@ export async function autenticarToken(req: AuthRequest, res: Response, next: Nex
 }
 
 export function isPlatformAdminPrincipal(principal?: { empresa_id?: string; platform_admin?: boolean; email?: string; role?: string }): boolean {
-  const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
-  return principal?.empresa_id === 'admin' || principal?.platform_admin === true || (!!principal?.email && String(principal.email).trim().toLowerCase() === adminMail);
+  // Email and legacy role are identifiers/display data, not authorization.
+  // Platform privilege requires the reserved admin tenant or a signed claim
+  // issued only by the verified administrative login/MFA flows.
+  return principal?.empresa_id === 'admin' || principal?.platform_admin === true;
 }
 
 function isAdminPayload(payload?: { empresa_id?: string; role?: string; platform_admin?: boolean }): boolean {
