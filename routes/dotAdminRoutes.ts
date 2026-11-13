@@ -32,6 +32,7 @@ import {
   listOpenDotReservations,
   reconcileDotBudget,
 } from '../services/dotLedger.js';
+import { getAmbiguousDotHttpRequest, listAmbiguousDotHttpRequests } from '../services/dotHttpIdempotency.js';
 
 const unlockLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -277,6 +278,106 @@ export function mountDotAdminRoutes(app: Express) {
       error: 'A reconciliação do ledger é exclusiva de operador da plataforma.',
       code: 'DOT_RECONCILE_PLATFORM_ADMIN_REQUIRED',
     });
+  });
+
+  // Fila operacional de tentativas HTTP ambíguas. Retorna somente metadados
+  // mínimos; nunca expõe chave completa, hash completo, prompt ou resposta.
+  app.get('/api/admin/dot/http-idempotency', autenticarToken, reconcileLimiter, async (req: AuthRequest, res: Response) => {
+    try {
+      if (!isAdminUser(req.user)) {
+        return res.status(403).json({ ok: false, error: 'Somente operador da plataforma.', code: 'DOT_RECONCILE_PLATFORM_ADMIN_REQUIRED' });
+      }
+      const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 100));
+      const records = await listAmbiguousDotHttpRequests(limit);
+      return res.json({
+        ok: true,
+        records: records.map((record) => ({
+          id: record.id,
+          empresa_id: record.empresa_id,
+          endpoint: record.endpoint,
+          key_prefix: record.key_prefix,
+          request_hash_prefix: record.request_hash_prefix,
+          created_at: record.created_at,
+          updated_at: record.updated_at,
+          reservation_id: record.reservation_id,
+          accounting_reconcilable: Number.isSafeInteger(Number(record.reservation_id)) && Number(record.reservation_id) > 0,
+        })),
+      });
+    } catch (error) {
+      return adminFail(res, error);
+    }
+  });
+
+  // Reconcilia somente o ledger vinculado à tentativa ambígua. A chave HTTP
+  // permanece ambígua permanentemente: a decisão financeira NUNCA autoriza
+  // replay nem nova execução do provedor.
+  app.post('/api/admin/dot/http-idempotency/reconcile', autenticarToken, reconcileLimiter, async (req: AuthRequest, res: Response) => {
+    try {
+      if (!isAdminUser(req.user)) {
+        return res.status(403).json({ ok: false, error: 'Somente operador da plataforma.', code: 'DOT_RECONCILE_PLATFORM_ADMIN_REQUIRED' });
+      }
+      ensureHeader(req);
+      const id = Number(req.body?.idempotency_id);
+      if (!Number.isSafeInteger(id) || id <= 0) {
+        return res.status(400).json({ ok: false, error: 'idempotency_id inválido.', code: 'DOT_HTTP_RECONCILE_BAD_ID' });
+      }
+      const decision = String(req.body?.decision || '');
+      if (decision !== 'settle' && decision !== 'release') {
+        return res.status(400).json({ ok: false, error: "decision deve ser 'settle' ou 'release'.", code: 'DOT_HTTP_RECONCILE_BAD_DECISION' });
+      }
+      const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 500) : '';
+      if (reason.length < 10) {
+        return res.status(400).json({ ok: false, error: 'Informe a evidência/motivo operacional (mínimo de 10 caracteres).', code: 'DOT_HTTP_RECONCILE_REASON_REQUIRED' });
+      }
+      const record = await getAmbiguousDotHttpRequest(id);
+      if (!record) {
+        return res.status(404).json({ ok: false, error: 'Registro ambíguo não encontrado.', code: 'DOT_HTTP_RECONCILE_NOT_FOUND' });
+      }
+      const reservationId = Number(record.reservation_id);
+      if (!Number.isSafeInteger(reservationId) || reservationId <= 0) {
+        return res.status(409).json({ ok: false, error: 'Esta tentativa não possui reserva financeira vinculada; permanece bloqueada para execução e exige investigação manual.', code: 'DOT_HTTP_RECONCILE_NO_RESERVATION' });
+      }
+      if (decision === 'release' && req.body?.confirm_not_sent !== true) {
+        return res.status(400).json({ ok: false, error: 'release exige confirmação operacional de que o envio não ocorreu.', code: 'DOT_HTTP_RECONCILE_NOT_SENT_CONFIRMATION_REQUIRED' });
+      }
+      const tokens = decision === 'settle' ? Number(req.body?.tokens) : null;
+      if (decision === 'settle' && (!Number.isSafeInteger(tokens) || Number(tokens) <= 0)) {
+        return res.status(400).json({ ok: false, error: 'settle exige tokens reais inteiros maiores que zero.', code: 'DOT_HTTP_RECONCILE_BAD_TOKENS' });
+      }
+      const provider = typeof req.body?.provider === 'string' ? req.body.provider.slice(0, 20) : null;
+      const result = await reconcileDotBudget({
+        empresaId: record.empresa_id,
+        reservationId,
+        decision: decision as 'settle' | 'release',
+        tokens,
+        provider,
+        reason,
+      });
+      await writeAudit(getDb(), {
+        action: 'dot.http_idempotency_reconciled',
+        actor_user_id: req.user?.id || null,
+        actor_role: 'admin',
+        empresa_id: record.empresa_id,
+        result: result.ok ? 'ok' : 'error',
+        ip: clientIp(req),
+        user_agent: String(req.headers['user-agent'] || '').slice(0, 200),
+        detail: {
+          idempotency_id: id,
+          reservation_id: reservationId,
+          decision,
+          reason,
+          confirm_not_sent: decision === 'release' ? true : undefined,
+          idempotency_key_remains_blocked: true,
+          ok: result.ok,
+        },
+      });
+      if (!result.ok) {
+        return res.status(409).json({ ok: false, error: result.reason || 'Reconciliação recusada.', code: 'DOT_HTTP_RECONCILE_REFUSED' });
+      }
+      return res.json({ ok: true, idempotency_key_remains_blocked: true, result });
+    } catch (error) {
+      return adminFail(res, error);
+    }
   });
 
   // Reconciliação controlada por operador da plataforma. O tenant e a decisão
