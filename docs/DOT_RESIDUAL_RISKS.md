@@ -90,13 +90,16 @@ logout/troca de tenant e remover APIs sensíveis da allowlist. Não bloqueia o D
   processar com prova registrada;
 - sweep de reservas vencidas é **preguiçoso por tenant** (no próximo
   `reserve`/snapshot), não global no boot;
-- shutdown gracioso drena worker/scheduler (`stopDotAgentWorkerAndDrain`,
-  `stopDotMonitorScheduler`).
+- fila HTTP de reconciliação exclusiva de operador, com metadados mínimos e associação à reserva; settle/release nunca reabre a chave idempotente;
+- auditoria da decisão administrativa inserida na mesma transação da mutação financeira; falha de auditoria reverte ledger e consumo;
+- shutdown gracioso drena worker/scheduler (`stopDotAgentWorkerAndDrain`, `stopDotMonitorScheduler`).
 
 **Impacto residual:** após crash entre envio ao provedor e liquidação, a reserva
 fica ambígua e o orçamento comprometido até intervenção manual; a chamada já
-pode ter sido cobrada pelo provedor. Não há reconciliação automática nem alerta
-ativo hoje.
+pode ter sido cobrada pelo provedor. A rota administrativa permite reconciliar
+a reserva vinculada com evidência operacional e auditoria transacional, mas não
+consulta o provedor automaticamente nem substitui o julgamento do operador.
+Não há reconciliação automática nem alerta ativo hoje.
 
 **Recomendação (bloqueante antes de ligar o Dot):**
 
