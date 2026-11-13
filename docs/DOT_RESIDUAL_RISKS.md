@@ -49,17 +49,23 @@ plataforma. Sem correção de código.
 ## R3 — `/api/dot/explain` sem idempotência HTTP
 
 **Evidência:** apenas `/api/dot/chat` chama `claimDotHttpRequest`; `explain`
-cria reserva e chama o provedor sem chave de idempotência.
+cria reserva e chama o provedor sem chave de idempotência. O handler foi
+endurecido para liberar reserva quando `markDotReservationSent` falha antes
+do envio e para retornar 503 (sem apresentar sucesso) quando a liquidação
+falha após a resposta do provedor; tenta registrar a reserva como ambígua com
+os tokens reais e reconhece uma liquidação já confirmada.
 
-**Impacto:** um retry do cliente (ou duplo clique) pode gerar duas reservas e
-duas chamadas ao provedor para a mesma explicação — cobrança dupla real. O
-ledger impede consumo duplicado da **mesma** reserva, mas não deduplica
-requisições distintas. O frontend de conversa não usa `explain`.
+**Impacto residual:** um retry do cliente (ou duplo clique) ainda pode gerar
+duas reservas e duas chamadas ao provedor para a mesma explicação — cobrança
+dupla real. O ledger impede consumo duplicado da **mesma** reserva, mas não
+deduplica requisições distintas. O frontend de conversa não usa `explain`.
+A proteção contra resposta HTTP falsa não substitui a idempotência da
+requisição.
 
 **Recomendação:** antes de expor o endpoint a clientes com retry, aplicar o
-mesmo contrato de chave do chat (recomendado) ou documentar formalmente que o
-cliente não deve repetir. Bloqueante se houver consumo externo; não bloqueante
-para o piloto da conversa.
+mesmo contrato de chave do chat (recomendado) ou desabilitar a rota para
+clientes até essa implementação. Bloqueante se houver consumo externo; não
+bloqueante para o piloto da conversa enquanto a rota não for usada.
 
 ## R4 — Service worker e cache de APIs
 
