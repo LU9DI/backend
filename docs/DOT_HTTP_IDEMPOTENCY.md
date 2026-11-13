@@ -1,6 +1,6 @@
-# Filtra DOT — contrato de idempotência HTTP do chat
+# Filtra DOT — contrato de idempotência HTTP
 
-Status: requisito obrigatório antes de habilitar `POST /api/dot/chat` em produção.
+Status: requisito obrigatório antes de habilitar `POST /api/dot/chat` ou `POST /api/dot/explain` em produção.
 
 ## Objetivo
 
@@ -8,11 +8,11 @@ Impedir que timeout, reconexão, retry do navegador, failover de API ou repetiç
 
 ## Cabeçalho e escopo
 
-- O cliente envia `X-Idempotency-Key` em toda chamada de chat de produção.
+- O cliente envia `X-Idempotency-Key` em toda chamada de chat e explain em produção.
 - A chave é um UUID aleatório (ou valor criptograficamente aleatório equivalente), gerado uma vez por envio lógico.
 - O cliente persiste a chave junto ao payload pendente e reutiliza exatamente a mesma chave e payload em qualquer retry/failover.
 - Uma nova mensagem intencional recebe chave nova, mesmo se o texto for igual.
-- O servidor limita tamanho/formato da chave e calcula SHA-256 de uma representação canônica do payload relevante (`message`, `session_id` e demais campos que afetem a resposta).
+- O servidor limita tamanho/formato da chave e calcula SHA-256 de uma representação canônica do payload relevante (`message`, `session_id`, `response_text` e demais campos que afetem a resposta).
 - A unicidade é por tenant autenticado + chave. O tenant vem exclusivamente de `resolveDotAccess`, nunca do body ou header.
 - Em produção, chave ausente/inválida é recusada antes de cache, contexto, reserva ou provedor. Resposta: HTTP 400, código `DOT_IDEMPOTENCY_KEY_REQUIRED` ou `DOT_IDEMPOTENCY_KEY_INVALID`.
 - Não compartilhar namespace de idempotência entre empresas. A rota demo deve ter escopo isolado e explícito; não pode usar um tenant fictício compartilhado.
@@ -65,7 +65,7 @@ A gravação de resposta e a transição para `completed` devem ser atômicas. A
 
 ## Reconciliação operacional de tentativas HTTP ambíguas
 
-- Cada claim de chat vincula sua reserva financeira (`reservation_id`) antes de marcar o envio ao provedor. Se a associação falhar, a chamada não é enviada e a reserva é liberada como comprovadamente não enviada. Se a marcação de envio falhar, a rota também tenta liberar a reserva; o `failed_safe` limpa a associação HTTP para permitir nova reserva no retry. Se a liberação falhar por indisponibilidade do banco, a reserva sem `sent_at` permanece conservadoramente comprometida até o sweep de expiração.
+- Cada claim de chat ou explain vincula sua reserva financeira (`reservation_id`) antes de marcar o envio ao provedor. Se a associação falhar, a chamada não é enviada e a reserva é liberada como comprovadamente não enviada. Se a marcação de envio falhar, a rota também tenta liberar a reserva; o `failed_safe` limpa a associação HTTP para permitir nova reserva no retry. Se a liberação falhar por indisponibilidade do banco, a reserva sem `sent_at` permanece conservadoramente comprometida até o sweep de expiração.
 - `GET /api/admin/dot/http-idempotency` é exclusivo de operador da plataforma (`autenticarToken` + `isAdminUser`) e retorna somente metadados mínimos: ID, tenant, endpoint, prefixos da chave/hash, timestamps e ID da reserva. Nunca retorna chave completa, prompt ou resposta.
 - `POST /api/admin/dot/http-idempotency/reconcile` exige operador da plataforma e `X-Dot-Admin: 1`. A decisão financeira é aplicada à reserva vinculada pelo serviço de ledger, que valida `pending`, `ambiguous=1` e, para release, `sent_at IS NULL` sob lock transacional.
 - Toda decisão é registrada em `audit_logs` como `dot.http_idempotency_reconciled`, incluindo ator, tenant, ID HTTP, reserva, decisão, justificativa e a garantia `idempotency_key_remains_blocked=true`.
