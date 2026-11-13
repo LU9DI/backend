@@ -794,6 +794,10 @@ async function migrateDotHttpIdempotency(db: Database | PgDatabase): Promise<voi
     )`,
   );
 
+  // Reservation link enables platform operators to reconcile accounting for
+  // an ambiguous HTTP attempt without ever reopening its idempotency key.
+  await addColumnIfMissing(db, 'dot_http_idempotency', 'reservation_id', 'INTEGER');
+
   // Fail closed: a table from another schema must never be used with different
   // semantics (a missing column would turn the idempotency guarantee into a
   // best-effort). Reconciliation is explicit and manual.
@@ -810,6 +814,7 @@ async function migrateDotHttpIdempotency(db: Database | PgDatabase): Promise<voi
     'updated_at',
     'completed_at',
     'expires_at',
+    'reservation_id',
   ];
   const missing = required.filter((column) => !columns.includes(column));
   if (missing.length > 0 || columns.includes('tenant_id')) {
