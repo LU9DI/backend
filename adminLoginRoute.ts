@@ -7,7 +7,7 @@ import type { Database } from 'sqlite';
 import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
 import { ensureMfaColumns, issueMfaChallenge } from './mfa.js';
-import { signAccessToken, verifyAccessToken } from './lib/auth.js';
+import { signAccessToken, verifyAccessToken, isPlatformAdminPrincipal } from './lib/auth.js';
 
 const adminLoginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -16,11 +16,7 @@ const adminLoginLimiter = rateLimit({
 });
 
 function isAdminUser(usuario: any): boolean {
-  const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
-  return (
-    usuario.empresa_id === 'admin' ||
-    String(usuario.email || '').toLowerCase() === adminMail
-  );
+  return usuario?.empresa_id === 'admin';
 }
 
 export function mountAdminLoginRoute(
@@ -44,7 +40,7 @@ export function mountAdminLoginRoute(
 
       const db = getDb();
       await ensureMfaColumns(db);
-      const usuario = await db.get('SELECT * FROM usuarios WHERE email = ?', [email]);
+      const usuario = await db.get('SELECT * FROM usuarios WHERE LOWER(TRIM(email)) = LOWER(TRIM(?))', [email]);
 
       if (!usuario || !usuario.senha_hash) {
         return res.status(401).json({ error: 'Credenciais inválidas.' });
@@ -76,6 +72,7 @@ export function mountAdminLoginRoute(
         nome_funcionario: usuario.nome_funcionario,
         empresa_id: usuario.empresa_id,
         role: 'admin',
+        platform_admin: true,
       });
 
       opts.setAuthCookie(res, token);
@@ -111,7 +108,7 @@ export function mountAdminLoginRoute(
       }
 
       const decoded = verifyAccessToken(raw);
-      if (decoded.role !== 'admin' && decoded.empresa_id !== 'admin') {
+      if (!isPlatformAdminPrincipal(decoded)) {
         return res.status(403).json({ error: 'Não é admin.' });
       }
 

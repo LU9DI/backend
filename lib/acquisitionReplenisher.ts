@@ -1,4 +1,5 @@
 import { getDb } from './db.js';
+import { raceWithTimeout } from './gracefulStop.js';
 import { ensureAcquisitionEngineSchema } from './acquisitionEngine.js';
 import { googlePlacesLeads } from './acquisitionGooglePlaces.js';
 import crypto from 'crypto';
@@ -15,6 +16,28 @@ let running = false;
 let started = false;
 let fullEnrichDataUntil = 0;
 let googlePlacesDataUntil = 0;
+
+/**
+ * Motivo do último bloqueio de cada provedor (telemetria).
+ *
+ * Antes, "sem créditos", "cooldown" e "sem leads" chegavam ao operador apenas
+ * como uma string solta na lista de erros. Guardar o motivo explícito evita
+ * que indisponibilidade de fornecedor seja lida como execução bem-sucedida.
+ */
+const providerState: Record<string, { until: number; reason: string }> = {};
+function markProviderBlocked(provider: string, ms: number, reason: string) {
+  providerState[provider] = { until: Date.now() + ms, reason };
+  console.warn(`[acquisition-replenisher] provider=${provider} bloqueado por ${Math.round(ms / 60000)}min: ${reason}`);
+}
+export function getAcquisitionProviderState() {
+  const now = Date.now();
+  return Object.fromEntries(
+    Object.entries(providerState).map(([provider, state]) => [
+      provider,
+      { blocked: now < state.until, remaining_ms: Math.max(0, state.until - now), reason: state.reason },
+    ]),
+  );
+}
 
 const clean = (v: unknown, n = 5000) => String(v ?? '').trim().slice(0, n);
 const validEmail = (v: unknown) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean(v, 320));
@@ -190,6 +213,96 @@ async function fullEnrichProvider() {
 }
 
 
+/**
+ * Circuit breaker simples por endpoint Overpass.
+ *
+ * OSM responde 504/429 com frequência e cada cidade tentava os 3 endpoints em
+ * sequência com timeout de 75 s: uma rodada podia ficar presa por minutos e
+ * martelar o mesmo endpoint que já estava falhando. Um endpoint que falha
+ * fica em cooldown e é pulado até expirar.
+ */
+const OSM_ENDPOINT_COOLDOWN_MS = Math.max(60_000, Number(process.env.ACQUISITION_OSM_COOLDOWN_MS || 15 * 60 * 1000));
+/** Teto do cooldown adaptativo (backoff por falhas consecutivas). */
+const OSM_ENDPOINT_COOLDOWN_MAX_MS = Math.max(
+  OSM_ENDPOINT_COOLDOWN_MS,
+  Number(process.env.ACQUISITION_OSM_COOLDOWN_MAX_MS || 60 * 60 * 1000),
+);
+
+type OsmEndpointState = {
+  /** Momento em que o endpoint volta a ser tentado. */
+  until: number;
+  reason: string;
+  /** Falhas consecutivas: cada uma dobra o cooldown até o teto. */
+  consecutive: number;
+};
+
+const osmEndpointState = new Map<string, OsmEndpointState>();
+
+/**
+ * O endpoint pode ser tentado agora?
+ *
+ * Um cooldown vencido NÃO é removido do mapa: a entrada é mantida para que a
+ * próxima falha dobre o backoff. O que muda é que `now >= until` libera o
+ * endpoint novamente — nada fica permanentemente indisponível.
+ */
+function osmEndpointAvailable(endpoint: string, now = Date.now()): boolean {
+  const state = osmEndpointState.get(endpoint);
+  return !state || now >= state.until;
+}
+
+function markOsmEndpointFailure(endpoint: string, reason: string, now = Date.now()) {
+  const previous = osmEndpointState.get(endpoint);
+  // Falhas dentro do cooldown anterior contam para o backoff; depois de um
+  // período saudável (endpoint voltou a responder), a contagem recomeça.
+  const withinSameEpisode = previous && now < previous.until + OSM_ENDPOINT_COOLDOWN_MS;
+  const consecutive = withinSameEpisode ? previous.consecutive + 1 : 1;
+  const cooldown = Math.min(OSM_ENDPOINT_COOLDOWN_MS * 2 ** (consecutive - 1), OSM_ENDPOINT_COOLDOWN_MAX_MS);
+  osmEndpointState.set(endpoint, { until: now + cooldown, reason, consecutive });
+  console.warn(
+    `[acquisition-osm] endpoint=${endpoint} em cooldown ${Math.round(cooldown / 60000)}min ` +
+      `(falha ${consecutive}): ${reason}`,
+  );
+}
+
+/** Sucesso zera o backoff: o endpoint voltou a funcionar. */
+function markOsmEndpointSuccess(endpoint: string) {
+  if (osmEndpointState.delete(endpoint)) {
+    console.log(`[acquisition-osm] endpoint=${endpoint} recuperado; cooldown zerado`);
+  }
+}
+
+/** Estado dos endpoints Overpass (telemetria e testes). */
+export function getOsmEndpointState(now = Date.now()) {
+  return Object.fromEntries(
+    [...osmEndpointState.entries()].map(([endpoint, state]) => [
+      endpoint,
+      {
+        available: now >= state.until,
+        remaining_ms: Math.max(0, state.until - now),
+        consecutive_failures: state.consecutive,
+        reason: state.reason,
+      },
+    ]),
+  );
+}
+
+/** Somente para testes: limpa o estado em memória do circuit breaker. */
+export function resetOsmEndpointState(): void {
+  osmEndpointState.clear();
+}
+
+/**
+ * Superfície de teste do circuit breaker.
+ *
+ * Exportada apenas para os testes observarem as transições sem tocar na rede.
+ * Não é usada por nenhum caminho de produção.
+ */
+export const __test = {
+  markOsmEndpointFailure,
+  markOsmEndpointSuccess,
+  osmEndpointAvailable,
+};
+
 const OSM_URLS = [clean(process.env.ACQUISITION_OSM_OVERPASS_URL, 2000), 'https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter'].filter((value, index, all) => Boolean(value) && all.indexOf(value) === index);
 const OSM_TARGET_TYPES = /(hotel|hostel|guest_house|restaurant|cafe|bar|clinic|doctors|dentist|pharmacy|beauty|hairdresser|car_dealer|car_repair|retail|shop|supermarket|school|college|university|tourism|association|trade_union|chamber|non_profit|office)/i;
 const OSM_EXCLUDED_OFFICES = /^(government|governmental|embassy|consulate|city_hall|courthouse|police|fire_station|military|public_service|administrative)$/i;
@@ -247,6 +360,7 @@ async function openStreetMapProvider(limit: number, existingEmails = new Set<str
       let data: any = null;
       let lastError: unknown = null;
       for (const endpoint of OSM_URLS) {
+        if (!osmEndpointAvailable(endpoint)) continue;
         try {
           const response = await fetch(endpoint, {
             method: 'POST',
@@ -256,10 +370,16 @@ async function openStreetMapProvider(limit: number, existingEmails = new Set<str
           });
           if (!response.ok) throw new Error(`Overpass HTTP ${response.status}`);
           data = await response.json();
+          markOsmEndpointSuccess(endpoint);
           break;
         } catch (error) {
           lastError = error;
-          console.warn(`[acquisition-osm] city=${city} endpoint=${endpoint} failed:`, error instanceof Error ? error.message : String(error));
+          const reason = error instanceof Error ? error.message : String(error);
+          // 429/504 e timeouts indicam sobrecarga do endpoint: cooldown.
+          if (/HTTP (429|500|502|503|504)/i.test(reason) || /timeout|aborted/i.test(reason)) {
+            markOsmEndpointFailure(endpoint, reason);
+          }
+          console.warn(`[acquisition-osm] city=${city[0]} endpoint=${endpoint} failed:`, reason);
         }
       }
       if (!data) throw lastError || new Error('Overpass indisponível');
@@ -358,7 +478,7 @@ async function providerRequest(db: any) {
           const message = clean(error?.message || error, 500);
           if (/HTTP 429|quota|rate limit|RESOURCE_EXHAUSTED/i.test(message)) {
             googlePlacesDataUntil = Date.now() + 6 * 60 * 60 * 1000;
-            console.warn('[acquisition-replenisher] provider=google_places quota atingida; cooldown de 6h');
+            markProviderBlocked('google_places', 6 * 60 * 60 * 1000, 'HTTP 429/quota atingida');
           } else {
             console.warn('[acquisition-replenisher] provider=google_places falhou:', message);
           }
@@ -380,7 +500,7 @@ async function providerRequest(db: any) {
           const message = clean(error?.message || error, 500);
           if (/HTTP 403|not enough credits|insufficient credits|credit/i.test(message)) {
             fullEnrichDataUntil = Date.now() + 6 * 60 * 60 * 1000;
-            console.warn('[acquisition-replenisher] provider=fullenrich indisponível; cooldown de 6h');
+            markProviderBlocked('fullenrich', 6 * 60 * 60 * 1000, 'sem créditos (HTTP 403/insufficient credits)');
           } else {
             console.warn('[acquisition-replenisher] provider=fullenrich falhou:', message);
           }
@@ -458,6 +578,24 @@ export async function replenishAcquisitionStock(force = false) {
   }
 }
 
+let replenisherTimer: NodeJS.Timeout | null = null;
+let replenisherInFlight: Promise<void> | null = null;
+let replenisherStopped = false;
+
+/** Porta única: timer, tick inicial e drain compartilham a mesma promise. */
+function scheduleReplenisherTick(): Promise<void> {
+  if (replenisherStopped) return Promise.resolve();
+  if (replenisherInFlight) return replenisherInFlight;
+  const promise = replenishAcquisitionStock()
+    .then((r) => { console.log('[acquisition-replenisher]', r); })
+    .catch((e: any) => { console.warn('[acquisition-replenisher]', e?.message || e); })
+    .finally(() => {
+      if (replenisherInFlight === promise) replenisherInFlight = null;
+    });
+  replenisherInFlight = promise;
+  return promise;
+}
+
 export function startAcquisitionReplenisher() {
   // O replenisher faz parte do motor de aquisição. Se o motor estiver
   // habilitado, a descoberta de leads não pode ficar parada só porque a
@@ -465,11 +603,37 @@ export function startAcquisitionReplenisher() {
   const enabled =
     process.env.ACQUISITION_REPLENISHER === '1' ||
     process.env.ACQUISITION_ENGINE === '1';
-  if (started || !enabled) return;
+  if (started || !enabled) return replenisherTimer ?? undefined;
   started = true;
-  const tick = () => replenishAcquisitionStock()
-    .then(r => console.log('[acquisition-replenisher]', r))
-    .catch(e => console.warn('[acquisition-replenisher]', e?.message || e));
-  tick();
-  setInterval(tick, INTERVAL_MS);
+  replenisherStopped = false;
+  void scheduleReplenisherTick();
+  replenisherTimer = setInterval(() => void scheduleReplenisherTick(), INTERVAL_MS);
+  // Não pode manter o processo vivo nem disparar depois do encerramento.
+  replenisherTimer.unref();
+  return replenisherTimer;
+}
+
+/** Para o replenisher (só o timer). Idempotente. */
+export function stopAcquisitionReplenisher(): boolean {
+  replenisherStopped = true;
+  if (!replenisherTimer) {
+    started = false;
+    return false;
+  }
+  clearInterval(replenisherTimer);
+  replenisherTimer = null;
+  started = false;
+  return true;
+}
+
+/** Para o timer e aguarda (limitado) a execução em voo antes de fechar o pool. */
+export async function stopAcquisitionReplenisherAndDrain(
+  timeoutMs = 5_000,
+): Promise<{ drained: boolean; in_flight: boolean }> {
+  replenisherStopped = true;
+  stopAcquisitionReplenisher();
+  const inFlight = replenisherInFlight;
+  if (!inFlight) return { drained: true, in_flight: false };
+  const timedOut = await raceWithTimeout(inFlight, timeoutMs);
+  return { drained: !timedOut, in_flight: timedOut && Boolean(replenisherInFlight) };
 }

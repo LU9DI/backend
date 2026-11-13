@@ -11,6 +11,7 @@
  */
 import type { Database } from 'sqlite';
 import { getDb } from './db.js';
+import { raceWithTimeout } from './gracefulStop.js';
 
 export type RetryJobType =
   | 'paypal_webhook'
@@ -290,6 +291,51 @@ export async function retryQueueStats(db: Database = getDb()) {
 }
 
 let workerStarted = false;
+let retryTimer: NodeJS.Timeout | null = null;
+let retryInFlight: Promise<void> | null = null;
+let retryStopped = false;
+
+/**
+ * Porta ÚNICA de execução: timer, tick inicial e parada compartilham a mesma
+ * promise. Depois do `stop`, nenhum tick novo inicia.
+ */
+function scheduleRetryTick(): Promise<void> {
+  if (retryStopped) return Promise.resolve();
+  if (retryInFlight) return retryInFlight;
+  const promise = (async () => {
+    try {
+      await processRetryQueue(getDb(), 25);
+    } catch (e: any) {
+      console.warn('[retry worker]', e?.message || e);
+    }
+  })().finally(() => {
+    if (retryInFlight === promise) retryInFlight = null;
+  });
+  retryInFlight = promise;
+  return promise;
+}
+
+/** Para o worker de retry (só o timer). Idempotente. */
+export function stopRetryWorker(): void {
+  retryStopped = true;
+  if (retryTimer) {
+    clearInterval(retryTimer);
+    retryTimer = null;
+  }
+  workerStarted = false;
+}
+
+/** Para o timer e aguarda (limitado) a execução em voo antes de fechar o pool. */
+export async function stopRetryWorkerAndDrain(
+  timeoutMs = 5_000,
+): Promise<{ drained: boolean; in_flight: boolean }> {
+  retryStopped = true;
+  stopRetryWorker();
+  const inFlight = retryInFlight;
+  if (!inFlight) return { drained: true, in_flight: false };
+  const timedOut = await raceWithTimeout(inFlight, timeoutMs);
+  return { drained: !timedOut, in_flight: timedOut && Boolean(retryInFlight) };
+}
 
 export function startRetryWorker() {
   if (workerStarted) return;
@@ -298,18 +344,10 @@ export function startRetryWorker() {
     return;
   }
   workerStarted = true;
+  retryStopped = false;
   const interval = Math.max(10_000, Number(process.env.RETRY_WORKER_INTERVAL_MS || 60_000));
 
-  const tick = () => {
-    try {
-      processRetryQueue(getDb(), 25).catch((e) =>
-        console.warn('[retry worker]', e?.message || e)
-      );
-    } catch {
-      /* db não pronto */
-    }
-  };
-
-  tick();
-  setInterval(tick, interval);
+  void scheduleRetryTick();
+  retryTimer = setInterval(() => void scheduleRetryTick(), interval);
+  retryTimer.unref();
 }

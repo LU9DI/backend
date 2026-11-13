@@ -12,6 +12,13 @@ function isProductionRuntime(): boolean {
   return process.env.NODE_ENV === 'production';
 }
 
+/**
+ * Cabeçalhos do contrato de idempotência que o navegador precisa LER.
+ * Sem `Access-Control-Expose-Headers` o cliente não consegue enxergar
+ * `Idempotency-Replayed`/`Retry-After` em uma chamada cross-origin.
+ */
+const EXPOSED_HEADERS = ['Idempotency-Replayed', 'Retry-After'];
+
 export function buildCorsOptions(): CorsOptions {
   const isProd = isProductionRuntime();
   const fromEnv = (process.env.CORS_ORIGINS || '')
@@ -31,7 +38,7 @@ export function buildCorsOptions(): CorsOptions {
     .map((s) => String(s).replace(/\/$/, ''));
   const allowlist = [...new Set([...fromEnv, ...defaults, ...renderFrontendOrigins])];
 
-  if (!isProd) return { origin: true, credentials: true };
+  if (!isProd) return { origin: true, credentials: true, exposedHeaders: EXPOSED_HEADERS };
   if (allowlist.length === 0) {
     console.warn('[cors] PRODUÇÃO sem CORS_ORIGINS/APP_URL/FRONTEND_URL — requests com Origin serão bloqueados.');
   }
@@ -45,5 +52,6 @@ export function buildCorsOptions(): CorsOptions {
       callback(null, false);
     },
     credentials: true,
+    exposedHeaders: EXPOSED_HEADERS,
   };
 }

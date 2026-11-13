@@ -43,7 +43,7 @@ async function findUsuario(db: Database, identifier: string): Promise<any | null
 
   if (isEmailLike(raw)) {
     const email = raw.toLowerCase();
-    const byEmail = await db.get(`SELECT * FROM usuarios WHERE lower(email) = lower(?) LIMIT 1`, [
+    const byEmail = await db.get(`SELECT * FROM usuarios WHERE lower(trim(email)) = lower(trim(?)) LIMIT 1`, [
       email,
     ]);
     if (byEmail) return byEmail;
@@ -126,9 +126,6 @@ export async function loginEmpresa(
     id: usuario.id,
     nome_funcionario: usuario.nome_funcionario,
     empresa_id: usuario.empresa_id,
-    role:
-      usuario.role ||
-      (String(usuario.empresa_id) === 'admin' ? 'admin' : 'empresa'),
   };
   const token = signAccessToken(tokenPayload);
   setAuthCookie(res, token);

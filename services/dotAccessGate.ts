@@ -77,7 +77,7 @@ export async function resolveDotGate(req: Request): Promise<DotGateResult> {
     const payload = verifyAccessToken(token);
     const userId = String(payload.id || '') || null;
 
-    if (isAdminUser({ empresa_id: payload.empresa_id, role: payload.role })) {
+    if (isAdminUser({ empresa_id: payload.empresa_id, role: payload.role, platform_admin: payload.platform_admin === true })) {
       return {
         allowed: false,
         demo: false,

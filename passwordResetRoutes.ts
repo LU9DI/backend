@@ -9,6 +9,7 @@ import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
 import { enviarEmail, smtpConfigured } from './lib/mailer.js';
 import { validarSenhaEmpresa } from './passwordPolicy.js';
+import { requireSchema } from './lib/migrations.js';
 
 const APP_URL = (process.env.APP_URL || process.env.FRONTEND_URL || 'http://localhost:3000').replace(
   /\/$/,
@@ -24,12 +25,7 @@ function emailValido(email: string): boolean {
 }
 
 function isAdminAccount(usuario: any): boolean {
-  if (!usuario) return false;
-  const adminMail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
-  const email = String(usuario.email || '').toLowerCase();
-  if (usuario.empresa_id === 'admin') return true;
-  if (adminMail && email === adminMail) return true;
-  return false;
+  return usuario?.empresa_id === 'admin';
 }
 
 export async function invalidatePasswordResetTokens(
@@ -43,35 +39,19 @@ export async function invalidatePasswordResetTokens(
   return Number(result.changes || 0);
 }
 
+/**
+ * Garante que o schema de autenticação já existe — sem executar DDL.
+ * A DDL vive em `runCentralMigrations` (lib/migrations.ts), executada no boot.
+ */
 export async function ensureAuthColumns(db: Database) {
-  const cols = (await db.all(`PRAGMA table_info(usuarios)`)).map((c: any) => c.name);
-  if (!cols.includes('email')) {
-    await db.exec(`ALTER TABLE usuarios ADD COLUMN email TEXT`);
-  }
-  try {
-    await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios(email)`);
-  } catch {
-    /* ok */
-  }
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS password_resets (
-      id TEXT PRIMARY KEY,
-      usuario_id TEXT NOT NULL,
-      token_hash TEXT NOT NULL,
-      expira_em TIMESTAMPTZ NOT NULL,
-      usado INTEGER DEFAULT 0,
-      criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  try {
-    await db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_password_resets_usuario ON password_resets(usuario_id, usado)`
-    );
-  } catch {
-    /* ok */
-  }
+  await requireSchema(db, {
+    columns: { usuarios: ['email'] },
+    tables: ['password_resets'],
+    indexes: [
+      { table: 'usuarios', name: 'idx_usuarios_email' },
+      { table: 'password_resets', name: 'idx_password_resets_usuario' },
+    ],
+  });
 }
 
 export async function createUsuarioForEmpresa(
@@ -91,7 +71,7 @@ export async function createUsuarioForEmpresa(
   const pol = validarSenhaEmpresa(opts.senha);
   if (!pol.ok) throw new Error(pol.error);
 
-  const existenteEmail = await db.get('SELECT id FROM usuarios WHERE email = ?', [email]);
+  const existenteEmail = await db.get('SELECT id FROM usuarios WHERE LOWER(TRIM(email)) = LOWER(TRIM(?))', [email]);
   if (existenteEmail) throw new Error('Este e-mail já está em uso.');
 
   const id = crypto.randomUUID();
@@ -132,7 +112,7 @@ export function mountPasswordResetRoutes(app: Express, getDb: () => Database) {
 
       let usuario: any = null;
       if (email && emailValido(email)) {
-        usuario = await db.get('SELECT * FROM usuarios WHERE email = ?', [email]);
+        usuario = await db.get('SELECT * FROM usuarios WHERE LOWER(TRIM(email)) = LOWER(TRIM(?))', [email]);
       } else if (cnpj.length === 14) {
         usuario = await db.get('SELECT * FROM usuarios WHERE cnpj = ?', [cnpj]);
       } else {

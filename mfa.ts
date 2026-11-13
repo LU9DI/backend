@@ -8,6 +8,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import rateLimit from 'express-rate-limit';
+import { requireSchema } from './lib/migrations.js';
 
 const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
@@ -97,23 +98,20 @@ function generateBackupCodes(n = 8): string[] {
   return codes;
 }
 
+/**
+ * Verifica as colunas MFA em `usuarios` — sem DDL.
+ * A DDL vive em `runCentralMigrations` (lib/migrations.ts).
+ */
 export async function ensureMfaColumns(db: Database): Promise<void> {
-  const cols = (await db.all(`PRAGMA table_info(usuarios)`)).map((c: any) => c.name);
-  if (!cols.includes('mfa_secret')) await db.exec(`ALTER TABLE usuarios ADD COLUMN mfa_secret TEXT`);
-  if (!cols.includes('mfa_enabled')) {
-    await db.exec(`ALTER TABLE usuarios ADD COLUMN mfa_enabled INTEGER DEFAULT 0`);
-  }
-  if (!cols.includes('mfa_backup_hashes')) {
-    await db.exec(`ALTER TABLE usuarios ADD COLUMN mfa_backup_hashes TEXT`);
-  }
-  if (!cols.includes('mfa_pending_secret')) {
-    await db.exec(`ALTER TABLE usuarios ADD COLUMN mfa_pending_secret TEXT`);
-  }
+  await requireSchema(db, {
+    columns: {
+      usuarios: ['mfa_secret', 'mfa_enabled', 'mfa_backup_hashes', 'mfa_pending_secret'],
+    },
+  });
 }
 
 function isAdminUser(u: any): boolean {
-  const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
-  return u?.empresa_id === 'admin' || String(u?.email || '').toLowerCase() === adminMail;
+  return u?.empresa_id === 'admin';
 }
 
 const mfaLimiter = rateLimit({
@@ -307,6 +305,7 @@ export function mountMfaRoutes(
           nome_funcionario: usuario.nome_funcionario,
           empresa_id: usuario.empresa_id,
           role: 'admin',
+          platform_admin: true,
           mfa: true,
         },
         opts.JWT_SECRET,

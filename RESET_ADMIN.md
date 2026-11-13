@@ -1,130 +1,51 @@
-# Login admin — guia definitivo
+# Acesso administrativo
 
-## Credenciais
+## Identidade administrativa
 
-| Campo | Valor |
+O painel administrativo usa `POST /api/admin/login`, implementado em
+`adminLoginRoute.ts`. A rota consulta o usuário na tabela `usuarios`, valida
+a senha armazenada com bcrypt e aceita somente:
 
-| **URL** | `/admin/login` |
-| **E-mail** | `admin@seusaas.com` |
-| **Senha** | `MudeEstaSenha123!` |
+- usuário dedicado cujo `empresa_id` seja `admin`.
 
-Se no arquivo `.env` existir `ADMIN_PASSWORD=alguma-coisa`, use **esse** valor como senha.
+`ADMIN_EMAIL` identifica o endereço usado para localizar essa conta; o e-mail,
+isoladamente, nunca concede privilégios. A conta administrativa não pode
+compartilhar identidade com um tenant.
 
----
+Se MFA estiver habilitado, o acesso só é concluído após a validação do desafio
+e do código MFA.
 
-## Por que o login falha
+## Sessão e autorização
 
-1. A tela `/admin/login` chama `POST /api/admin/login` com **e-mail + senha**.
-2. Sem essa rota no backend, a API responde 404 → “Erro de conexão” ou falha no front.
-3. Se a rota existe mas a senha no banco é outra → 401 Credenciais inválidas.
+Após autenticação administrativa bem-sucedida, o backend emite um JWT assinado
+com o claim `platform_admin: true`. Esse claim é a prova explícita de privilégio
+administrativo para contas cujo `empresa_id` é um tenant comum.
 
----
+**Não** crie tokens administrativos manualmente e não use `role: 'admin'`
+como prova de privilégio. O campo `role` legado não concede acesso de
+plataforma. Tokens administrativos antigos devem ser renovados pelo fluxo
+`/api/admin/login` (e MFA, quando habilitado).
 
-## Correção em 3 passos (no seu PC)
+O login de empresa permanece separado em `/api/auth/login` (ou na rota de
+login de empresa configurada pelo frontend); ele não concede privilégios
+administrativos.
 
-### 1) Cole esta rota no `server.ts`
+## Recuperação de acesso
 
-Procure `app.post('/api/admin/logout'` e **antes** dela cole:
+Não existe senha padrão segura para documentar. Não use credenciais copiadas
+de documentação, scripts ou histórico de terminal. A redefinição deve ser
+realizada por um operador autorizado, usando o procedimento de gestão de
+credenciais do ambiente e armazenando somente o hash bcrypt no banco.
 
-```ts
-app.post('/api/admin/login', loginLimiter, async (req: Request, res: Response) => {
-  try {
-    const email = String(req.body.email || '').trim().toLowerCase();
-    const senha = String(req.body.senha || '');
-    if (!email || !senha) {
-      return res.status(400).json({ error: 'E-mail e senha são obrigatórios.' });
-    }
-    const usuario = await db.get('SELECT * FROM usuarios WHERE email = ?', [email]);
-    if (!usuario || !usuario.senha_hash) {
-      return res.status(401).json({ error: 'Credenciais inválidas.' });
-    }
-    const isAdmin =
-      usuario.empresa_id === 'admin' ||
-      String(usuario.email || '').toLowerCase() === 'admin@seusaas.com';
-    if (!isAdmin) {
-      return res.status(403).json({ error: 'Acesso restrito ao painel administrativo.' });
-    }
-    const ok = await bcrypt.compare(senha, usuario.senha_hash);
-    if (!ok) return res.status(401).json({ error: 'Credenciais inválidas.' });
+Após a redefinição, entre pelo painel administrativo e conclua o MFA, se
+habilitado. Se o login falhar, verifique o e-mail administrativo configurado,
+a existência do usuário, o hash bcrypt e os logs do backend sem registrar
+senhas, tokens ou códigos MFA.
 
-    const token = jwt.sign(
-      {
-        id: usuario.id,
-        nome_funcionario: usuario.nome_funcionario,
-        empresa_id: usuario.empresa_id,
-        role: 'admin',
-      },
-      JWT_SECRET,
-      { expiresIn: '1d' }
-    );
-    setAuthCookie(res, token);
-    res.json({
-      success: true,
-      tokenPayload: {
-        id: usuario.id,
-        nome_funcionario: usuario.nome_funcionario,
-        empresa_id: usuario.empresa_id,
-        role: 'admin',
-      },
-    });
-  } catch (error) {
-    console.error('Erro no admin login:', error);
-    res.status(500).json({ error: 'Erro interno do servidor.' });
-  }
-});
-```
+## Verificações
 
-(Ou use o arquivo `adminLoginRoute.ts` já no repositório com `mountAdminLoginRoute`.)
+- `POST /api/admin/login`: autentica a conta administrativa.
+- `GET /api/admin/me`: valida a sessão administrativa atual.
+- `POST /api/admin/logout`: encerra a sessão no navegador.
 
-### 2) Resetar senha do admin no banco
-
-```bash
-cd backend
-npx tsx -e "
-import bcrypt from 'bcrypt';
-import crypto from 'crypto';
-import { open } from 'sqlite';
-import sqlite3 from 'sqlite3';
-
-const path = process.env.SQLITE_DB_PATH || './data/database.sqlite';
-const db = await open({ filename: path, driver: sqlite3.Database });
-const hash = await bcrypt.hash('MudeEstaSenha123!', 10);
-const u = await db.get(\"SELECT id FROM usuarios WHERE email = 'admin@seusaas.com'\");
-if (!u) {
-  await db.run(
-    'INSERT INTO usuarios (id, cnpj, nome_funcionario, empresa_id, senha_hash, email) VALUES (?, ?, ?, ?, ?, ?)',
-    [crypto.randomUUID(), '00000000000000', 'Admin', 'admin', hash, 'admin@seusaas.com']
-  );
-  console.log('Admin criado');
-} else {
-  await db.run(\"UPDATE usuarios SET senha_hash = ? WHERE email = 'admin@seusaas.com'\", [hash]);
-  console.log('Senha resetada');
-}
-await db.close();
-"
-```
-
-### 3) Reiniciar o backend e testar
-
-```bash
-# reinicie o processo do backend (npm run dev / tsx server.ts)
-
-curl -i -X POST http://localhost:5000/api/admin/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"admin@seusaas.com","senha":"MudeEstaSenha123!"}'
-```
-
-- **200** + cookie → abra `/admin/login` e entre  
-- **404** → rota ainda não está no `server.ts` que está rodando  
-- **401** → rode o reset de senha de novo  
-- **Failed to fetch** → `NEXT_PUBLIC_API_URL` no frontend aponta para a URL errada, ou o backend está offline
-
----
-
-## Login de empresa (não é o admin)
-
-| Campo | Valor |
-
-| URL | `/login` |
-| CNPJ | o do trial |
-| Senha | a cadastrada no trial |
+Nunca compartilhe o JWT, cookies de sessão, senha ou códigos de recuperação.

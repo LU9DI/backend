@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { getDb } from './db.js';
+import { raceWithTimeout } from './gracefulStop.js';
 import { enqueueRetry } from './retryQueue.js';
 import { enviarEmailAquisicao } from './mailer.js';
 import { currentSendPeriod, cumulativeCapForPeriod } from './acquisitionWindow.js';
@@ -471,18 +472,59 @@ export async function queueEligibleAcquisition(limit = 25) {
   }
 }
 
+let acquisitionTimer: NodeJS.Timeout | null = null;
+let acquisitionInFlight: Promise<void> | null = null;
+let acquisitionStopped = false;
+
+/** Porta única: timer, tick inicial e drain compartilham a mesma promise. */
+function scheduleAcquisitionTick(): Promise<void> {
+  if (acquisitionStopped) return Promise.resolve();
+  if (acquisitionInFlight) return acquisitionInFlight;
+  const promise = queueEligibleAcquisition(Math.max(1, Number(process.env.ACQUISITION_PER_TICK || 1)))
+    .then((r) => { console.log('[acquisition]', r); })
+    .catch((e: any) => { console.warn('[acquisition worker]', e?.message || e); })
+    .finally(() => {
+      if (acquisitionInFlight === promise) acquisitionInFlight = null;
+    });
+  acquisitionInFlight = promise;
+  return promise;
+}
+
+/**
+ * Para o worker de aquisição (só o timer). Idempotente.
+ *
+ * Sem isso, um tick em voo podia continuar consultando o PostgreSQL depois
+ * que o pool foi fechado — a origem dos erros de reconexão no redeploy.
+ */
+export function stopAcquisitionWorker(): void {
+  acquisitionStopped = true;
+  if (acquisitionTimer) {
+    clearInterval(acquisitionTimer);
+    acquisitionTimer = null;
+  }
+  started = false;
+}
+
+/** Para o timer e aguarda (limitado) a execução em voo antes de fechar o pool. */
+export async function stopAcquisitionWorkerAndDrain(
+  timeoutMs = 5_000,
+): Promise<{ drained: boolean; in_flight: boolean }> {
+  acquisitionStopped = true;
+  stopAcquisitionWorker();
+  const inFlight = acquisitionInFlight;
+  if (!inFlight) return { drained: true, in_flight: false };
+  const timedOut = await raceWithTimeout(inFlight, timeoutMs);
+  return { drained: !timedOut, in_flight: timedOut && Boolean(acquisitionInFlight) };
+}
+
 export function startAcquisitionWorker() {
   if (started || process.env.ACQUISITION_ENGINE === '0') return;
   started = true;
+  acquisitionStopped = false;
   console.log('[acquisition] worker enabled; explicit disable requires ACQUISITION_ENGINE=0');
-  const tick = () => {
-    queueEligibleAcquisition(Math.max(1, Number(process.env.ACQUISITION_PER_TICK || 1)))
-      .then(r => console.log('[acquisition]', r))
-      .catch(e => console.warn('[acquisition worker]', e?.message || e));
-
-  };
-  tick();
-  setInterval(tick, ENGINE_INTERVAL_MS);
+  void scheduleAcquisitionTick();
+  acquisitionTimer = setInterval(() => void scheduleAcquisitionTick(), ENGINE_INTERVAL_MS);
+  acquisitionTimer.unref();
 }
 
 export async function acquisitionEngineStatus() {

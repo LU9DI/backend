@@ -64,7 +64,7 @@ export function mountAdminOwnerRoutes(app: Express) {
       }
       const usuario = userId
         ? await db.get('SELECT id, empresa_id FROM usuarios WHERE id = ? LIMIT 1', [userId])
-        : await db.get('SELECT id, empresa_id FROM usuarios WHERE lower(email) = lower(?) LIMIT 1', [email]);
+        : await db.get('SELECT id, empresa_id FROM usuarios WHERE lower(trim(email)) = lower(trim(?)) LIMIT 1', [email]);
       if (!usuario) return res.status(404).json({ error: 'Usuário não encontrado.' });
       if (String(usuario.empresa_id) !== String(empresa.id)) {
         return res.status(400).json({ error: 'Este usuário não pertence à empresa informada.' });

@@ -7,6 +7,7 @@
  */
 import crypto from 'crypto';
 import type { Database } from 'sqlite';
+import { requireReviewSchema } from './migrations.js';
 
 const recentHits = new Map<string, number[]>();
 
@@ -76,25 +77,9 @@ export function checkMemoryRate(ip: string, empresaId: string): void {
   recentHits.set(key, list);
 }
 
+/** Verifica (sem DDL) as colunas anti-fraude de reviews. */
 export async function ensureReviewFraudColumns(db: Database): Promise<void> {
-  const cols = [
-    'is_test INTEGER DEFAULT 0',
-    'ip_hash TEXT',
-    'fraud_flags TEXT',
-    'origin TEXT',
-    'client_whatsapp TEXT',
-  ];
-  for (const ddl of cols) {
-    try {
-      await db.exec(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS ${ddl}`);
-    } catch {
-      try {
-        await db.exec(`ALTER TABLE reviews ADD COLUMN ${ddl}`);
-      } catch {
-        /* já existe */
-      }
-    }
-  }
+  await requireReviewSchema(db, ['is_test', 'ip_hash', 'fraud_flags', 'origin', 'client_whatsapp']);
 }
 
 function normalizeComment(c: string): string {

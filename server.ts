@@ -1,5 +1,5 @@
-/**
- * Filtra.IA — bootstrap da API (produção-ready)
+﻿/**
+ * Filtra.IA � bootstrap da API (produção-ready)
  */
 import express from 'express';
 import cors from 'cors';
@@ -14,7 +14,8 @@ import { jwtRotationStatus } from './lib/jwtKeys.js';
 import { buildCorsOptions } from './lib/cors.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { requestIdMiddleware, securityHeaders } from './middleware/security.js';
-import { latencyMiddleware, getHttpMetrics } from './lib/metrics.js';
+import { latencyMiddleware, getHttpMetrics, getCounters } from './lib/metrics.js';
+import { runWithObservability, logEvent } from './lib/observability.js';
 import { mountTrialRoutes } from './routes/trialRoutes.js';
 import { mountLeadRoutes } from './routes/leadRoutes.js';
 import { mountLegalAcceptRoutes } from './routes/legalAcceptRoutes.js';
@@ -62,9 +63,10 @@ import { ensureDotAdminSecuritySchema } from './services/dotAdminSecurity.js';
 import { ensureDotAccessSchema } from './services/dotAccessControl.js';
 import { ensureDotAgentSchema } from './services/dotAgent.js';
 import { ensureMissionTables } from './services/dotAgentMissions.js';
-import { startDotMonitorScheduler } from './services/dotScheduler.js';
-import { startMonthlyReportScheduler, getMonthlyReportSchedulerStatus } from './services/monthlyReportScheduler.js';
-import { startDotAgentWorker } from './services/dotAgentWorker.js';
+import { startDotMonitorScheduler, stopDotMonitorScheduler, getDotSchedulerStatus } from './services/dotScheduler.js';
+import { startMonthlyReportScheduler, getMonthlyReportSchedulerStatus, stopMonthlyReportSchedulerAndDrain } from './services/monthlyReportScheduler.js';
+import { startDotAgentWorker, stopDotAgentWorkerAndDrain, getDotAgentWorkerStatus } from './services/dotAgentWorker.js';
+import { assertDotLedgerSchema } from './services/dotLedger.js';
 import { mcpApp } from './filtraMcp.js';
 import { stripeConfigured, refreshPlanPricesFromDb } from './stripeBilling.js';
 import { paypalConfigured } from './lib/paypal.js';
@@ -77,14 +79,14 @@ import { ensurePushSchema, pushConfigured, initWebPush } from './lib/push.js';
 import { ensureAiUsageSchema } from './lib/aiUsage.js';
 import { ensureOpsTables } from './lib/opsLog.js';
 import { ensureAuditSchema } from './lib/auditLog.js';
-import { ensureRetryQueue, startRetryWorker } from './lib/retryQueue.js';
+import { ensureRetryQueue, startRetryWorker, stopRetryWorkerAndDrain } from './lib/retryQueue.js';
 import { registerAllRetryHandlers } from './lib/retryHandlers.js';
 import { ensurePlanPricingSchema } from './lib/planPricing.js';
 import { allowPlanSwitch } from './lib/plans.js';
 import { smtpConfigured } from './lib/mailer.js';
 import { n8nConfigured } from './lib/n8n.js';
-import { ensureAcquisitionEngineSchema, startAcquisitionWorker } from './lib/acquisitionEngine.js';
-import { startAcquisitionReplenisher } from './lib/acquisitionReplenisher.js';
+import { ensureAcquisitionEngineSchema, startAcquisitionWorker, stopAcquisitionWorkerAndDrain } from './lib/acquisitionEngine.js';
+import { startAcquisitionReplenisher, stopAcquisitionReplenisherAndDrain } from './lib/acquisitionReplenisher.js';
 import { startProductHuntAcquisition } from './lib/acquisitionProductHunt.js';
 import { startHubSpotAcquisitionSync } from './lib/hubspotAcquisitionSync.js';
 import { ensureFiscalSchema, fiscalConfigured } from './lib/fiscal.js';
@@ -107,7 +109,7 @@ const BUILD = {
  * O Filtra Dot só é montado quando explicitamente habilitado.
  * O DOT continua desativado por padrão em produção: enquanto a validação de
  * segurança e os testes de produção não estiverem completos, as rotas do Dot
- * nem existem no processo — o que impede acesso por engano ou por variável de
+ * nem existem no processo � o que impede acesso por engano ou por variável de
  * ambiente presa a staging.
  *
  * Para habilitar (somente após validação local): FILTRA_DOT_ENABLED=1.
@@ -118,17 +120,38 @@ function dotRuntimeEnabled() { return process.env.FILTRA_DOT_ENABLED === '1'; }
 const app = express();
 app.set('trust proxy', 1);
 
-// Liveness is deliberately registered before parsers, CORS, metrics and
-// application middleware. Render's health check must remain a tiny, DB-free
-// response even while optional middleware or startup work is under pressure.
 app.get('/api/live', (_req, res) => {
   res.status(200).json({ ok: true, live: true, build: BUILD, time: new Date().toISOString() });
 });
 
+// Liveness is deliberately registered before parsers, CORS, metrics and
+// application middleware. Render's health check must remain a tiny, DB-free
+// response even while optional middleware or startup work is under pressure.
 app.use(requestIdMiddleware);
+/**
+ * Contexto de correlação por requisição (AsyncLocalStorage): tudo que for
+ * registrado daqui em diante — inclusive dentro de serviços assíncronos —
+ * carrega o mesmo `request_id`, e o tenant é anexado após a autenticação.
+ */
+app.use((req, _res, next) => {
+  const requestId = String((req as { requestId?: string }).requestId || '');
+  runWithObservability({ requestId: requestId || 'unknown', route: req.path }, next);
+});
 app.use(securityHeaders);
 app.use(cookieParser());
 app.use(latencyMiddleware as any);
+/** Registra falhas de servidor (5xx) com o mesmo request_id da resposta. */
+app.use((req, res, next) => {
+  const requestId = String((req as { requestId?: string }).requestId || '') || 'unknown';
+  const route = req.path;
+  res.on('finish', () => {
+    if (res.statusCode < 500) return;
+    runWithObservability({ requestId, route }, () =>
+      logEvent('error', 'http_request_failed', { method: req.method, status: res.statusCode }),
+    );
+  });
+  next();
+});
 app.use((req, res, next) => {
   // Stripe and Resend need the exact raw payload for signature verification.
   if (req.originalUrl?.startsWith('/api/webhook/stripe') || req.originalUrl?.startsWith('/api/n8n/acquisition/email-events') || req.originalUrl?.startsWith('/mcp')) return next();
@@ -147,6 +170,7 @@ app.use((req, res, next) => {
   }
   return next();
 });
+
 
 app.get('/api/ready', async (_req, res) => {
   try {
@@ -197,6 +221,14 @@ app.get('/api/health', async (_req, res) => {
     fiscal: fiscalConfigured(),
     report_engine: 'structured-json',
     monthly_reports_scheduler: getMonthlyReportSchedulerStatus(),
+    // Somente sinais booleanos: `/api/health` é público e não deve expor
+    // mensagens de erro internas. O detalhe fica em `/api/metrics`.
+    dot: {
+      enabled: dotRuntimeEnabled(),
+      ledger_ready: dotLedgerReady,
+      scheduler_active: dotRuntimeEnabled() && getDotSchedulerStatus().timer_active,
+      agent_worker_active: dotRuntimeEnabled() && getDotAgentWorkerStatus().timer_active,
+    },
     ai_latency: {
       groq: ai.stats.groq.latency,
       gemini: ai.stats.gemini.latency,
@@ -222,12 +254,33 @@ app.get('/api/metrics', (req, res) => {
     build: BUILD,
     http: getHttpMetrics(),
     ai: getAiLoadStats(),
+    counters: getCounters(),
+    dot: {
+      enabled: dotRuntimeEnabled(),
+      ledger_ready: dotLedgerReady,
+      scheduler: getDotSchedulerStatus(),
+      agent_worker: getDotAgentWorkerStatus(),
+    },
   });
 });
 
 const PORT = Number(process.env.PORT || 5000);
 let server: Server | null = null;
 let shuttingDown = false;
+/** `true` só depois de VALIDAR o schema do ledger criado pela migração central. */
+let dotLedgerReady = false;
+
+/**
+ * Componentes de background com parada SÍNCRONA (timer). O DOT NÒO entra aqui:
+ * usa drains assíncronos próprios (`stopDotMonitorScheduler`/
+ * `stopDotAgentWorkerAndDrain`), que aguardam a execução em voo. Registrar o
+ * DOT aqui criaria parada DUPLICADA.
+ */
+const backgroundStops: Array<{ name: string; stop: () => unknown }> = [];
+
+function trackBackground(name: string, stop: () => unknown): void {
+  backgroundStops.push({ name, stop });
+}
 
 
 
@@ -242,7 +295,7 @@ async function runSentimentBackfillOnBoot() {
       limit,
       useAi: process.env.BACKFILL_SENTIMENT_AI === '1',
     });
-    console.log(`🧠 Backfill sentimento: updated=${r.updated} errors=${r.errors}`);
+    console.log(`�x�� Backfill sentimento: updated=${r.updated} errors=${r.errors}`);
   } catch (e: any) {
     console.warn('Backfill sentimento:', e?.message || e);
   }
@@ -262,20 +315,67 @@ async function runLgpdSweepOnBoot() {
 async function gracefulShutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`⏹  ${signal} — encerramento gracioso iniciado...`);
+  console.log(`⏹  ${signal} � encerramento gracioso iniciado...`);
   const force = setTimeout(() => {
     console.error('Force exit após timeout de shutdown');
     process.exit(1);
-  }, 25_000);
+  }, 45_000);
   force.unref();
+  // Orçamento único para todas as drenagens: força o exit só depois de o
+  // conjunto caber (evita o force disparar antes de closeDB()).
+  const drainDeadline = Date.now() + 30_000;
+  const perDrainCap = () => Math.max(250, Math.min(5_000, drainDeadline - Date.now()));
 
   try {
+    // 1) Para de aceitar novas requisições HTTP (o processo segue vivo).
     if (server) {
       await new Promise<void>((resolve) => server!.close(() => resolve()));
       console.log('HTTP fechado.');
     }
+
+    // 2) Timers dos subsistemas com parada SÍNCRONA. Aqui `stop` significa
+    //    "parar o timer" � nada em voo é aguardado neste grupo.
+    for (const entry of backgroundStops.slice().reverse()) {
+      try {
+        const result = entry.stop();
+        console.log(`[shutdown] ${entry.name}: timer parado`, result === undefined ? '' : JSON.stringify(result));
+      } catch (e: any) {
+        console.warn(`[shutdown] falha ao parar ${entry.name}:`, e?.message || e);
+      }
+    }
+
+    // 3) Drena o DOT: aguarda a execução em voo (scheduler e worker) dentro do
+    //    teto individual. O retorno distingue drenagem concluída de timeout.
+    const drain = async <T>(label: string, stop: () => Promise<T>): Promise<T | null> => {
+      try {
+        const result = await stop();
+        console.log(`[shutdown] ${label}:`, JSON.stringify(result));
+        return result;
+      } catch (e: any) {
+        console.warn(`[shutdown] falha ao drenar ${label}:`, e?.message || e);
+        return null;
+      }
+    };
+    const dotScheduler = await drain('DOT scheduler', () => stopDotMonitorScheduler(perDrainCap()));
+    const dotWorker = await drain('DOT agent worker', () => stopDotAgentWorkerAndDrain(perDrainCap()));
+    // Workers de background: param o timer e aguardam a execução em voo
+    // (com teto individual) antes de fechar o pool.
+    const retryWorker = await drain('retry worker', () => stopRetryWorkerAndDrain(perDrainCap()));
+    const acquisitionWorker = await drain('acquisition worker', () => stopAcquisitionWorkerAndDrain(perDrainCap()));
+    const replenisher = await drain('acquisition replenisher', () => stopAcquisitionReplenisherAndDrain(perDrainCap()));
+    const monthlyReport = await drain('monthly report scheduler', () => stopMonthlyReportSchedulerAndDrain(perDrainCap()));
+
+    // 4) Fecha o pool UMA única vez, após as drenagens. Se algum drain expirou,
+    //    o risco de operação pendente fica explícito no log abaixo.
     await closeDB();
-    console.log('Banco fechado.');
+    console.log('Banco fechado.', {
+      dot_scheduler: dotScheduler,
+      dot_agent_worker: dotWorker,
+      retry_worker: retryWorker,
+      acquisition_worker: acquisitionWorker,
+      replenisher,
+      monthly_report: monthlyReport,
+    });
     clearTimeout(force);
     process.exit(0);
   } catch (e: any) {
@@ -292,7 +392,7 @@ export async function startServer() {
   // Bind HTTP immediately so platform health checks can reach liveness while
   // database/schema/worker initialization continues in the same instance.
   server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 API Filtra.IA listening on 0.0.0.0:${PORT}`);
+    console.log(`�xa� API Filtra.IA listening on 0.0.0.0:${PORT}`);
   });
   server.keepAliveTimeout = 65_000;
   server.headersTimeout = 66_000;
@@ -364,13 +464,18 @@ export async function startServer() {
   try {
     await ensureAcquisitionEngineSchema(getDb());
     startAcquisitionWorker();
-    setTimeout(() => {
+    // O bootstrap atrasado do replenisher também é cancelado no encerramento:
+    // sem isso ele podia nascer DEPOIS do fechamento do pool do PostgreSQL.
+    const replenisherBoot = setTimeout(() => {
       try {
         startAcquisitionReplenisher();
       } catch (e: any) {
         console.warn('[acquisition-replenisher] delayed bootstrap failed:', e?.message || e);
       }
     }, 60_000);
+    trackBackground('acquisition replenisher bootstrap', () => {
+      clearTimeout(replenisherBoot);
+    });
     await startProductHuntAcquisition();
     await startHubSpotAcquisitionSync();
   } catch (e) {
@@ -387,6 +492,15 @@ export async function startServer() {
     await ensureMissionTables();
   } catch (e) {
     console.warn('dot schema:', e);
+  }
+  try {
+    // A tabela `dot_budget_reservations` e as colunas de token são criadas pela
+    // migração central (`initDB`). Aqui só VALIDAMOS: sem segunda fonte de DDL
+    // e sem DDL por requisição. Falha aqui mantém o DOT desativado (fail-closed).
+    await assertDotLedgerSchema();
+    dotLedgerReady = true;
+  } catch (e) {
+    console.warn('dot ledger schema:', e);
   }
   try {
     await ensureEmpresaOwnerSchema(getDb());
@@ -431,14 +545,21 @@ export async function startServer() {
   mountTelegramRoutes(app);
   mountFiscalRoutes(app);
   if (dotRuntimeEnabled()) {
-    mountDotRoutes(app);
-    mountDotAccessRoutes(app);
-    mountDotAgentRoutes(app);
-    mountDotAgentMissionRoutes(app);
-    mountDotAdminRoutes(app);
-    startDotMonitorScheduler();
-    startDotAgentWorker();
-    console.log('[dot] Filtra Dot habilitado: rotas + monitor + agente em background.');
+    if (!dotLedgerReady) {
+      // Fail-closed: sem schema de orçamento validado, o DOT não é ativado; o
+      // restante do servidor segue funcionando normalmente.
+      app.get('/api/dot/status', (_req, res) => res.status(503).json({ ok: false, enabled: false, access: false, error: 'Filtra Dot indisponível: schema do orçamento não validado.' }));
+      console.error('[dot] ledger schema inválido � Filtra Dot NÒO ativado (fail-closed).');
+    } else {
+      mountDotRoutes(app);
+      mountDotAccessRoutes(app);
+      mountDotAgentRoutes(app);
+      mountDotAgentMissionRoutes(app);
+      mountDotAdminRoutes(app);
+      startDotMonitorScheduler();
+      startDotAgentWorker();
+      console.log('[dot] Filtra Dot habilitado: rotas + monitor + agente em background.');
+    }
   } else {
     app.get('/api/dot/status', (_req, res) => res.status(403).json({ ok: false, enabled: false, access: false, error: 'Filtra Dot desativado. Defina FILTRA_DOT_ENABLED=1 para habilitar.' }));
     console.log('[dot] Filtra Dot desativado (defina FILTRA_DOT_ENABLED=1 para habilitar).');
@@ -456,23 +577,24 @@ export async function startServer() {
   app.use(notFoundHandler);
   app.use(errorHandler);
 
-  console.log(`📦 build ${BUILD.version} marker=${BUILD.marker}`);
+  console.log(`�x� build ${BUILD.version} marker=${BUILD.marker}`);
   console.log(
-    `💳 Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | WeChat: ${wechatConfigured() ? 'ok' : 'OFF'}`
+    `�x� Stripe: ${stripeConfigured() ? 'ok' : 'OFF'} | Pix: ${mpConfigured() ? 'ok' : 'OFF'} | PayPal: ${paypalConfigured() ? 'ok' : 'OFF'} | WeChat: ${wechatConfigured() ? 'ok' : 'OFF'}`
   );
-  console.log(`📧 SMTP: ${smtpConfigured() ? 'configurado' : 'OFF'}`);
-  console.log(`🔗 n8n: ${n8nConfigured() ? 'webhook ON' : 'OFF'}`);
-  console.log(`🧾 NFS-e: ${fiscalConfigured() ? 'configurado' : 'OFF'}`);
-  console.log('📄 Relatórios: structured-json / canais');
+  console.log(`�x� SMTP: ${smtpConfigured() ? 'configurado' : 'OFF'}`);
+  console.log(`�x n8n: ${n8nConfigured() ? 'webhook ON' : 'OFF'}`);
+  console.log(`�x�� NFS-e: ${fiscalConfigured() ? 'configurado' : 'OFF'}`);
+  console.log('�x Relatórios: structured-json / canais');
   if (String(process.env.NODE_ENV || '') === 'production' && String(process.env.ALLOW_PLAN_SWITCH || '').trim()) {
-    console.warn('[seguranca] ALLOW_PLAN_SWITCH definido em produção é IGNORADO — troca de planos de teste permanece desativada.');
+    console.warn('[seguranca] ALLOW_PLAN_SWITCH definido em produção é IGNORADO � troca de planos de teste permanece desativada.');
   }
   if (!wechatConfigured()) {
-    console.log('⚠️  WeChat Pay OFF — defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
+    console.log('�a�️  WeChat Pay OFF � defina WECHAT_APP_ID / WECHAT_MCH_ID / WECHAT_API_KEY para ligar.');
   }
 
   process.once('SIGTERM', () => void gracefulShutdown('SIGTERM'));
   process.once('SIGINT', () => void gracefulShutdown('SIGINT'));
 }
+
 
 

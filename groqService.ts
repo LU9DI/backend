@@ -10,6 +10,8 @@ import {
 } from './lib/sentiment.js';
 import { estimateTokens, recordAiUsage } from './lib/aiUsage.js';
 import { getDb } from './lib/db.js';
+import { incCounter } from './lib/metrics.js';
+import { logEvent } from './lib/observability.js';
 import { isRateLimitError, recordRateLimitHit } from './lib/aiMonitor.js';
 import {
   normalizeLocale,
@@ -35,6 +37,10 @@ export type AiCallResult = {
   tokens: number;
   /** Modelo realmente utilizado na chamada (nunca um valor presumido). */
   model: string;
+  /** Tokens de entrada (prompt), quando o provedor informa; `null` quando não sabe. */
+  input_tokens: number | null;
+  /** Tokens de saída (resposta), quando o provedor informa; `null` quando não sabe. */
+  output_tokens: number | null;
 };
 
 /** Modelo padrão configurado para o provedor. */
@@ -271,7 +277,7 @@ function shouldFailover(status: number, body: string): boolean {
   );
 }
 
-type ProviderRaw = { text: string; tokens: number };
+type ProviderRaw = { text: string; tokens: number; inputTokens?: number | null; outputTokens?: number | null };
 
 async function callGroq(
   system: string,
@@ -315,10 +321,19 @@ async function callGroq(
   const text = data?.choices?.[0]?.message?.content;
   if (!text) throw new Error('Groq retornou resposta vazia');
   const usage = data?.usage;
+  // Groq informa prompt_tokens/completion_tokens/total_tokens. A soma real é
+  // preferida ao total reportado, que é opcional; quando nada é informado, cai
+  // para a estimativa por caracteres.
+  const input = Number(usage?.prompt_tokens);
+  const output = Number(usage?.completion_tokens);
+  const total = Number(usage?.total_tokens);
+  const inputTok = Number.isFinite(input) && input >= 0 ? Math.round(input) : null;
+  const outputTok = Number.isFinite(output) && output >= 0 ? Math.round(output) : null;
   const tokens =
-    Number(usage?.total_tokens) ||
+    (Number.isFinite(total) && total > 0 ? Math.round(total) : 0) ||
+    ((inputTok ?? 0) + (outputTok ?? 0)) ||
     estimateTokens(system, user, String(text));
-  return { text: String(text).trim(), tokens };
+  return { text: String(text).trim(), tokens, inputTokens: inputTok, outputTokens: outputTok };
 }
 
 async function callGemini(
@@ -363,11 +378,16 @@ async function callGemini(
     data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') || '';
   if (!text.trim()) throw new Error('Gemini retornou resposta vazia');
   const meta = data?.usageMetadata;
+  const input = Number(meta?.promptTokenCount);
+  const output = Number(meta?.candidatesTokenCount);
+  const total = Number(meta?.totalTokenCount);
+  const inputTok = Number.isFinite(input) && input >= 0 ? Math.round(input) : null;
+  const outputTok = Number.isFinite(output) && output >= 0 ? Math.round(output) : null;
   const tokens =
-    Number(meta?.totalTokenCount) ||
-    Number(meta?.promptTokenCount || 0) + Number(meta?.candidatesTokenCount || 0) ||
+    (Number.isFinite(total) && total > 0 ? Math.round(total) : 0) ||
+    ((inputTok ?? 0) + (outputTok ?? 0)) ||
     estimateTokens(system, user, text);
-  return { text: text.trim(), tokens };
+  return { text: text.trim(), tokens, inputTokens: inputTok, outputTokens: outputTok };
 }
 
 async function invokeProvider(
@@ -383,33 +403,93 @@ async function invokeProvider(
     : callGemini(system, user, maxTokens, temperature, requestedModel);
 }
 
-export async function callAI(
+/**
+ * Indireção deliberada: `callAI` delega para este ponto mutável.
+ *
+ * Os módulos são ESM com namespace imutável, então um teste não consegue
+ * substituir `callAI` diretamente. Esta referência permite instalar um
+ * provedor simulado (`setCallAIImpl`) sem chamada de rede e sem consumo de
+ * crédito — usada por `tests/dotChatLedger.http.test.ts`.
+ */
+let callAIImpl: typeof callAIReal | null = null;
+
+export function setCallAIImpl(impl: typeof callAIReal | null): void {
+  // Injecao EXCLUSIVA de teste: em producao o provedor real e sempre usado.
+  if (process.env.NODE_ENV !== 'test') {
+    throw new Error('setCallAIImpl e exclusivo de ambiente de teste.');
+  }
+  callAIImpl = impl;
+}
+
+/**
+ * Agrega as falhas de TODOS os provedores preservando a mensagem e as
+ * propriedades (status/code/body/provider/failover) do erro final, para que
+ * consumidores que liam o último erro continuem funcionando.
+ */
+export function buildProviderAggregateError(attemptErrors: Error[]): AggregateError {
+  const lastError = attemptErrors[attemptErrors.length - 1];
+  const aggregate = new AggregateError(
+    attemptErrors,
+    lastError?.message || 'Falha em todos os providers de IA',
+  );
+  if (lastError) {
+    for (const key of ['status', 'code', 'body', 'provider', 'failover'] as const) {
+      const value = (lastError as any)[key];
+      if (value !== undefined && (aggregate as any)[key] === undefined) {
+        (aggregate as any)[key] = value;
+      }
+    }
+  }
+  return aggregate;
+}
+
+async function callAIReal(
   system: string,
   user: string,
   maxTokens = 180,
   temperature = 0.6,
-  opts?: { empresaId?: string | null; tipo?: string; feature?: string; model?: string }
+  opts?: { empresaId?: string | null; tipo?: string; feature?: string; model?: string; skipUsageRecord?: boolean }
 ): Promise<AiCallResult> {
   const order = buildAttemptOrder();
   if (!order.length) {
+    incCounter('ai_not_configured');
+    logEvent('error', 'ai_not_configured', { tipo: opts?.tipo ?? null });
     throw new Error(
       'Nenhuma IA configurada. Defina GROQ_API_KEY e/ou GEMINI_API_KEY no .env'
     );
   }
 
-  let lastError: Error | null = null;
+  const attemptErrors: Error[] = [];
 
   for (let i = 0; i < order.length; i++) {
     const provider = order[i];
+    const usedModel = resolveModel(provider, opts?.model);
     const t0 = process.hrtime.bigint();
+    incCounter('ai_provider_call_attempt');
     try {
-      const usedModel = resolveModel(provider, opts?.model);
       const raw = await invokeProvider(provider, system, user, maxTokens, temperature, usedModel);
       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
       markSuccess(provider, ms);
       if (i > 0) console.warn(`[IA] Fallback: ${provider} (${ms}ms)`);
+      incCounter('ai_provider_call_success');
+      if (i > 0) incCounter('ai_provider_failover_success');
+      // Nunca registra prompt nem resposta: apenas estado operacional da chamada.
+      logEvent('info', 'ai_provider_call_completed', {
+        provider,
+        model: usedModel,
+        latency_ms: ms,
+        tokens: raw.tokens,
+        attempt: i + 1,
+        failover: i > 0,
+        tipo: opts?.tipo ?? null,
+        feature: opts?.feature ?? null,
+      });
 
-      if (opts?.empresaId || opts?.tipo || opts?.feature) {
+      // O fluxo do Dot (reserva durável + finalize no ledger único) passa
+      // `skipUsageRecord: true`: o consumo é gravado UMA vez, em `ai_usage`, com
+      // tokens de entrada/saída reais. Demais consumidores mantêm a contabilidade
+      // direta por aqui.
+      if (!opts?.skipUsageRecord && (opts?.empresaId || opts?.tipo || opts?.feature)) {
         try {
           await recordAiUsage(getDb(), {
             empresaId: opts.empresaId,
@@ -417,23 +497,47 @@ export async function callAI(
             tokens: raw.tokens,
             provider,
             feature: opts.feature || null,
+            inputTokens: raw.inputTokens ?? null,
+            outputTokens: raw.outputTokens ?? null,
           });
         } catch {
           /* */
         }
       }
 
-      return { text: raw.text, provider, latency_ms: ms, tokens: raw.tokens, model: usedModel };
+      return { text: raw.text, provider, latency_ms: ms, tokens: raw.tokens, model: usedModel, input_tokens: raw.inputTokens ?? null, output_tokens: raw.outputTokens ?? null };
     } catch (e: any) {
       const ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
       markFail(provider, e, ms);
-      lastError = e;
+      incCounter('ai_provider_call_failed');
+      logEvent('warn', 'ai_provider_call_failed', {
+        provider,
+        model: usedModel,
+        latency_ms: ms,
+        attempt: i + 1,
+        status: e?.status ?? null,
+        code: e?.code ?? null,
+        detail: String(e?.message || e),
+        tipo: opts?.tipo ?? null,
+      });
+      attemptErrors.push(e instanceof Error ? e : new Error(String(e)));
       if (i < order.length - 1) continue;
     }
   }
 
-  throw lastError || new Error('Falha em todos os providers de IA');
+  throw buildProviderAggregateError(attemptErrors);
 }
+export async function callAI(
+  system: string,
+  user: string,
+  maxTokens = 180,
+  temperature = 0.6,
+  opts?: { empresaId?: string | null; tipo?: string; feature?: string; model?: string; skipUsageRecord?: boolean }
+): Promise<AiCallResult> {
+  if (callAIImpl) return callAIImpl(system, user, maxTokens, temperature, opts);
+  return callAIReal(system, user, maxTokens, temperature, opts);
+}
+
 
 async function callLLM(
   system: string,
