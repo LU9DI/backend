@@ -448,7 +448,7 @@ suite('Dot HTTP + ledger (provedor simulado)', () => {
     assert.equal(providerCalls, beforeCalls + 2);
     rows = await reservations(EMPRESA);
     assert.equal(rows.length, 2);
-    assert.ok(rows.every((row) => row.status === 'released'));
+    assert.ok(rows.every((row: { status: string }) => row.status === 'released'));
     state = await db.get(
       'SELECT status FROM dot_http_idempotency WHERE empresa_id = ? AND endpoint = ? AND idempotency_key = ?',
       [EMPRESA, '/api/dot/explain', key],
