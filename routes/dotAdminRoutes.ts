@@ -352,23 +352,17 @@ export function mountDotAdminRoutes(app: Express) {
         tokens,
         provider,
         reason,
-      });
-      await writeAudit(getDb(), {
-        action: 'dot.http_idempotency_reconciled',
-        actor_user_id: req.user?.id || null,
-        actor_role: 'admin',
-        empresa_id: record.empresa_id,
-        result: result.ok ? 'ok' : 'error',
-        ip: clientIp(req),
-        user_agent: String(req.headers['user-agent'] || '').slice(0, 200),
-        detail: {
-          idempotency_id: id,
-          reservation_id: reservationId,
-          decision,
-          reason,
-          confirm_not_sent: decision === 'release' ? true : undefined,
-          idempotency_key_remains_blocked: true,
-          ok: result.ok,
+        audit: {
+          action: 'dot.http_idempotency_reconciled',
+          actorUserId: req.user?.id || null,
+          actorRole: 'admin',
+          ip: clientIp(req),
+          userAgent: String(req.headers['user-agent'] || '').slice(0, 200),
+          detail: {
+            idempotency_id: id,
+            confirm_not_sent: decision === 'release' ? true : undefined,
+            idempotency_key_remains_blocked: true,
+          },
         },
       });
       if (!result.ok) {
@@ -421,16 +415,14 @@ export function mountDotAdminRoutes(app: Express) {
         tokens,
         reason,
         provider,
-      });
-      await writeAudit(getDb(), {
-        action: 'dot.budget_reconciled',
-        actor_user_id: req.user?.id || null,
-        actor_role: 'admin',
-        empresa_id: empresaId,
-        result: result.ok ? 'ok' : 'error',
-        ip: clientIp(req),
-        user_agent: String(req.headers['user-agent'] || '').slice(0, 200),
-        detail: { reservation_id: reservationId, decision, reason, confirm_not_sent: decision === 'release' ? true : undefined, ok: result.ok },
+        audit: {
+          action: 'dot.budget_reconciled',
+          actorUserId: req.user?.id || null,
+          actorRole: 'admin',
+          ip: clientIp(req),
+          userAgent: String(req.headers['user-agent'] || '').slice(0, 200),
+          detail: { confirm_not_sent: decision === 'release' ? true : undefined },
+        },
       });
       if (!result.ok) {
         return res.status(409).json({ ok: false, error: result.reason || 'Reconciliação recusada.', code: 'DOT_RECONCILE_REFUSED' });
