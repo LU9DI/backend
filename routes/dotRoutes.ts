@@ -863,6 +863,15 @@ export function mountDotRoutes(app: Express) {
             code: 'DOT_REQUEST_IN_PROGRESS',
           });
         }
+        if (claimed.kind === 'result_expired') {
+          incCounter('dot_idempotency_result_expired');
+          logEvent('warn', 'dot_idempotency_result_expired');
+          return res.status(409).json({
+            ok: false,
+            error: 'O prazo para recuperar a resposta desta mensagem expirou. A chave permanece bloqueada para impedir uma segunda execução.',
+            code: 'DOT_IDEMPOTENCY_RESULT_EXPIRED',
+          });
+        }
         if (claimed.kind === 'ambiguous') {
           incCounter('dot_idempotency_ambiguous');
           logEvent('warn', 'dot_idempotency_ambiguous');
@@ -1188,7 +1197,7 @@ Entregue uma resposta completa dentro desse orçamento. Priorize, nesta ordem: c
       const messageText = String(error?.message || error);
       console.error('[Filtra Dot]', messageText);
       return res.status(503).json({
-        error: 'O Filtra Dot está sem um provedor de IA disponível no localhost.',
+        error: 'O Filtra Dot está temporariamente sem um provedor de IA disponível.',
         detail: process.env.NODE_ENV === 'production' ? undefined : messageText,
       });
     }
