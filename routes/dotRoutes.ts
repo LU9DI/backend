@@ -697,6 +697,50 @@ export function mountDotRoutes(app: Express) {
 
     const companyId = access.demo ? null : access.empresaId || null;
 
+    // Idempotência HTTP: explain tem namespace separado do chat por endpoint.
+    // Em produção, a chave é obrigatória e vinculada ao tenant autenticado.
+    const idempotencyKey = String(req.get('Idempotency-Key') || req.get('X-Idempotency-Key') || '').trim();
+    if (process.env.NODE_ENV === 'production' && !idempotencyKey) {
+      return res.status(400).json({ ok: false, error: 'Esta explicação exige uma chave de idempotência.', code: 'DOT_IDEMPOTENCY_KEY_REQUIRED' });
+    }
+    if (idempotencyKey && !isValidDotIdempotencyKey(idempotencyKey)) {
+      return res.status(400).json({ ok: false, error: 'Chave de idempotência inválida.', code: 'DOT_IDEMPOTENCY_KEY_INVALID' });
+    }
+    const idempotencyTenant = dotIdempotencyTenant(access);
+    let idempotencyClaim: DotHttpIdempotencyClaim | undefined;
+    const idempotencyState = { providerAttempted: false };
+    if (idempotencyKey && !idempotencyTenant && process.env.NODE_ENV === 'production') {
+      return res.status(503).json({ ok: false, error: 'Não foi possível determinar o tenant com segurança.', code: 'DOT_IDEMPOTENCY_UNAVAILABLE' });
+    }
+    if (idempotencyKey && idempotencyTenant) {
+      try {
+        const claimed = await claimDotHttpRequest({
+          empresaId: idempotencyTenant,
+          endpoint: '/api/dot/explain',
+          key: idempotencyKey,
+          payload: { response_text: responseText },
+        });
+        if (claimed.kind === 'replay') {
+          res.setHeader('Idempotency-Replayed', 'true');
+          return res.status(claimed.status).json(claimed.body);
+        }
+        if (claimed.kind !== 'claimed') {
+          const status = claimed.kind === 'in_progress' ? 409 : 409;
+          const code = claimed.kind === 'in_progress' ? 'DOT_REQUEST_IN_PROGRESS'
+            : claimed.kind === 'ambiguous' ? 'DOT_REQUEST_AMBIGUOUS'
+            : claimed.kind === 'result_expired' ? 'DOT_IDEMPOTENCY_RESULT_EXPIRED'
+            : claimed.kind === 'key_reused' ? 'DOT_IDEMPOTENCY_KEY_REUSED'
+            : 'DOT_IDEMPOTENCY_UNAVAILABLE';
+          return res.status(status).json({ ok: false, error: 'Esta solicitação não pode ser executada novamente sem resolver seu estado anterior.', code });
+        }
+        idempotencyClaim = claimed.claim;
+        persistDotHttpResponse(res, idempotencyClaim, idempotencyState);
+      } catch (error: any) {
+        logEvent('error', 'dot_explain_idempotency_claim_failed', { detail: String(error?.message || error) });
+        return res.status(503).json({ ok: false, error: 'A proteção contra duplicidade está indisponível. A chamada não foi executada.', code: 'DOT_IDEMPOTENCY_UNAVAILABLE' });
+      }
+    }
+
     // Fase 1 — contexto e prompt (antes de qualquer envio): se falhar, nada foi
     // enviado ao provedor e a reserva pode ser liberada com segurança.
     let prompt: string;
@@ -740,6 +784,15 @@ export function mountDotRoutes(app: Express) {
     }
     const reservationId = reservation?.reservation?.id ?? null;
 
+    // Vincula a reserva ao claim antes de qualquer marcação/envio.
+    if (companyId && reservationId && idempotencyClaim) {
+      const linked = await attachDotHttpReservation(idempotencyClaim, reservationId);
+      if (!linked) {
+        await releaseDotReservation({ empresaId: companyId, reservationId, provenNotSent: true, reason: 'Falha ao vincular reserva do explain à chave HTTP antes do envio' });
+        return res.status(503).json({ ok: false, error: 'Não foi possível vincular a reserva à proteção contra duplicidade. A chamada não foi enviada.', code: 'DOT_IDEMPOTENCY_RESERVATION_LINK_FAILED' });
+      }
+    }
+
     // Fase 2 — chamada ao provedor. A marca precede o envio; o sweep nunca
     // libera esta reserva sem finalização.
     if (companyId && reservationId) {
@@ -759,6 +812,7 @@ export function mountDotRoutes(app: Express) {
     }
 
     try {
+      idempotencyState.providerAttempted = true;
       const result = await callAI(
         EXPLAIN_SYSTEM_PROMPT,
         prompt,
