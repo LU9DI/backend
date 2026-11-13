@@ -181,9 +181,9 @@ export async function ativarTrial(input: TrialInput, db: Database = getDb(), res
       raw_json TEXT,
       criado_em TIMESTAMPTZ NOT NULL
     )`);
-    try { await db.exec('ALTER TABLE leads ADD COLUMN score INTEGER'); } catch {}
-    try { await db.exec('ALTER TABLE leads ADD COLUMN qualification TEXT'); } catch {}
-    try { await db.exec('ALTER TABLE leads ADD COLUMN ai_reason TEXT'); } catch {}
+    try { await db.exec('ALTER TABLE leads ADD COLUMN IF NOT EXISTS score INTEGER'); } catch {}
+    try { await db.exec('ALTER TABLE leads ADD COLUMN IF NOT EXISTS qualification TEXT'); } catch {}
+    try { await db.exec('ALTER TABLE leads ADD COLUMN IF NOT EXISTS ai_reason TEXT'); } catch {}
     const existingLead = await db.get('SELECT id, score, qualification, ai_reason FROM leads WHERE lower(email) = lower(?) AND fonte = ? LIMIT 1', [email, 'trial']);
     let leadId = String(existingLead?.id || '');
     let score = Number(existingLead?.score || 0);
