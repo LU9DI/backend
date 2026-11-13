@@ -692,6 +692,12 @@ export function mountDotRoutes(app: Express) {
     bindTenant(access.demo ? null : access.empresaId || null);
     if (!access.allowed) return deny(res, access);
 
+    // O endpoint explain precisa respeitar a mesma chave geral de ativação
+    // que o chat. Não basta o ledger estar íntegro: DOT desligado não chama IA.
+    if (process.env.NODE_ENV === 'production' && process.env.FILTRA_DOT_ENABLED !== '1') {
+      return res.status(404).json({ ok: false, error: 'Filtra Dot ainda não está habilitado.', code: 'DOT_DISABLED' });
+    }
+
     const responseText = cleanMessage(req.body?.response_text).slice(0, 5000);
     if (!responseText) return res.status(400).json({ error: 'Resposta do Dot obrigatória.' });
 
