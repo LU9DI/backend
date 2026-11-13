@@ -16,7 +16,7 @@
  *
  * This service does not replace the token ledger's reservation idempotency.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import { getDb, withDbTransaction } from '../lib/db.js';
 import { incCounter } from '../lib/metrics.js';
@@ -57,6 +57,8 @@ export type DotHttpIdempotencyClaim = {
   endpoint: string;
   key: string;
   requestHash: string;
+  /** Unique execution generation; stale callbacks cannot mutate a retry. */
+  attemptId: string;
 };
 
 export type DotHttpIdempotencyClaimResult =
@@ -164,6 +166,7 @@ export async function claimDotHttpRequest(input: {
     endpoint,
     key,
     requestHash: hashDotHttpPayload({ endpoint, payload: input.payload }),
+    attemptId: randomUUID(),
   };
   const now = new Date();
   const nowIsoValue = now.toISOString();
@@ -184,10 +187,10 @@ export async function claimDotHttpRequest(input: {
 
     const inserted = await tx.run(
       `INSERT OR IGNORE INTO dot_http_idempotency
-        (empresa_id, endpoint, idempotency_key, request_hash, status,
+        (empresa_id, endpoint, idempotency_key, request_hash, status, attempt_id,
          created_at, updated_at, expires_at)
-       VALUES (?, ?, ?, ?, 'processing', ?, ?, ?)`,
-      [empresaId, endpoint, key, claim.requestHash, nowIsoValue, nowIsoValue, expiresAt],
+       VALUES (?, ?, ?, ?, 'processing', ?, ?, ?, ?)`,
+      [empresaId, endpoint, key, claim.requestHash, claim.attemptId, nowIsoValue, nowIsoValue, expiresAt],
     );
     if (inserted.changes === 1) return { kind: 'claimed', claim };
 
@@ -212,10 +215,10 @@ export async function claimDotHttpRequest(input: {
       // provider was not reached. The conditional update is the audit trail.
       const retried = await tx.run(
         `UPDATE dot_http_idempotency
-            SET status = 'processing', updated_at = ?, expires_at = ?
+            SET status = 'processing', attempt_id = ?, updated_at = ?, expires_at = ?
           WHERE empresa_id = ? AND idempotency_key = ?
             AND status = 'failed_safe'`,
-        [nowIsoValue, expiresAt, empresaId, key],
+        [claim.attemptId, nowIsoValue, expiresAt, empresaId, key],
       );
       if (retried.changes === 1) return { kind: 'claimed', claim };
       return { kind: 'in_progress' };
@@ -283,7 +286,7 @@ export async function completeDotHttpRequest(
         SET status = 'completed', response_status = ?, response_json = ?,
             updated_at = ?, completed_at = ?, expires_at = ?
       WHERE empresa_id = ? AND idempotency_key = ?
-        AND request_hash = ? AND status = 'processing'`,
+        AND request_hash = ? AND attempt_id = ? AND status = 'processing'`,
     [
       status,
       serialized,
@@ -293,6 +296,7 @@ export async function completeDotHttpRequest(
       claim.empresaId,
       claim.key,
       claim.requestHash,
+      claim.attemptId,
     ],
   );
   if (result.changes === 1) {
@@ -323,8 +327,8 @@ export async function attachDotHttpReservation(
     `UPDATE dot_http_idempotency
         SET reservation_id = ?, updated_at = ?
       WHERE empresa_id = ? AND idempotency_key = ? AND request_hash = ?
-        AND status = 'processing' AND reservation_id IS NULL`,
-    [reservationId, nowIso(), claim.empresaId, claim.key, claim.requestHash],
+        AND attempt_id = ? AND status = 'processing' AND reservation_id IS NULL`,
+    [reservationId, nowIso(), claim.empresaId, claim.key, claim.requestHash, claim.attemptId],
   );
   return result.changes === 1;
 }
@@ -379,8 +383,8 @@ export async function markDotHttpRequestAmbiguous(
     `UPDATE dot_http_idempotency
         SET status = 'ambiguous', updated_at = ?
       WHERE empresa_id = ? AND idempotency_key = ?
-        AND status = 'processing'`,
-    [nowIso(), claim.empresaId, claim.key],
+        AND attempt_id = ? AND status = 'processing'`,
+    [nowIso(), claim.empresaId, claim.key, claim.attemptId],
   );
   if (result.changes === 1) {
     incCounter('dot_http_idempotency_ambiguous');
@@ -405,8 +409,8 @@ export async function markDotHttpRequestFailedSafe(
     `UPDATE dot_http_idempotency
         SET status = 'failed_safe', reservation_id = NULL, updated_at = ?
       WHERE empresa_id = ? AND idempotency_key = ?
-        AND status = 'processing'`,
-    [nowIso(), claim.empresaId, claim.key],
+        AND attempt_id = ? AND status = 'processing'`,
+    [nowIso(), claim.empresaId, claim.key, claim.attemptId],
   );
   if (result.changes === 1) incCounter('dot_http_idempotency_failed_safe');
 }
