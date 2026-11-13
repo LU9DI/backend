@@ -892,6 +892,10 @@ export function mountDotRoutes(app: Express) {
           reservationId,
           reservedTokens: reservation?.reservation?.tokens_reserved ?? 260,
         });
+        // Alinhar com /chat: uma recusa comprovada antes do processamento
+        // libera a chave para retry seguro; timeout/resultado incerto permanece
+        // ambíguo e bloqueado.
+        idempotencyState.providerAttempted = !settlement.provenNotSent;
         incCounter(settlement.provenNotSent ? 'dot_explain_failed_safe' : 'dot_explain_ambiguous');
         logEvent(settlement.provenNotSent ? 'warn' : 'error', 'dot_explain_failed', {
           outcome: settlement.outcome,
