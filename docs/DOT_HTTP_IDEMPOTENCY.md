@@ -65,7 +65,7 @@ A gravação de resposta e a transição para `completed` devem ser atômicas. A
 
 ## Reconciliação operacional de tentativas HTTP ambíguas
 
-- Cada claim de chat vincula sua reserva financeira (`reservation_id`) antes de marcar o envio ao provedor. Se a associação falhar, a chamada não é enviada e a reserva é liberada como comprovadamente não enviada.
+- Cada claim de chat vincula sua reserva financeira (`reservation_id`) antes de marcar o envio ao provedor. Se a associação falhar, a chamada não é enviada e a reserva é liberada como comprovadamente não enviada. Se a marcação de envio falhar, a rota também tenta liberar a reserva; o `failed_safe` limpa a associação HTTP para permitir nova reserva no retry. Se a liberação falhar por indisponibilidade do banco, a reserva sem `sent_at` permanece conservadoramente comprometida até o sweep de expiração.
 - `GET /api/admin/dot/http-idempotency` é exclusivo de operador da plataforma (`autenticarToken` + `isAdminUser`) e retorna somente metadados mínimos: ID, tenant, endpoint, prefixos da chave/hash, timestamps e ID da reserva. Nunca retorna chave completa, prompt ou resposta.
 - `POST /api/admin/dot/http-idempotency/reconcile` exige operador da plataforma e `X-Dot-Admin: 1`. A decisão financeira é aplicada à reserva vinculada pelo serviço de ledger, que valida `pending`, `ambiguous=1` e, para release, `sent_at IS NULL` sob lock transacional.
 - Toda decisão é registrada em `audit_logs` como `dot.http_idempotency_reconciled`, incluindo ator, tenant, ID HTTP, reserva, decisão, justificativa e a garantia `idempotency_key_remains_blocked=true`.
