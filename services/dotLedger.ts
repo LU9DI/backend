@@ -43,6 +43,7 @@ import { getFeatureTokenLimit, getTokenLimit } from '../lib/quota.js';
 import { normalizePlan } from '../lib/plans.js';
 import { incCounter } from '../lib/metrics.js';
 import { logEvent } from '../lib/observability.js';
+import { ensureAuditSchema } from '../lib/auditLog.js';
 
 /**
  * Plano canônico para cota (#141): só `rei`/`corporativo` têm orçamento de Dot.
@@ -806,6 +807,15 @@ export async function reconcileDotBudget(params: {
   tokens?: number | null;
   reason?: string;
   provider?: string | null;
+  /** Persist this privileged decision in the same transaction as the ledger transition. */
+  audit?: {
+    action: string;
+    actorUserId: string | null;
+    actorRole: string;
+    ip: string | null;
+    userAgent: string | null;
+    detail?: Record<string, unknown>;
+  };
 }): Promise<{ ok: boolean; reservation: DotReservation | null; reason?: string }> {
   const empresaId = String(params.empresaId || '').trim();
   const id = int(params.reservationId);
@@ -817,6 +827,9 @@ export async function reconcileDotBudget(params: {
     return { ok: false, reservation: null, reason: 'settle exige tokens reais inteiros maiores que zero' };
   }
   await assertDotLedgerSchema();
+  // Prepare the audit table before opening the transaction. The event itself
+  // is inserted through the same transaction handle as the financial change.
+  if (params.audit) await ensureAuditSchema(getDb() as any);
 
   try {
     return await withDbTransaction(async (tx) => {
@@ -855,6 +868,23 @@ export async function reconcileDotBudget(params: {
           'SELECT * FROM dot_budget_reservations WHERE id = ? AND empresa_id = ?',
           [id, empresaId],
         ) as DotReservation;
+        if (params.audit) {
+          await tx.run(
+            `INSERT INTO audit_logs
+              (actor_user_id, actor_role, empresa_id, action, target, result, ip, user_agent, detail)
+             VALUES (?, ?, ?, ?, ?, 'ok', ?, ?, ?)`,
+            [
+              params.audit.actorUserId,
+              params.audit.actorRole,
+              empresaId,
+              String(params.audit.action).slice(0, 80),
+              String(id),
+              params.audit.ip,
+              params.audit.userAgent,
+              JSON.stringify({ reservation_id: id, decision: params.decision, reason: params.reason || null, ...params.audit.detail }).slice(0, 1000),
+            ],
+          );
+        }
         return { ok: true, reservation: final };
       }
 
@@ -893,6 +923,23 @@ export async function reconcileDotBudget(params: {
         'SELECT * FROM dot_budget_reservations WHERE id = ? AND empresa_id = ?',
         [id, empresaId],
       ) as DotReservation;
+      if (params.audit) {
+        await tx.run(
+          `INSERT INTO audit_logs
+            (actor_user_id, actor_role, empresa_id, action, target, result, ip, user_agent, detail)
+           VALUES (?, ?, ?, ?, ?, 'ok', ?, ?, ?)`,
+          [
+            params.audit.actorUserId,
+            params.audit.actorRole,
+            empresaId,
+            String(params.audit.action).slice(0, 80),
+            String(id),
+            params.audit.ip,
+            params.audit.userAgent,
+            JSON.stringify({ reservation_id: id, decision: params.decision, tokens: chargedTokens, provider: params.provider || null, reason: params.reason || null, ...params.audit.detail }).slice(0, 1000),
+          ],
+        );
+      }
       return { ok: true, reservation: final };
     });
   } catch (error: any) {
