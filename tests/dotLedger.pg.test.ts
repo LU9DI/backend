@@ -294,6 +294,47 @@ test('PostgreSQL: falha na auditoria também reverte a liberação manual', asyn
   }
 });
 
+
+test('PostgreSQL: retry de marcação ambígua não altera reserva já liquidada', async () => {
+  await reset(EMPRESA);
+  const reserved = await ledger.reserveDotExecution({ empresaId: EMPRESA, plan: 'rei' });
+  assert.equal(reserved.ok, true);
+  const id = reserved.reservation!.id;
+
+  const settled = await ledger.finalizeDotReservation({
+    empresaId: EMPRESA,
+    reservationId: id,
+    tokens: 731,
+    provider: 'groq',
+    tipo: 'filtra_dot_chat',
+  });
+  assert.equal(settled.ok, true);
+  assert.equal(settled.reservation?.status, 'settled');
+
+  // Simula a recuperação após a confirmação do COMMIT ter sido perdida:
+  // o handler tenta a transição ambígua, mas o serviço deve reconhecer
+  // a liquidação já efetivada e não reabrir/alterar a reserva.
+  const retry = await ledger.finalizeDotReservation({
+    empresaId: EMPRESA,
+    reservationId: id,
+    ambiguous: true,
+    estimatedTokens: 731,
+    provider: 'groq',
+    ambiguousReason: 'confirmação inicial de liquidação perdida',
+  });
+  assert.equal(retry.ok, true);
+  assert.equal(retry.duplicate, true);
+  assert.equal(retry.reservation?.status, 'settled');
+  assert.equal(Number(retry.reservation?.ambiguous), 0);
+
+  const usage = await db.get(
+    'SELECT COUNT(*) AS c, COALESCE(SUM(tokens),0) AS t FROM ai_usage WHERE empresa_id = ? AND feature = ?',
+    [EMPRESA, 'dot'],
+  );
+  assert.equal(Number(usage.c), 1);
+  assert.equal(Number(usage.t), 731);
+});
+
 test('PostgreSQL: reserva e finalização gravam consumo real e liberam a reserva', async () => {
   await reset(EMPRESA);
   const reserved = await ledger.reserveDotExecution({ empresaId: EMPRESA, plan: 'rei' });
