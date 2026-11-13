@@ -485,6 +485,10 @@ suite('Dot admin — orçamento por HTTP (JWT + PIN + sessão + reconciliação)
     assert.equal(queue.status, 200);
     const item = queue.data.records.find((record: any) => record.reservation_id === reservation.reservation!.id);
     assert.ok(item, 'tentativa ambígua vinculada deve aparecer na fila');
+    assert.equal(item.reservation_status, 'pending');
+    assert.equal(item.reservation_ambiguous, true);
+    assert.equal(item.accounting_reconcilable, true);
+    assert.equal(item.accounting_resolved, false);
     assert.ok(!JSON.stringify(item).includes('conteúdo privado'));
     assert.ok(!JSON.stringify(item).includes(claimResult.claim.key));
 
