@@ -459,4 +459,58 @@ suite('Dot admin — orçamento por HTTP (JWT + PIN + sessão + reconciliação)
     assert.equal(Number(usage.c), 0);
   });
 
+  test('reconciliação HTTP lista metadados e liquida ledger sem reabrir a chave', async () => {
+    const http = await import('../services/dotHttpIdempotency.js');
+    const reservation = await ledger.reserveDotExecution({ empresaId: EMP_A, plan: 'rei' });
+    assert.equal(reservation.ok, true);
+    const claimResult = await http.claimDotHttpRequest({
+      empresaId: EMP_A,
+      endpoint: '/api/dot/chat',
+      key: `http-ambiguous-${crypto.randomUUID()}`,
+      payload: { message: 'conteúdo privado não deve aparecer', session_id: 'session-test' },
+    });
+    assert.equal(claimResult.kind, 'claimed');
+    if (claimResult.kind !== 'claimed') throw new Error('claim expected');
+    assert.equal(await http.attachDotHttpReservation(claimResult.claim, reservation.reservation!.id), true);
+    assert.equal((await ledger.markDotReservationSent({ empresaId: EMP_A, reservationId: reservation.reservation!.id })).ok, true);
+    assert.equal((await ledger.finalizeDotReservation({
+      empresaId: EMP_A,
+      reservationId: reservation.reservation!.id,
+      ambiguous: true,
+      ambiguousReason: 'timeout após envio',
+    })).ok, true);
+    await http.markDotHttpRequestAmbiguous(claimResult.claim);
+
+    const queue = await adminFetch('/api/admin/dot/http-idempotency', { token: platformAdminToken() });
+    assert.equal(queue.status, 200);
+    const item = queue.data.records.find((record: any) => record.reservation_id === reservation.reservation!.id);
+    assert.ok(item, 'tentativa ambígua vinculada deve aparecer na fila');
+    assert.ok(!JSON.stringify(item).includes('conteúdo privado'));
+    assert.ok(!JSON.stringify(item).includes(claimResult.claim.key));
+
+    const reconciled = await adminFetch('/api/admin/dot/http-idempotency/reconcile', {
+      method: 'POST',
+      token: platformAdminToken(),
+      header: true,
+      body: {
+        idempotency_id: item.id,
+        decision: 'settle',
+        tokens: 321,
+        provider: 'groq',
+        reason: 'uso confirmado no extrato operacional do provedor',
+      },
+    });
+    assert.equal(reconciled.status, 200, JSON.stringify(reconciled.data));
+    assert.equal(reconciled.data.idempotency_key_remains_blocked, true);
+    assert.equal((await ledger.getDotReservation(EMP_A, reservation.reservation!.id))?.status, 'settled');
+    const retry = await http.claimDotHttpRequest({
+      empresaId: EMP_A,
+      endpoint: '/api/dot/chat',
+      key: claimResult.claim.key,
+      payload: { message: 'conteúdo privado não deve aparecer', session_id: 'session-test' },
+    });
+    assert.equal(retry.kind, 'ambiguous', 'reconciliação financeira nunca reabre a chave HTTP');
+  });
+
+
 });
