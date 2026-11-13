@@ -584,4 +584,34 @@ suite('Dot admin — orçamento por HTTP (JWT + PIN + sessão + reconciliação)
   });
 
 
+  test('JWT de tenant com role=admin legado recebe 403 nas três rotas administrativas de plataforma', async () => {
+    const legacyAdminToken = tokenFor(USER_A, EMP_A, 'admin');
+    const requests = [
+      { path: '/api/admin/dot/http-idempotency', method: 'GET' },
+      {
+        path: '/api/admin/dot/http-idempotency/reconcile',
+        method: 'POST',
+        body: { idempotency_id: 1, decision: 'settle', tokens: 10, reason: 'teste de bloqueio para role legado' },
+      },
+      {
+        path: '/api/admin/dot/budget/reconcile',
+        method: 'POST',
+        body: { empresa_id: EMP_A, reservation_id: 1, decision: 'settle', tokens: 10, reason: 'teste de bloqueio para role legado' },
+      },
+    ];
+
+    for (const request of requests) {
+      const response = await adminFetch(request.path, {
+        method: request.method,
+        token: legacyAdminToken,
+        header: true,
+        body: request.body,
+      });
+      assert.equal(response.status, 403, request.path);
+      assert.equal(response.data.code, 'DOT_RECONCILE_PLATFORM_ADMIN_REQUIRED', request.path);
+    }
+  });
+
+
+
 });
