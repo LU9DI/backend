@@ -72,7 +72,16 @@ A gravação de resposta e a transição para `completed` devem ser atômicas. A
 - **A reconciliação financeira nunca reabre a chave HTTP.** Mesmo após `settle` ou `release`, a linha continua `ambiguous`; o cliente não pode reproduzir nem executar novamente a mesma mensagem. Uma nova mensagem do usuário deve receber nova chave somente quando se tratar realmente de uma nova intenção, nunca como workaround de uma tentativa cujo resultado segue incerto.
 - Registros sem reserva vinculada permanecem bloqueados e retornam `DOT_HTTP_RECONCILE_NO_RESERVATION`; não existe liberação automática.
 
-## Retenção e reconciliação operacional (estado atual)\n\n- `completed`: resposta reproduzível por 24 horas; depois, somente o corpo é apagado e a chave permanece terminal.\n- `failed_safe`: permanece registrada; retry é permitido somente pela transição condicional existente que registra prova de não envio.\n- `ambiguous`: permanece bloqueada e não é expurgada. **Ainda falta uma rota de reconciliação HTTP exclusiva de operador** que consulte evidências do provedor, vincule a decisão à reserva financeira quando existir e grave auditoria imutável. Até essa rota existir, não há procedimento HTTP automatizado para liberar/recuperar a chave ambígua; ela permanece bloqueada.\n\n## Testes de aceitação obrigatórios
+## Retenção e reconciliação operacional (estado atual)
+
+- `completed`: resposta reproduzível por 24 horas; depois, somente o corpo é apagado e a chave permanece terminal.
+- `failed_safe`: permanece registrada; retry é permitido somente pela transição condicional existente que registra prova de não envio.
+- `ambiguous`: permanece bloqueada e não é expurgada.
+- A fila e a rota de reconciliação HTTP exclusiva de operador estão implementadas. A rota resolve somente a reserva financeira vinculada; não altera o estado terminal da chave HTTP.
+- A auditoria das decisões administrativas é inserida na mesma transação PostgreSQL/SQLite da liquidação ou liberação. Se a gravação falhar, a mutação financeira e o consumo são revertidos.
+- A rota não consulta automaticamente o provedor nem determina tokens: a evidência e a decisão continuam sendo responsabilidade do operador. Registros sem reserva vinculada permanecem bloqueados para investigação manual.
+
+## Testes de aceitação obrigatórios
 
 1. Duas chamadas concorrentes, mesma chave/hash: uma única chamada ao provedor e uma única reserva.
 2. Mesmo retry após conclusão: mesma resposta HTTP/JSON e nenhuma segunda chamada/reserva/linha `ai_usage`.
