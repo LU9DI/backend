@@ -103,6 +103,7 @@ suite('Dot HTTP idempotency — claim, replay and ambiguity', () => {
       'updated_at',
       'completed_at',
       'expires_at',
+      'reservation_id',
     ]) {
       assert.ok(columns.includes(required), `coluna obrigatória ausente: ${required}`);
     }
@@ -370,6 +371,34 @@ suite('Dot HTTP idempotency — claim, replay and ambiguity', () => {
       payload: { message: 'conteúdo diferente', session_id: 'session-g' },
     })).kind, 'key_reused', 'hash divergente continua bloqueado pela tombstone');
     assert.ok(await row(pendingInput.key), 'linha processing NUNCA pode ser purgada');
+  });
+
+
+  test('failed_safe retry clears a pre-provider reservation link for the next attempt', async () => {
+    const input = {
+      empresaId,
+      endpoint,
+      key: 'dot-chat-key-safe-link-retry-0001',
+      payload: { message: 'falha antes do envio', session_id: 'session-safe-link' },
+    };
+    const first = await idempotency.claimDotHttpRequest(input);
+    assert.equal(first.kind, 'claimed');
+    if (first.kind !== 'claimed') return;
+
+    assert.equal(await idempotency.attachDotHttpReservation(first.claim, 901), true);
+    assert.equal(Number((await row(input.key)).reservation_id), 901);
+
+    // O wrapper só marca failed_safe quando providerAttempted=false.
+    await idempotency.markDotHttpRequestFailedSafe(first.claim);
+    const safeRow = await row(input.key);
+    assert.equal(safeRow.status, 'failed_safe');
+    assert.equal(safeRow.reservation_id, null);
+
+    const retry = await idempotency.claimDotHttpRequest(input);
+    assert.equal(retry.kind, 'claimed');
+    if (retry.kind !== 'claimed') return;
+    assert.equal(await idempotency.attachDotHttpReservation(retry.claim, 902), true);
+    assert.equal(Number((await row(input.key)).reservation_id), 902);
   });
 
   test('response wrapper: 2xx completes, 5xx classifies conservatively', async () => {
