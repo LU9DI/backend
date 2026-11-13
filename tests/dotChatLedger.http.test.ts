@@ -423,6 +423,39 @@ suite('Dot HTTP + ledger (provedor simulado)', () => {
     }
   });
 
+  test('explain: recusa comprovada do provedor libera a chave para retry seguro', async () => {
+    mode = 'rejected';
+    const key = `explain-rejected-${crypto.randomUUID()}`;
+    const beforeCalls = providerCalls;
+
+    const first = await callExplain('Explique uma resposta recusada antes do processamento.', key);
+    assert.equal(first.status, 503);
+    assert.equal(providerCalls, beforeCalls + 1);
+    let rows = await reservations(EMPRESA);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].status, 'released');
+    let state = await db.get(
+      'SELECT status FROM dot_http_idempotency WHERE empresa_id = ? AND endpoint = ? AND idempotency_key = ?',
+      [EMPRESA, '/api/dot/explain', key],
+    );
+    assert.equal(state.status, 'failed_safe');
+
+    // A mesma chave/hash pode tentar novamente porque o provedor informou
+    // explicitamente que não processou a solicitação anterior.
+    const retry = await callExplain('Explique uma resposta recusada antes do processamento.', key);
+    assert.equal(retry.status, 503);
+    assert.equal(retry.data.code, undefined);
+    assert.equal(providerCalls, beforeCalls + 2);
+    rows = await reservations(EMPRESA);
+    assert.equal(rows.length, 2);
+    assert.ok(rows.every((row) => row.status === 'released'));
+    state = await db.get(
+      'SELECT status FROM dot_http_idempotency WHERE empresa_id = ? AND endpoint = ? AND idempotency_key = ?',
+      [EMPRESA, '/api/dot/explain', key],
+    );
+    assert.equal(state.status, 'failed_safe');
+  });
+
   test('explain: resultado ambíguo bloqueia retry e não repete chamada ao provedor', async () => {
     mode = 'ambiguous';
     const key = `explain-ambiguous-${crypto.randomUUID()}`;
