@@ -250,6 +250,12 @@ function osmEndpointAvailable(endpoint: string, now = Date.now()): boolean {
   return !state || now >= state.until;
 }
 
+/** Erros transitórios de rede também precisam abrir o circuit breaker. */
+function shouldCooldownOsmEndpoint(reason: string): boolean {
+  return /HTTP (408|429|500|502|503|504)/i.test(reason) ||
+    /timeout|aborted|fetch failed|network|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|UND_ERR_CONNECT/i.test(reason);
+}
+
 function markOsmEndpointFailure(endpoint: string, reason: string, now = Date.now()) {
   const previous = osmEndpointState.get(endpoint);
   // Falhas dentro do cooldown anterior contam para o backoff; depois de um
@@ -300,6 +306,7 @@ export function resetOsmEndpointState(): void {
 export const __test = {
   markOsmEndpointFailure,
   markOsmEndpointSuccess,
+  shouldCooldownOsmEndpoint,
   osmEndpointAvailable,
 };
 
@@ -375,8 +382,9 @@ async function openStreetMapProvider(limit: number, existingEmails = new Set<str
         } catch (error) {
           lastError = error;
           const reason = error instanceof Error ? error.message : String(error);
-          // 429/504 e timeouts indicam sobrecarga do endpoint: cooldown.
-          if (/HTTP (429|500|502|503|504)/i.test(reason) || /timeout|aborted/i.test(reason)) {
+          // Quota, sobrecarga e falhas transitórias de rede não devem ser repetidas
+          // em cada cidade/ciclo; o cooldown adaptativo evita martelar endpoints inacessíveis.
+          if (shouldCooldownOsmEndpoint(reason)) {
             markOsmEndpointFailure(endpoint, reason);
           }
           console.warn(`[acquisition-osm] city=${city[0]} endpoint=${endpoint} failed:`, reason);
