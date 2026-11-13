@@ -40,6 +40,7 @@ import { selectDotModel } from '../services/dotModelRouting.js';
 import { requireDotAccess, type DotAccessResource, type DotAccessAction } from '../services/dotAccessControl.js';
 import {
   claimDotHttpRequest,
+  attachDotHttpReservation,
   dotIdempotencyTenant,
   isValidDotIdempotencyKey,
   persistDotHttpResponse,
@@ -1067,6 +1068,27 @@ Entregue uma resposta completa dentro desse orçamento. Priorize, nesta ordem: c
 
     const activeReservation = reservation?.reservation as DotReservation | undefined;
     const reservedTokens = activeReservation?.tokens_reserved ?? responseLimit;
+
+    // The operator reconciliation queue needs a durable, tenant-scoped link
+    // between the HTTP idempotency record and the financial reservation.
+    // Persist it before marking the provider send; fail closed if the link is
+    // unavailable and release only because no provider attempt has started.
+    if (companyId && activeReservation && idempotencyClaim) {
+      const linked = await attachDotHttpReservation(idempotencyClaim, activeReservation.id);
+      if (!linked) {
+        await releaseDotReservation({
+          empresaId: companyId,
+          reservationId: activeReservation.id,
+          provenNotSent: true,
+          reason: 'Falha ao vincular reserva à chave de idempotência antes do envio',
+        });
+        return res.status(503).json({
+          ok: false,
+          error: 'Não foi possível vincular a reserva à proteção contra duplicidade. A chamada não foi enviada.',
+          code: 'DOT_IDEMPOTENCY_RESERVATION_LINK_FAILED',
+        });
+      }
+    }
     let providerCalled = false;
 
     // Marca o envio ANTES do provedor: o sweep nunca libera esta reserva sem
