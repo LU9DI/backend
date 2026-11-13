@@ -534,6 +534,7 @@ suite('Dot admin — orçamento por HTTP (JWT + PIN + sessão + reconciliação)
       ambiguousReason: 'timeout após envio',
     })).ok, true);
     await http.markDotHttpRequestAmbiguous(claim.claim);
+    const auditBefore = await auditRows(EMP_A, 'dot.http_idempotency_reconciled');
 
     await db.exec(`
       CREATE TRIGGER fail_dot_reconcile_audit
@@ -568,7 +569,7 @@ suite('Dot admin — orçamento por HTTP (JWT + PIN + sessão + reconciliação)
       );
       assert.equal(Number(usage.c), 1, 'o INSERT de consumo da tentativa revertida não pode persistir');
       const audit = await auditRows(EMP_A, 'dot.http_idempotency_reconciled');
-      assert.equal(audit.length, 0, 'nenhuma auditoria persistida deve significar rollback total');
+      assert.equal(audit.length, auditBefore.length, 'falha de auditoria não pode criar evento parcial nem confirmar o ledger');
     } finally {
       await db.exec('DROP TRIGGER IF EXISTS fail_dot_reconcile_audit');
     }
