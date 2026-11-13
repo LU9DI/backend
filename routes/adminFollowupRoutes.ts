@@ -38,7 +38,10 @@ export async function ensureFollowupSchema(db: any = getDb()) {
     "ALTER TABLE lead_followups ADD COLUMN IF NOT EXISTS send_idempotency_key TEXT",
     "ALTER TABLE lead_followups ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE lead_followups ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ"
-  ]) { try { await db.exec(sql); } catch {} }
+  ]) {
+    try { await db.exec(sql); }
+    catch { try { await db.exec(sql.replace(" ADD COLUMN IF NOT EXISTS ", " ADD COLUMN ")); } catch { /* coluna já existe */ } }
+  }
   try { await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_followup_send_key ON lead_followups(send_idempotency_key) WHERE send_idempotency_key IS NOT NULL`); } catch {}
 }
 
