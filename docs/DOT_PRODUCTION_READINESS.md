@@ -1,14 +1,15 @@
 # Filtra Dot — prontidão operacional para ativação
 
 **Status:** documento de preparação. Nenhuma flag foi ativada e nenhum deploy foi executado.
-**Data:** 2026-11-08
+**Última revisão:** 2026-11-13
 **PR:** #144 — `reconcile/dot-production-2026-11-06`
-**HEAD publicado:** `b2c0c504fff88b089233e09f5cc437edf846274b` (correções finais de
-ledger/failover no working tree, ainda não publicadas)
-**CI:** GitHub Actions `test`, `postgres-concurrency` e `audit` verdes. O check
-`deploy/lu9di/filtra-ai-api-fallback` é status **legado do Deno Deploy**
-(organização suspensa) e não representa o serviço de produção, que roda em
-**Render**.
+**HEAD verificado da branch:** `8874579571a9c6ce5ea9e2e2c44e93510f6a07ad`
+(inclui as correções dos PRs #149 e #150).
+**CI do HEAD:** Backend CI run [43422329776](https://github.com/LU9DI/backend/actions/runs/43422329776)
+e Dependency audit run [43422329772](https://github.com/LU9DI/backend/actions/runs/43422329772)
+concluídos com sucesso. O check externo
+`deploy/lu9di/filtra-ai-api-fallback` é legado do Deno Deploy e não representa
+o serviço de produção, que roda em **Render**.
 
 Este documento consolida o que precisa estar pronto **antes** de integrar e ativar o
 Dot em produção. Ele complementa [`docs/DOT_PRODUCAO.md`](DOT_PRODUCAO.md) e
@@ -155,7 +156,7 @@ Antes de ativar, confirmar que `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_API_URL_BACKU
 `DATABASE_URL`. Enquanto isso não for verdade, o chat deve ser enviado sem
 failover.
 
-### 2.5 Reconciliação das linhas ambíguas e `failed_safe`
+### 2.5 Reconciliação das linhas HTTP ambíguas
 
 Sinais no log do Render (sem conteúdo de mensagem):
 
@@ -172,21 +173,35 @@ SELECT status, count(*) FROM dot_http_idempotency
  GROUP BY status ORDER BY status;
 ```
 
-Procedimento manual, executado por pessoa autorizada (nunca pelo backend):
+Procedimento manual, exclusivo de operador da plataforma e nunca automatizado
+pelo backend:
 
-1. listar as linhas `ambiguous` do período e abrir a reserva correspondente em
-   `dot_budget_reservations` (`status = 'pending'`, `ambiguous = 1`);
-2. decidir, pelo consumo real de `ai_usage`/`ai_usage` da reserva, se a chamada
-   chegou ao provedor:
-   - consumiu → fechar a reserva com os tokens reais (`finalizeDotReservation`);
-   - não consumiu → liberar a reserva (`releaseDotReservation`) e marcar a
-     linha como `failed_safe` para permitir um retry auditado;
-3. registrar a decisão em `dot_action_audit` (ou na trilha de auditoria da
-   empresa) com a chave de idempotência e o operador.
+1. Consultar `GET /api/admin/dot/http-idempotency`. A rota exige JWT de
+   operador da plataforma e retorna metadados mínimos, sem chave completa,
+   prompt ou resposta.
+2. Para cada registro, verificar a reserva vinculada em
+   `dot_budget_reservations` e correlacionar os registros reais de
+   `ai_usage` e a evidência do provedor. Não inferir ausência de envio apenas
+   por timeout, reinício ou ausência momentânea de uma linha de consumo.
+3. Se o consumo/chamada estiver comprovado, chamar
+   `POST /api/admin/dot/http-idempotency/reconcile` com
+   `idempotency_id`, `decision: "settle"`, tokens reais inteiros maiores
+   que zero, provedor e justificativa operacional de pelo menos 10 caracteres.
+   A chamada exige `X-Dot-Admin: 1` e grava a auditoria na mesma transação
+   da liquidação.
+4. Só se houver prova operacional de que a chamada não foi enviada, usar
+   `decision: "release"` com `confirm_not_sent: true` e justificativa.
+   O ledger ainda verifica `sent_at IS NULL` sob lock transacional.
+5. Se não existir reserva vinculada, o endpoint retorna
+   `DOT_HTTP_RECONCILE_NO_RESERVATION`; manter a chave bloqueada e investigar
+   manualmente.
 
-Sem esse procedimento, uma linha `ambiguous` bloqueia para sempre a reenvio
-daquela mensagem (comportamento correto: é evidência de segurança) e a reserva
-continua comprometendo o orçamento do tenant até a reconciliação.
+**Regra crítica:** a reconciliação resolve apenas a contabilidade. A linha HTTP
+permanece `ambiguous` permanentemente, mesmo depois de `settle` ou
+`release`. Nunca alterá-la para `failed_safe`, apagar a tombstone ou
+reutilizar a mesma chave para retry: isso poderia executar e cobrar novamente
+uma operação cujo resultado é incerto. Uma nova chave só representa uma nova
+intenção do usuário, não um workaround de reconciliação.
 
 ---
 
