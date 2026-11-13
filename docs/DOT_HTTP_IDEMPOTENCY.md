@@ -104,8 +104,9 @@ divergente, endpoint divergente, expiração/tombstone, tenant isolado,
 
 `tests/dotChatLedger.http.test.ts` cobre, para `/api/dot/explain`, replay
 sem segunda chamada ou débito, chave reutilizada com conteúdo diferente,
-duas chamadas simultâneas, timeout ambíguo sem retry, falha ao vincular a
-reserva e falha ao marcar envio antes do provedor e flag geral do DOT desligada em produção. O provedor é simulado;
+duas chamadas simultâneas, timeout ambíguo sem retry, recusa explícita do
+provedor com retry seguro, falha ao vincular a reserva, falha ao marcar envio
+e flag geral do DOT desligada em produção. O provedor é simulado;
 nenhuma chamada externa é feita. A presença dos testes no repositório não
 significa que tenham sido executados ou aprovados: exigir CI verde no HEAD
 final, incluindo build e PostgreSQL multi-processo.
