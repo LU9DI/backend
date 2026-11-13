@@ -342,6 +342,66 @@ suite('Dot HTTP + ledger (provedor simulado)', () => {
     assert.equal((await usageCount(EMPRESA)).rows, 1);
   });
 
+  test('explain: falha ao vincular reserva libera com segurança e permite retry', async () => {
+    const key = `explain-link-failure-${crypto.randomUUID()}`;
+    const callsBefore = providerCalls;
+    await db.exec(`
+      CREATE TRIGGER fail_explain_reservation_link
+      BEFORE UPDATE OF reservation_id ON dot_http_idempotency
+      WHEN NEW.endpoint = '/api/dot/explain'
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated reservation link failure');
+      END;
+    `);
+    try {
+      const response = await callExplain('Teste de falha de vínculo.', key);
+      assert.equal(response.status, 503);
+      assert.equal(response.data.code, 'DOT_IDEMPOTENCY_RESERVATION_LINK_FAILED');
+      assert.equal(providerCalls, callsBefore, 'provedor não pode ser chamado sem vínculo durável');
+      const rows = await reservations(EMPRESA);
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].status, 'released');
+      const state = await db.get(
+        'SELECT status, reservation_id FROM dot_http_idempotency WHERE empresa_id = ? AND endpoint = ? AND idempotency_key = ?',
+        [EMPRESA, '/api/dot/explain', key],
+      );
+      assert.equal(state.status, 'failed_safe');
+      assert.equal(state.reservation_id, null);
+    } finally {
+      await db.exec('DROP TRIGGER IF EXISTS fail_explain_reservation_link');
+    }
+  });
+
+  test('explain: falha ao marcar envio libera reserva e não chama provedor', async () => {
+    const key = `explain-mark-failure-${crypto.randomUUID()}`;
+    const callsBefore = providerCalls;
+    await db.exec(`
+      CREATE TRIGGER fail_explain_mark_sent
+      BEFORE UPDATE OF sent_at ON dot_budget_reservations
+      WHEN NEW.sent_at IS NOT NULL AND OLD.sent_at IS NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated mark sent failure');
+      END;
+    `);
+    try {
+      const response = await callExplain('Teste de falha ao marcar envio.', key);
+      assert.equal(response.status, 503);
+      assert.equal(response.data.code, 'DOT_BUDGET_UNAVAILABLE');
+      assert.equal(providerCalls, callsBefore, 'provedor não pode ser chamado quando a marcação falha');
+      const rows = await reservations(EMPRESA);
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].status, 'released');
+      const state = await db.get(
+        'SELECT status, reservation_id FROM dot_http_idempotency WHERE empresa_id = ? AND endpoint = ? AND idempotency_key = ?',
+        [EMPRESA, '/api/dot/explain', key],
+      );
+      assert.equal(state.status, 'failed_safe');
+      assert.equal(state.reservation_id, null);
+    } finally {
+      await db.exec('DROP TRIGGER IF EXISTS fail_explain_mark_sent');
+    }
+  });
+
   test('explain: resultado ambíguo bloqueia retry e não repete chamada ao provedor', async () => {
     mode = 'ambiguous';
     const key = `explain-ambiguous-${crypto.randomUUID()}`;
