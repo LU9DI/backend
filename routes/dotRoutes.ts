@@ -687,7 +687,7 @@ export function mountDotRoutes(app: Express) {
     res.json({ ok: true });
   });
 
-  app.post('/api/dot/explain', dotLimiter, async (req: Request, res: Response) => {
+  app.post('/api/dot/explain', dotLimiter, asyncHandler(async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
     bindTenant(access.demo ? null : access.empresaId || null);
     if (!access.allowed) return deny(res, access);
@@ -895,9 +895,9 @@ export function mountDotRoutes(app: Express) {
       console.error('[Filtra Dot explain]', error?.message || error);
       return res.status(503).json({ error: 'Não foi possível explicar a evidência desta resposta agora.' });
     }
-  });
+  }));
 
-  app.post('/api/dot/chat', dotLimiter, asyncHandler(async (req: Request, res: Response) => {
+app.post('/api/dot/chat', dotLimiter, asyncHandler(async (req: Request, res: Response) => {
     const access = await resolveDotAccess(req);
     bindTenant(access.demo ? null : access.empresaId || null);
     incCounter('dot_chat_received');
