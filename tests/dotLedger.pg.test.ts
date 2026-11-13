@@ -116,6 +116,54 @@ test('PostgreSQL: reconciliação exige ambiguidade e liquida tokens dentro da t
 });
 
 
+
+test('PostgreSQL: duas reconciliações concorrentes não duplicam ai_usage nem a auditoria', async () => {
+  await reset(EMPRESA);
+  const audit = await import('../lib/auditLog.js');
+  await audit.ensureAuditSchema(db);
+  const reserved = await ledger.reserveDotExecution({ empresaId: EMPRESA, plan: 'rei' });
+  assert.equal(reserved.ok, true);
+  const id = reserved.reservation!.id;
+  const ambiguous = await ledger.finalizeDotReservation({
+    empresaId: EMPRESA,
+    reservationId: id,
+    ambiguous: true,
+    ambiguousReason: 'resultado incerto',
+  });
+  assert.equal(ambiguous.ok, true);
+
+  const reconcile = (tokens: number) => ledger.reconcileDotBudget({
+    empresaId: EMPRESA,
+    reservationId: id,
+    decision: 'settle',
+    tokens,
+    provider: 'groq',
+    reason: 'reconciliação concorrente com evidência',
+    audit: {
+      action: 'dot.http_idempotency_reconciled',
+      actorUserId: 'platform-admin-test',
+      actorRole: 'admin',
+      ip: '127.0.0.1',
+      userAgent: 'dot-ledger-pg-test',
+      detail: { idempotency_id: 456, idempotency_key_remains_blocked: true },
+    },
+  });
+  const results = await Promise.all([reconcile(222), reconcile(333)]);
+  assert.equal(results.filter((item) => item.ok).length, 1);
+  assert.equal(results.filter((item) => !item.ok).length, 1);
+  const usage = await db.get(
+    'SELECT COUNT(*) AS c, COALESCE(SUM(tokens),0) AS t FROM ai_usage WHERE empresa_id = ? AND feature = ?',
+    [EMPRESA, 'dot'],
+  );
+  assert.equal(Number(usage.c), 1);
+  assert.ok([222, 333].includes(Number(usage.t)));
+  const auditRows = await db.get(
+    "SELECT COUNT(*) AS c FROM audit_logs WHERE empresa_id = ? AND action = 'dot.http_idempotency_reconciled'",
+    [EMPRESA],
+  );
+  assert.equal(Number(auditRows.c), 1);
+});
+
 test('PostgreSQL: falha na auditoria reverte consumo e liquidação da reconciliação', async () => {
   await reset(EMPRESA);
   const audit = await import('../lib/auditLog.js');
