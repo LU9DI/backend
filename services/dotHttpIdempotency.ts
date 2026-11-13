@@ -246,7 +246,12 @@ export async function claimDotHttpRequest(input: {
           rowSelect(),
           [empresaId, key],
         );
-        if (raced?.status === 'completed') return replayFrom(raced);
+        if (raced?.status === 'completed') {
+          if (!raced.expires_at || raced.expires_at < nowIsoValue || raced.response_json == null || raced.response_status == null) {
+            return { kind: 'result_expired' };
+          }
+          return replayFrom(raced);
+        }
         if (raced?.status === 'ambiguous') return { kind: 'ambiguous' };
         return { kind: 'in_progress' };
       }
