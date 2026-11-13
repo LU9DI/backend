@@ -29,6 +29,7 @@ import { clientIp, writeAudit } from '../lib/auditLog.js';
 import { getDb } from '../lib/db.js';
 import {
   getDotBudgetSnapshot,
+  getDotReservation,
   listOpenDotReservations,
   reconcileDotBudget,
 } from '../services/dotLedger.js';
@@ -289,9 +290,14 @@ export function mountDotAdminRoutes(app: Express) {
       }
       const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 100));
       const records = await listAmbiguousDotHttpRequests(limit);
-      return res.json({
-        ok: true,
-        records: records.map((record) => ({
+      const enriched = await Promise.all(records.map(async (record) => {
+        const reservationId = Number(record.reservation_id);
+        const reservation = Number.isSafeInteger(reservationId) && reservationId > 0
+          ? await getDotReservation(record.empresa_id, reservationId)
+          : null;
+        const reservationStatus = reservation?.status || null;
+        const reservationAmbiguous = Number(reservation?.ambiguous) === 1;
+        return {
           id: record.id,
           empresa_id: record.empresa_id,
           endpoint: record.endpoint,
@@ -300,9 +306,13 @@ export function mountDotAdminRoutes(app: Express) {
           created_at: record.created_at,
           updated_at: record.updated_at,
           reservation_id: record.reservation_id,
-          accounting_reconcilable: Number.isSafeInteger(Number(record.reservation_id)) && Number(record.reservation_id) > 0,
-        })),
-      });
+          reservation_status: reservationStatus,
+          reservation_ambiguous: reservationAmbiguous,
+          accounting_reconcilable: reservationStatus === 'pending' && reservationAmbiguous,
+          accounting_resolved: reservationStatus === 'settled' || reservationStatus === 'released',
+        };
+      }));
+      return res.json({ ok: true, records: enriched });
     } catch (error) {
       return adminFail(res, error);
     }
