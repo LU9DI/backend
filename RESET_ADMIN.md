@@ -6,9 +6,11 @@ O painel administrativo usa `POST /api/admin/login`, implementado em
 `adminLoginRoute.ts`. A rota consulta o usuário na tabela `usuarios`, valida
 a senha armazenada com bcrypt e aceita somente:
 
-- usuário cujo `empresa_id` seja `admin`; ou
-- usuário cujo e-mail corresponda a `ADMIN_EMAIL` (padrão:
-  `admin@seusaas.com`, se a variável não estiver configurada).
+- usuário dedicado cujo `empresa_id` seja `admin`.
+
+`ADMIN_EMAIL` identifica o endereço usado para localizar essa conta; o e-mail,
+isoladamente, nunca concede privilégios. A conta administrativa não pode
+compartilhar identidade com um tenant.
 
 Se MFA estiver habilitado, o acesso só é concluído após a validação do desafio
 e do código MFA.
