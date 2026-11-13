@@ -369,7 +369,7 @@ suite('Dot HTTP + ledger (provedor simulado)', () => {
     await db.exec(`
       CREATE TRIGGER fail_explain_reservation_link
       BEFORE UPDATE OF reservation_id ON dot_http_idempotency
-      WHEN NEW.endpoint = '/api/dot/explain'
+      WHEN NEW.endpoint = '/api/dot/explain' AND NEW.reservation_id IS NOT NULL
       BEGIN
         SELECT RAISE(ABORT, 'simulated reservation link failure');
       END;
