@@ -65,6 +65,25 @@ async function callDot(body: unknown) {
   return { status: res.status, data };
 }
 
+async function callExplain(responseText: string, key: string) {
+  const res = await fetch(`${baseUrl}/api/dot/explain`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${authToken}`,
+      'X-Dot-Csrf': '1',
+      'Idempotency-Key': key,
+    },
+    body: JSON.stringify({ response_text: responseText }),
+  });
+  const data = await res.json().catch(() => ({}));
+  return {
+    status: res.status,
+    data,
+    replayed: res.headers.get('Idempotency-Replayed') === 'true',
+  };
+}
+
 async function usageCount(empresaId: string) {
   const row = await db.get(
     'SELECT COUNT(*) AS c, COALESCE(SUM(tokens),0) AS t FROM ai_usage WHERE empresa_id = ? AND feature = ?',
@@ -166,6 +185,7 @@ suite('Dot HTTP + ledger (provedor simulado)', () => {
     await db.run('DELETE FROM dot_budget_reservations WHERE empresa_id IN (?,?)', [EMPRESA, EMPRESA_VAZIA]);
     await db.run('DELETE FROM ai_usage WHERE empresa_id IN (?,?)', [EMPRESA, EMPRESA_VAZIA]);
     await db.run('DELETE FROM dot_response_cache WHERE empresa_id IN (?,?)', [EMPRESA, EMPRESA_VAZIA]).catch(() => undefined);
+    await db.run('DELETE FROM dot_http_idempotency WHERE empresa_id IN (?,?)', [EMPRESA, EMPRESA_VAZIA]).catch(() => undefined);
   });
 
   test('execução bem-sucedida: 200, reserva finalizada e consumo real registrado', async () => {
@@ -273,6 +293,70 @@ suite('Dot HTTP + ledger (provedor simulado)', () => {
     const usage = await usageCount(EMPRESA);
     assert.equal(usage.rows, 1, 'retry não pode criar segunda linha de consumo');
     assert.equal((await reservations(EMPRESA)).length, 1);
+  });
+
+  test('explain: mesma chave reproduz resposta sem segunda chamada nem débito', async () => {
+    const key = `explain-replay-${crypto.randomUUID()}`;
+    const beforeCalls = providerCalls;
+    const first = await callExplain('A nota média permaneceu estável.', key);
+    assert.equal(first.status, 200, JSON.stringify(first.data));
+    assert.equal(first.data.ok, true);
+    assert.equal(providerCalls, beforeCalls + 1);
+
+    const second = await callExplain('A nota média permaneceu estável.', key);
+    assert.equal(second.status, 200, JSON.stringify(second.data));
+    assert.equal(second.replayed, true);
+    assert.deepEqual(second.data, first.data);
+    assert.equal(providerCalls, beforeCalls + 1, 'replay não pode chamar o provedor novamente');
+
+    const rows = await reservations(EMPRESA);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].status, 'settled');
+    assert.equal((await usageCount(EMPRESA)).rows, 1);
+  });
+
+  test('explain: mesma chave com conteúdo diferente é recusada sem segunda chamada', async () => {
+    const key = `explain-mismatch-${crypto.randomUUID()}`;
+    const first = await callExplain('Explicação original.', key);
+    assert.equal(first.status, 200, JSON.stringify(first.data));
+    const callsAfterFirst = providerCalls;
+
+    const changed = await callExplain('Conteúdo diferente.', key);
+    assert.equal(changed.status, 409);
+    assert.equal(changed.data.code, 'DOT_IDEMPOTENCY_KEY_REUSED');
+    assert.equal(providerCalls, callsAfterFirst);
+    assert.equal((await reservations(EMPRESA)).length, 1);
+  });
+
+  test('explain: duas requisições simultâneas com a mesma chave geram no máximo uma chamada', async () => {
+    const key = `explain-race-${crypto.randomUUID()}`;
+    const beforeCalls = providerCalls;
+    const results = await Promise.all([
+      callExplain('Explique evidências concorrentes.', key),
+      callExplain('Explique evidências concorrentes.', key),
+    ]);
+    assert.equal(results.filter((item) => item.status === 200).length, 1, JSON.stringify(results));
+    assert.equal(results.filter((item) => item.status === 409).length, 1, JSON.stringify(results));
+    assert.equal(providerCalls, beforeCalls + 1);
+    assert.equal((await reservations(EMPRESA)).length, 1);
+    assert.equal((await usageCount(EMPRESA)).rows, 1);
+  });
+
+  test('explain: resultado ambíguo bloqueia retry e não repete chamada ao provedor', async () => {
+    mode = 'ambiguous';
+    const key = `explain-ambiguous-${crypto.randomUUID()}`;
+    const first = await callExplain('Explique uma resposta cujo provedor expira.', key);
+    assert.equal(first.status, 503, JSON.stringify(first.data));
+    const callsAfterFirst = providerCalls;
+
+    const retry = await callExplain('Explique uma resposta cujo provedor expira.', key);
+    assert.equal(retry.status, 409);
+    assert.equal(retry.data.code, 'DOT_REQUEST_AMBIGUOUS');
+    assert.equal(providerCalls, callsAfterFirst, 'tentativa ambígua nunca pode ser reenviada');
+    const rows = await reservations(EMPRESA);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].status, 'pending');
+    assert.equal(Number(rows[0].ambiguous), 1);
   });
 
   test('GET /api/dot/budget não expõe dado sensível', async () => {
