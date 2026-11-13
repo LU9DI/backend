@@ -352,14 +352,23 @@ suite('Dot HTTP idempotency — claim, replay and ambiguity', () => {
       [new Date(Date.now() - 60_000).toISOString(), empresaId, pendingInput.key],
     );
 
-    // Any new claim triggers the purge of expired completed rows only.
+    // A claim sweep removes only response content. The terminal key/hash
+    // tombstone must survive and must never become claimable again.
     await idempotency.claimDotHttpRequest({
       empresaId,
       endpoint,
       key: 'dot-chat-key-purge-trigger-001',
       payload: { message: 'gatilho', session_id: 'session-i' },
     });
-    assert.equal(await row(doneInput.key), undefined, 'linha completed expirada deve ser purgada');
+    const expiredRow = await row(doneInput.key);
+    assert.ok(expiredRow, 'tombstone completed expirada deve ser preservada');
+    assert.equal(expiredRow.status, 'completed');
+    assert.equal(expiredRow.response_json, null, 'conteúdo da resposta expirada deve ser apagado');
+    assert.equal((await idempotency.claimDotHttpRequest(doneInput)).kind, 'result_expired');
+    assert.equal((await idempotency.claimDotHttpRequest({
+      ...doneInput,
+      payload: { message: 'conteúdo diferente', session_id: 'session-g' },
+    })).kind, 'key_reused', 'hash divergente continua bloqueado pela tombstone');
     assert.ok(await row(pendingInput.key), 'linha processing NUNCA pode ser purgada');
   });
 
