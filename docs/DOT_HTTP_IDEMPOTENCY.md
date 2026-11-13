@@ -63,6 +63,15 @@ A gravação de resposta e a transição para `completed` devem ser atômicas. A
 - Conflitos/in-flight/ambiguous usam códigos estáveis e mensagens que não revelem dados de outro tenant.
 - O corpo armazenado não pode conter segredos, credenciais ou dados de outro tenant. Aplicar o mesmo controle de acesso e sanitização da resposta original.
 
+## Reconciliação operacional de tentativas HTTP ambíguas
+
+- Cada claim de chat vincula sua reserva financeira (`reservation_id`) antes de marcar o envio ao provedor. Se a associação falhar, a chamada não é enviada e a reserva é liberada como comprovadamente não enviada.
+- `GET /api/admin/dot/http-idempotency` é exclusivo de operador da plataforma (`autenticarToken` + `isAdminUser`) e retorna somente metadados mínimos: ID, tenant, endpoint, prefixos da chave/hash, timestamps e ID da reserva. Nunca retorna chave completa, prompt ou resposta.
+- `POST /api/admin/dot/http-idempotency/reconcile` exige operador da plataforma e `X-Dot-Admin: 1`. A decisão financeira é aplicada à reserva vinculada pelo serviço de ledger, que valida `pending`, `ambiguous=1` e, para release, `sent_at IS NULL` sob lock transacional.
+- Toda decisão é registrada em `audit_logs` como `dot.http_idempotency_reconciled`, incluindo ator, tenant, ID HTTP, reserva, decisão, justificativa e a garantia `idempotency_key_remains_blocked=true`.
+- **A reconciliação financeira nunca reabre a chave HTTP.** Mesmo após `settle` ou `release`, a linha continua `ambiguous`; o cliente não pode reproduzir nem executar novamente a mesma mensagem. Uma nova mensagem do usuário deve receber nova chave somente quando se tratar realmente de uma nova intenção, nunca como workaround de uma tentativa cujo resultado segue incerto.
+- Registros sem reserva vinculada permanecem bloqueados e retornam `DOT_HTTP_RECONCILE_NO_RESERVATION`; não existe liberação automática.
+
 ## Retenção e reconciliação operacional (estado atual)\n\n- `completed`: resposta reproduzível por 24 horas; depois, somente o corpo é apagado e a chave permanece terminal.\n- `failed_safe`: permanece registrada; retry é permitido somente pela transição condicional existente que registra prova de não envio.\n- `ambiguous`: permanece bloqueada e não é expurgada. **Ainda falta uma rota de reconciliação HTTP exclusiva de operador** que consulte evidências do provedor, vincule a decisão à reserva financeira quando existir e grave auditoria imutável. Até essa rota existir, não há procedimento HTTP automatizado para liberar/recuperar a chave ambígua; ela permanece bloqueada.\n\n## Testes de aceitação obrigatórios
 
 1. Duas chamadas concorrentes, mesma chave/hash: uma única chamada ao provedor e uma única reserva.
