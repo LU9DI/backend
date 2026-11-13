@@ -3,10 +3,10 @@
 **Status:** documento de preparação. Nenhuma flag foi ativada e nenhum deploy foi executado.
 **Última revisão:** 2026-11-13
 **PR:** #144 — `reconcile/dot-production-2026-11-06`
-**HEAD verificado da branch:** `8874579571a9c6ce5ea9e2e2c44e93510f6a07ad`
+**HEAD verificado da branch:** `b7d1f4cf0854a17a9d67abfece8bb714743b148e`
 (inclui as correções dos PRs #149 e #150).
-**CI do HEAD:** Backend CI run [43422329776](https://github.com/LU9DI/backend/actions/runs/43422329776)
-e Dependency audit run [43422329772](https://github.com/LU9DI/backend/actions/runs/43422329772)
+**CI do HEAD:** Backend CI run [43424516563](https://github.com/LU9DI/backend/actions/runs/43424516563)
+e Dependency audit run [43424516530](https://github.com/LU9DI/backend/actions/runs/43424516530)
 concluídos com sucesso. O check externo
 `deploy/lu9di/filtra-ai-api-fallback` é legado do Deno Deploy e não representa
 o serviço de produção, que roda em **Render**.
@@ -365,11 +365,13 @@ homologado pelo gateway". Portanto:
 ## 8. Pendências remanescentes
 
 1. Política de retenção formal e job de expurgo ainda não implementados.
-2. `/api/dot/explain` **não** usa a idempotência HTTP (só o `/api/dot/chat`):
-   um retry do cliente no explain pode criar nova reserva e nova chamada ao
-   provedor. O ledger evita consumo duplicado da mesma reserva, mas não
-   deduplica requisições distintas. O frontend de conversa não usa esse
-   endpoint.
+2. `/api/dot/explain` também usa idempotência HTTP em namespace separado
+   (`endpoint='/api/dot/explain'`), exige chave em produção e persiste/reproduz
+   a resposta pelo mesmo serviço durável de idempotência. A rota foi conferida
+   no HEAD atual de `routes/dotRoutes.ts`. A suíte HTTP existente cobre o
+   contrato geral e o chat; acrescentar cenários específicos de replay/ambiguidade
+   para explain continua sendo uma melhoria de cobertura, não uma ausência da
+   proteção na implementação.
 3. Integração legada do Deno Deploy deve ser removida do GitHub (required check
    obsoleto); o alvo de produção é Render. Detalhes em `DSV4`/relatório da
    missão: é um status externo do app Deno Deploy ("Organization suspended"),
@@ -382,3 +384,12 @@ homologado pelo gateway". Portanto:
    observação de carga.
 7. Catálogo de alertas em `docs/DOT_OBSERVABILITY_ALERTS.md` está pronto, mas
    **nenhum alerta/canal está configurado ou ativo** em nenhuma plataforma.
+
+## 9. Estado verificado em 13/11/2026
+
+- Backend PR #144 HEAD `b7d1f4cf0854a17a9d67abfece8bb714743b148e`: Backend CI e dependency audit concluídos com sucesso nos runs listados acima.
+- Frontend PR #203 HEAD `2438974495ee32d9bc1d015a5cf6f4eb6a44c0f7`: CI, dependency audit e Browser E2E concluídos com sucesso; E2E com mocks não substitui integração real.
+- Render `filtra-ia-api` permanece no commit de produção anterior (`feac3cd6e3ccd757c81a706b45e594d6be22a5cd`), plano Free, serviço live. Nenhum deploy do PR #144 foi executado.
+- Supabase produção: `dot_budget_reservations` e `dot_http_idempotency` presentes com RLS; `reservation_id` e `attempt_id` presentes; índices de idempotência verificados. Nenhum grant direto para `anon` ou `authenticated` nas duas tabelas privadas.
+- Revisão independente de mantenedor ainda não registrada. A integração E2E backend + frontend + banco em ambiente controlado e a confirmação do canal externo de alertas continuam pendentes.
+- DOT continua desativado; não ativar flags nem executar chamadas de IA até fechar os bloqueios acima.
