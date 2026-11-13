@@ -365,7 +365,7 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
       // Exigir autenticação e impedir acesso cruzado entre empresas.
       const auth = req as any;
       const actor = auth.user;
-      const isAdmin = actor?.empresa_id === 'admin' || actor?.role === 'admin';
+      const isAdmin = isAdminUser(actor);
       if (!actor || (!isAdmin && String(actor.empresa_id || '') !== empresaId)) {
         return res.status(403).json({ error: 'Acesso negado.' });
       }
