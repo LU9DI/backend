@@ -54,7 +54,8 @@ carregar contexto ou criar reserva, exige chave em produção, inclui
 chaves em processamento/ambíguas/expiradas. A reserva é vinculada ao claim
 antes da marcação de envio. Falhas de vínculo ou marcação antes do provedor
 tentam liberar a reserva com prova de não envio; falhas após possível chamada
-retornam 503 e mantêm a chave bloqueada.
+retornam 503 e mantêm a chave bloqueada. A rota também respeita
+`FILTRA_DOT_ENABLED` e retorna 404 em produção quando a flag está desligada.
 
 **Cobertura adicionada em** `tests/dotChatLedger.http.test.ts`: replay sem
 segunda chamada/débito, chave reutilizada com payload diferente, concorrência
