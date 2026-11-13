@@ -99,7 +99,7 @@ export async function autenticarToken(req: AuthRequest, res: Response, next: Nex
       empresa_id: payload.empresa_id,
       role: payload.role,
       platform_admin: payload.platform_admin === true,
-}    };
+    };
     return next();
   } catch {
     return res.status(401).json({
