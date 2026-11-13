@@ -28,6 +28,7 @@ test('allows the exact production frontend origins and rejects unknown origins',
       'https://filtra-ai-web-runtime.onrender.com',
       'https://filtraai.com',
       'https://www.filtraai.com',
+      'https://saas-reputacao-l4uo3uqrd-lu9di.vercel.app',
     ]) {
       const result = await check(value);
       assert.equal(result.error, null, value);
