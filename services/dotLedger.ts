@@ -43,6 +43,7 @@ import { getFeatureTokenLimit, getTokenLimit } from '../lib/quota.js';
 import { normalizePlan } from '../lib/plans.js';
 import { incCounter } from '../lib/metrics.js';
 import { logEvent } from '../lib/observability.js';
+import { ensureAuditSchema } from '../lib/auditLog.js';
 
 /**
  * Plano canônico para cota (#141): só `rei`/`corporativo` têm orçamento de Dot.
@@ -635,9 +636,10 @@ export async function finalizeDotReservation(params: {
 
 /**
  * Libera a reserva — SOMENTE quando houver comprovação de que a solicitação
- * não foi enviada ao provedor (ex.: falta de provedor configurado, rejeição
- * antes do envio). Chamadas com `provenNotSent=false` são recusadas: a
- * reserva continua comprometendo o orçamento até reconciliação segura.
+ * não foi processada pelo provedor. `provenNotSent` só é fornecido pelo
+ * caminho interno de falha após classificação do resultado do provedor; não
+ * existe endpoint público que permita ao tenant declarar essa evidência.
+ * Reconciliação manual usa sua própria guarda estrita de `sent_at`.
  */
 export async function releaseDotReservation(params: {
   empresaId: string;
@@ -805,28 +807,145 @@ export async function reconcileDotBudget(params: {
   tokens?: number | null;
   reason?: string;
   provider?: string | null;
+  /** Persist this privileged decision in the same transaction as the ledger transition. */
+  audit?: {
+    action: string;
+    actorUserId: string | null;
+    actorRole: string;
+    ip: string | null;
+    userAgent: string | null;
+    detail?: Record<string, unknown>;
+  };
 }): Promise<{ ok: boolean; reservation: DotReservation | null; reason?: string }> {
   const empresaId = String(params.empresaId || '').trim();
-  if (params.decision === 'release') {
-    return releaseDotReservation({
-      empresaId,
-      reservationId: params.reservationId,
-      reason: params.reason,
-      provenNotSent: true,
-    });
+  const id = int(params.reservationId);
+  if (!empresaId || !id) return { ok: false, reservation: null, reason: 'reserva inválida' };
+  if (params.decision !== 'settle' && params.decision !== 'release') {
+    return { ok: false, reservation: null, reason: 'decisão de reconciliação inválida' };
   }
-  if (params.decision === 'settle') {
-    const result = await finalizeDotReservation({
-      empresaId,
-      reservationId: params.reservationId,
-      tokens: params.tokens ?? null,
-      estimatedTokens: null,
-      provider: params.provider ?? null,
-      tipo: 'filtra_dot_chat_reconciled',
-    });
-    return { ok: result.ok, reservation: result.reservation, reason: result.reason };
+  if (params.decision === 'settle' && (!Number.isSafeInteger(Number(params.tokens)) || Number(params.tokens) <= 0)) {
+    return { ok: false, reservation: null, reason: 'settle exige tokens reais inteiros maiores que zero' };
   }
-  return { ok: false, reservation: null, reason: 'decisão de reconciliação inválida' };
+  await assertDotLedgerSchema();
+  // Prepare the audit table before opening the transaction. The event itself
+  // is inserted through the same transaction handle as the financial change.
+  if (params.audit) await ensureAuditSchema(getDb() as any);
+
+  try {
+    return await withDbTransaction(async (tx) => {
+      // Todas as precondições e a transição são avaliadas sob o mesmo lock.
+      // Assim, nenhuma reconciliação pode zerar uma chamada ainda em andamento.
+      await lockDotBudget(tx, empresaId);
+      const lockSuffix = dbEngine() === 'postgres' ? ' FOR UPDATE' : '';
+      const current = await tx.get(
+        `SELECT * FROM dot_budget_reservations
+          WHERE id = ? AND empresa_id = ? LIMIT 1${lockSuffix}`,
+        [id, empresaId],
+      ) as DotReservation | undefined;
+      if (!current) return { ok: false, reservation: null, reason: 'reserva não encontrada' };
+      if (current.status !== 'pending') {
+        return { ok: false, reservation: current, reason: 'reserva não está aberta' };
+      }
+      if (Number(current.ambiguous) !== 1) {
+        return { ok: false, reservation: current, reason: 'apenas reservas ambíguas podem ser reconciliadas' };
+      }
+
+      const now = nowIso();
+      if (params.decision === 'release') {
+        if (current.sent_at) {
+          return { ok: false, reservation: current, reason: 'reserva enviada ao provedor não pode ser liberada' };
+        }
+        const updated = await tx.run(
+          `UPDATE dot_budget_reservations
+              SET status = 'released', tokens_real = 0, updated_at = ?, settled_at = ?
+            WHERE id = ? AND empresa_id = ? AND status = 'pending' AND ambiguous = 1 AND sent_at IS NULL`,
+          [now, now, id, empresaId],
+        );
+        if (!updated || updated.changes !== 1) {
+          throw new Error('reserva mudou durante a reconciliação; liberação cancelada');
+        }
+        const final = await tx.get(
+          'SELECT * FROM dot_budget_reservations WHERE id = ? AND empresa_id = ?',
+          [id, empresaId],
+        ) as DotReservation;
+        if (params.audit) {
+          await tx.run(
+            `INSERT INTO audit_logs
+              (actor_user_id, actor_role, empresa_id, action, target, result, ip, user_agent, detail)
+             VALUES (?, ?, ?, ?, ?, 'ok', ?, ?, ?)`,
+            [
+              params.audit.actorUserId,
+              params.audit.actorRole,
+              empresaId,
+              String(params.audit.action).slice(0, 80),
+              String(id),
+              params.audit.ip,
+              params.audit.userAgent,
+              JSON.stringify({ reservation_id: id, decision: params.decision, reason: params.reason || null, ...params.audit.detail }).slice(0, 1000),
+            ],
+          );
+        }
+        return { ok: true, reservation: final };
+      }
+
+      const chargedTokens = Number(params.tokens);
+      const inserted = await tx.run(
+        `INSERT INTO ai_usage (empresa_id, tipo, tokens, provider, feature, criado_em)
+         VALUES (?,?,?,?,?,datetime('now')) RETURNING id`,
+        [
+          empresaId,
+          'filtra_dot_chat_reconciled',
+          chargedTokens,
+          params.provider ? String(params.provider).slice(0, 20) : null,
+          DOT_FEATURE,
+        ],
+      );
+      const aiUsageId = int(inserted?.lastID) || null;
+      const updated = await tx.run(
+        `UPDATE dot_budget_reservations
+            SET status = 'settled', tokens_real = ?, provider = COALESCE(?, provider),
+                ai_usage_id = ?, settled_at = ?, updated_at = ?
+          WHERE id = ? AND empresa_id = ? AND status = 'pending' AND ambiguous = 1`,
+        [
+          chargedTokens,
+          params.provider ? String(params.provider).slice(0, 20) : null,
+          aiUsageId,
+          now,
+          now,
+          id,
+          empresaId,
+        ],
+      );
+      if (!updated || updated.changes !== 1) {
+        throw new Error('reserva mudou durante a reconciliação; liquidação cancelada');
+      }
+      const final = await tx.get(
+        'SELECT * FROM dot_budget_reservations WHERE id = ? AND empresa_id = ?',
+        [id, empresaId],
+      ) as DotReservation;
+      if (params.audit) {
+        await tx.run(
+          `INSERT INTO audit_logs
+            (actor_user_id, actor_role, empresa_id, action, target, result, ip, user_agent, detail)
+           VALUES (?, ?, ?, ?, ?, 'ok', ?, ?, ?)`,
+          [
+            params.audit.actorUserId,
+            params.audit.actorRole,
+            empresaId,
+            String(params.audit.action).slice(0, 80),
+            String(id),
+            params.audit.ip,
+            params.audit.userAgent,
+            JSON.stringify({ reservation_id: id, decision: params.decision, tokens: chargedTokens, provider: params.provider || null, reason: params.reason || null, ...params.audit.detail }).slice(0, 1000),
+          ],
+        );
+      }
+      return { ok: true, reservation: final };
+    });
+  } catch (error: any) {
+    console.error('[dot-ledger] falha ao reconciliar reserva:', error?.message || error);
+    return { ok: false, reservation: null, reason: String(error?.message || error) };
+  }
 }
 
 /** Lista reservas abertas para a reconciliação (painel/admin). */

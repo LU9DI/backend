@@ -1,5 +1,5 @@
 /**
- * Durable HTTP idempotency for the Filtra Dot chat endpoint.
+ * Durable HTTP idempotency for Filtra Dot chat and explain endpoints.
  *
  * Implements the contract in `docs/DOT_HTTP_IDEMPOTENCY.md`:
  *  - singleton key per authenticated tenant (`empresa_id`), never from body;
@@ -16,7 +16,7 @@
  *
  * This service does not replace the token ledger's reservation idempotency.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import { getDb, withDbTransaction } from '../lib/db.js';
 import { incCounter } from '../lib/metrics.js';
@@ -26,15 +26,6 @@ import { logEvent } from '../lib/observability.js';
 const PROCESSING_STALE_MS = 15 * 60_000;
 /** Retention window for replayable completed responses. */
 const COMPLETED_TTL_MS = 24 * 60 * 60_000;
-/**
- * Retention window for `failed_safe` rows. They remain retryable well beyond a
- * normal client outbox window, but cannot grow forever (anti-storage-abuse).
- * `ambiguous` and `processing` are never auto-deleted: they are safety evidence.
- */
-const FAILED_SAFE_TTL_MS = Math.max(
-  24 * 60 * 60_000,
-  Number(process.env.DOT_IDEMPOTENCY_FAILED_SAFE_TTL_HOURS || 720) * 60 * 60_000,
-);
 /** Hard cap for a stored response body, mirroring the chat payload budget. */
 const MAX_RESPONSE_BYTES = 256_000;
 export const MAX_IDEMPOTENCY_KEY_LENGTH = 128;
@@ -58,6 +49,7 @@ type IdempotencyRow = {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  expires_at: string | null;
 };
 
 export type DotHttpIdempotencyClaim = {
@@ -65,11 +57,14 @@ export type DotHttpIdempotencyClaim = {
   endpoint: string;
   key: string;
   requestHash: string;
+  /** Unique execution generation; stale callbacks cannot mutate a retry. */
+  attemptId: string;
 };
 
 export type DotHttpIdempotencyClaimResult =
   | { kind: 'claimed'; claim: DotHttpIdempotencyClaim }
   | { kind: 'replay'; status: number; body: unknown }
+  | { kind: 'result_expired' }
   | { kind: 'in_progress' }
   | { kind: 'ambiguous' }
   | { kind: 'key_reused' };
@@ -128,7 +123,7 @@ function nowIso(): string {
 
 function rowSelect(): string {
   return `SELECT empresa_id, endpoint, idempotency_key, request_hash, status,
-                 response_status, response_json, created_at, updated_at, completed_at
+                 response_status, response_json, created_at, updated_at, completed_at, expires_at
             FROM dot_http_idempotency
            WHERE empresa_id = ? AND idempotency_key = ?`;
 }
@@ -171,30 +166,31 @@ export async function claimDotHttpRequest(input: {
     endpoint,
     key,
     requestHash: hashDotHttpPayload({ endpoint, payload: input.payload }),
+    attemptId: randomUUID(),
   };
   const now = new Date();
   const nowIsoValue = now.toISOString();
   const staleBefore = new Date(now.getTime() - PROCESSING_STALE_MS).toISOString();
-  const failedSafeBefore = new Date(now.getTime() - FAILED_SAFE_TTL_MS).toISOString();
   const expiresAt = new Date(now.getTime() + COMPLETED_TTL_MS).toISOString();
 
   return withDbTransaction(async (tx) => {
-    // Only replayable rows are retention candidates. Processing, ambiguous and
-    // recent failed_safe rows are safety evidence and are never silently
-    // discarded; failed_safe has a bounded (30d default) retry window.
+    // Expire response content, never the idempotency tombstone. The tenant,
+    // key, request hash and terminal status remain so an old outbox retry can
+    // never become a fresh provider execution. failed_safe rows are retained
+    // too: deleting them would also reopen the key namespace.
     await tx.run(
-      `DELETE FROM dot_http_idempotency
-        WHERE (status = 'completed' AND expires_at < ?)
-           OR (status = 'failed_safe' AND updated_at < ?)`,
-      [nowIsoValue, failedSafeBefore],
+      `UPDATE dot_http_idempotency
+          SET response_json = NULL
+        WHERE status = 'completed' AND expires_at < ? AND response_json IS NOT NULL`,
+      [nowIsoValue],
     );
 
     const inserted = await tx.run(
       `INSERT OR IGNORE INTO dot_http_idempotency
-        (empresa_id, endpoint, idempotency_key, request_hash, status,
+        (empresa_id, endpoint, idempotency_key, request_hash, status, attempt_id,
          created_at, updated_at, expires_at)
-       VALUES (?, ?, ?, ?, 'processing', ?, ?, ?)`,
-      [empresaId, endpoint, key, claim.requestHash, nowIsoValue, nowIsoValue, expiresAt],
+       VALUES (?, ?, ?, ?, 'processing', ?, ?, ?, ?)`,
+      [empresaId, endpoint, key, claim.requestHash, claim.attemptId, nowIsoValue, nowIsoValue, expiresAt],
     );
     if (inserted.changes === 1) return { kind: 'claimed', claim };
 
@@ -206,7 +202,12 @@ export async function claimDotHttpRequest(input: {
       throw new Error('Dot HTTP idempotency row disappeared after unique conflict');
     }
     if (existing.request_hash !== claim.requestHash) return { kind: 'key_reused' };
-    if (existing.status === 'completed') return replayFrom(existing);
+    if (existing.status === 'completed') {
+      if (!existing.expires_at || existing.expires_at < nowIsoValue || existing.response_json == null || existing.response_status == null) {
+        return { kind: 'result_expired' };
+      }
+      return replayFrom(existing);
+    }
     if (existing.status === 'ambiguous') return { kind: 'ambiguous' };
 
     if (existing.status === 'failed_safe') {
@@ -214,10 +215,10 @@ export async function claimDotHttpRequest(input: {
       // provider was not reached. The conditional update is the audit trail.
       const retried = await tx.run(
         `UPDATE dot_http_idempotency
-            SET status = 'processing', updated_at = ?, expires_at = ?
+            SET status = 'processing', attempt_id = ?, updated_at = ?, expires_at = ?
           WHERE empresa_id = ? AND idempotency_key = ?
             AND status = 'failed_safe'`,
-        [nowIsoValue, expiresAt, empresaId, key],
+        [claim.attemptId, nowIsoValue, expiresAt, empresaId, key],
       );
       if (retried.changes === 1) return { kind: 'claimed', claim };
       return { kind: 'in_progress' };
@@ -248,7 +249,12 @@ export async function claimDotHttpRequest(input: {
           rowSelect(),
           [empresaId, key],
         );
-        if (raced?.status === 'completed') return replayFrom(raced);
+        if (raced?.status === 'completed') {
+          if (!raced.expires_at || raced.expires_at < nowIsoValue || raced.response_json == null || raced.response_status == null) {
+            return { kind: 'result_expired' };
+          }
+          return replayFrom(raced);
+        }
         if (raced?.status === 'ambiguous') return { kind: 'ambiguous' };
         return { kind: 'in_progress' };
       }
@@ -280,7 +286,7 @@ export async function completeDotHttpRequest(
         SET status = 'completed', response_status = ?, response_json = ?,
             updated_at = ?, completed_at = ?, expires_at = ?
       WHERE empresa_id = ? AND idempotency_key = ?
-        AND request_hash = ? AND status = 'processing'`,
+        AND request_hash = ? AND attempt_id = ? AND status = 'processing'`,
     [
       status,
       serialized,
@@ -290,6 +296,7 @@ export async function completeDotHttpRequest(
       claim.empresaId,
       claim.key,
       claim.requestHash,
+      claim.attemptId,
     ],
   );
   if (result.changes === 1) {
@@ -310,6 +317,64 @@ export async function completeDotHttpRequest(
   return false;
 }
 
+/** Attach the financial reservation before marking/sending to a provider. */
+export async function attachDotHttpReservation(
+  claim: DotHttpIdempotencyClaim,
+  reservationId: number,
+): Promise<boolean> {
+  if (!Number.isSafeInteger(reservationId) || reservationId <= 0) return false;
+  const result = await getDb().run(
+    `UPDATE dot_http_idempotency
+        SET reservation_id = ?, updated_at = ?
+      WHERE empresa_id = ? AND idempotency_key = ? AND request_hash = ?
+        AND attempt_id = ? AND status = 'processing' AND reservation_id IS NULL`,
+    [reservationId, nowIso(), claim.empresaId, claim.key, claim.requestHash, claim.attemptId],
+  );
+  return result.changes === 1;
+}
+
+export type DotHttpAmbiguousRecord = {
+  id: number;
+  empresa_id: string;
+  endpoint: string;
+  key_prefix: string;
+  request_hash_prefix: string;
+  created_at: string;
+  updated_at: string;
+  reservation_id: number | null;
+};
+
+/** Metadata-only operator queue; never returns message, full key or response. */
+export async function listAmbiguousDotHttpRequests(limit = 100): Promise<DotHttpAmbiguousRecord[]> {
+  const safeLimit = Math.min(100, Math.max(1, Math.floor(Number(limit) || 100)));
+  return getDb().all(
+    `SELECT id, empresa_id, endpoint,
+            SUBSTR(idempotency_key, 1, 8) AS key_prefix,
+            SUBSTR(request_hash, 1, 12) AS request_hash_prefix,
+            created_at, updated_at, reservation_id
+       FROM dot_http_idempotency
+      WHERE status = 'ambiguous'
+      ORDER BY updated_at ASC, id ASC
+      LIMIT ?`,
+    [safeLimit],
+  ) as Promise<DotHttpAmbiguousRecord[]>;
+}
+
+/** Look up an ambiguous record for an operator decision without exposing its key. */
+export async function getAmbiguousDotHttpRequest(id: number): Promise<DotHttpAmbiguousRecord | null> {
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  const row = await getDb().get(
+    `SELECT id, empresa_id, endpoint,
+            SUBSTR(idempotency_key, 1, 8) AS key_prefix,
+            SUBSTR(request_hash, 1, 12) AS request_hash_prefix,
+            created_at, updated_at, reservation_id
+       FROM dot_http_idempotency
+      WHERE id = ? AND status = 'ambiguous'`,
+    [id],
+  );
+  return (row as DotHttpAmbiguousRecord | undefined) || null;
+}
+
 /** The provider may have been reached; the retry must never run again. */
 export async function markDotHttpRequestAmbiguous(
   claim: DotHttpIdempotencyClaim,
@@ -318,8 +383,8 @@ export async function markDotHttpRequestAmbiguous(
     `UPDATE dot_http_idempotency
         SET status = 'ambiguous', updated_at = ?
       WHERE empresa_id = ? AND idempotency_key = ?
-        AND status = 'processing'`,
-    [nowIso(), claim.empresaId, claim.key],
+        AND attempt_id = ? AND status = 'processing'`,
+    [nowIso(), claim.empresaId, claim.key, claim.attemptId],
   );
   if (result.changes === 1) {
     incCounter('dot_http_idempotency_ambiguous');
@@ -342,10 +407,10 @@ export async function markDotHttpRequestFailedSafe(
 ): Promise<void> {
   const result = await getDb().run(
     `UPDATE dot_http_idempotency
-        SET status = 'failed_safe', updated_at = ?
+        SET status = 'failed_safe', reservation_id = NULL, updated_at = ?
       WHERE empresa_id = ? AND idempotency_key = ?
-        AND status = 'processing'`,
-    [nowIso(), claim.empresaId, claim.key],
+        AND attempt_id = ? AND status = 'processing'`,
+    [nowIso(), claim.empresaId, claim.key, claim.attemptId],
   );
   if (result.changes === 1) incCounter('dot_http_idempotency_failed_safe');
 }

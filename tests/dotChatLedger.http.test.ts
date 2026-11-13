@@ -65,6 +65,25 @@ async function callDot(body: unknown) {
   return { status: res.status, data };
 }
 
+async function callExplain(responseText: string, key: string) {
+  const res = await fetch(`${baseUrl}/api/dot/explain`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${authToken}`,
+      'X-Dot-Csrf': '1',
+      'Idempotency-Key': key,
+    },
+    body: JSON.stringify({ response_text: responseText }),
+  });
+  const data = await res.json().catch(() => ({}));
+  return {
+    status: res.status,
+    data,
+    replayed: res.headers.get('Idempotency-Replayed') === 'true',
+  };
+}
+
 async function usageCount(empresaId: string) {
   const row = await db.get(
     'SELECT COUNT(*) AS c, COALESCE(SUM(tokens),0) AS t FROM ai_usage WHERE empresa_id = ? AND feature = ?',
@@ -166,6 +185,7 @@ suite('Dot HTTP + ledger (provedor simulado)', () => {
     await db.run('DELETE FROM dot_budget_reservations WHERE empresa_id IN (?,?)', [EMPRESA, EMPRESA_VAZIA]);
     await db.run('DELETE FROM ai_usage WHERE empresa_id IN (?,?)', [EMPRESA, EMPRESA_VAZIA]);
     await db.run('DELETE FROM dot_response_cache WHERE empresa_id IN (?,?)', [EMPRESA, EMPRESA_VAZIA]).catch(() => undefined);
+    await db.run('DELETE FROM dot_http_idempotency WHERE empresa_id IN (?,?)', [EMPRESA, EMPRESA_VAZIA]).catch(() => undefined);
   });
 
   test('execução bem-sucedida: 200, reserva finalizada e consumo real registrado', async () => {
@@ -273,6 +293,184 @@ suite('Dot HTTP + ledger (provedor simulado)', () => {
     const usage = await usageCount(EMPRESA);
     assert.equal(usage.rows, 1, 'retry não pode criar segunda linha de consumo');
     assert.equal((await reservations(EMPRESA)).length, 1);
+  });
+
+  test('produção com DOT desativado: explain retorna 404 sem reserva ou chamada ao provedor', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousEnabled = process.env.FILTRA_DOT_ENABLED;
+    const callsBefore = providerCalls;
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.FILTRA_DOT_ENABLED = '0';
+      const response = await callExplain('Não deve ser processado com DOT desligado.', `explain-disabled-${crypto.randomUUID()}`);
+      assert.equal(response.status, 404);
+      assert.equal(response.data.code, 'DOT_DISABLED');
+      assert.equal(providerCalls, callsBefore);
+      assert.equal((await reservations(EMPRESA)).length, 0);
+      assert.equal((await usageCount(EMPRESA)).rows, 0);
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+      if (previousEnabled === undefined) delete process.env.FILTRA_DOT_ENABLED;
+      else process.env.FILTRA_DOT_ENABLED = previousEnabled;
+    }
+  });
+
+  test('explain: mesma chave reproduz resposta sem segunda chamada nem débito', async () => {
+    const key = `explain-replay-${crypto.randomUUID()}`;
+    const beforeCalls = providerCalls;
+    const first = await callExplain('A nota média permaneceu estável.', key);
+    assert.equal(first.status, 200, JSON.stringify(first.data));
+    assert.equal(first.data.ok, true);
+    assert.equal(providerCalls, beforeCalls + 1);
+
+    const second = await callExplain('A nota média permaneceu estável.', key);
+    assert.equal(second.status, 200, JSON.stringify(second.data));
+    assert.equal(second.replayed, true);
+    assert.deepEqual(second.data, first.data);
+    assert.equal(providerCalls, beforeCalls + 1, 'replay não pode chamar o provedor novamente');
+
+    const rows = await reservations(EMPRESA);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].status, 'settled');
+    assert.equal((await usageCount(EMPRESA)).rows, 1);
+  });
+
+  test('explain: mesma chave com conteúdo diferente é recusada sem segunda chamada', async () => {
+    const key = `explain-mismatch-${crypto.randomUUID()}`;
+    const first = await callExplain('Explicação original.', key);
+    assert.equal(first.status, 200, JSON.stringify(first.data));
+    const callsAfterFirst = providerCalls;
+
+    const changed = await callExplain('Conteúdo diferente.', key);
+    assert.equal(changed.status, 409);
+    assert.equal(changed.data.code, 'DOT_IDEMPOTENCY_KEY_REUSED');
+    assert.equal(providerCalls, callsAfterFirst);
+    assert.equal((await reservations(EMPRESA)).length, 1);
+  });
+
+  test('explain: duas requisições simultâneas com a mesma chave geram no máximo uma chamada', async () => {
+    const key = `explain-race-${crypto.randomUUID()}`;
+    const beforeCalls = providerCalls;
+    const results = await Promise.all([
+      callExplain('Explique evidências concorrentes.', key),
+      callExplain('Explique evidências concorrentes.', key),
+    ]);
+    assert.equal(results.filter((item) => item.status === 200).length, 1, JSON.stringify(results));
+    assert.equal(results.filter((item) => item.status === 409).length, 1, JSON.stringify(results));
+    assert.equal(providerCalls, beforeCalls + 1);
+    assert.equal((await reservations(EMPRESA)).length, 1);
+    assert.equal((await usageCount(EMPRESA)).rows, 1);
+  });
+
+  test('explain: falha ao vincular reserva libera com segurança e permite retry', async () => {
+    const key = `explain-link-failure-${crypto.randomUUID()}`;
+    const callsBefore = providerCalls;
+    await db.exec(`
+      CREATE TRIGGER fail_explain_reservation_link
+      BEFORE UPDATE OF reservation_id ON dot_http_idempotency
+      WHEN NEW.endpoint = '/api/dot/explain' AND NEW.reservation_id IS NOT NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated reservation link failure');
+      END;
+    `);
+    try {
+      const response = await callExplain('Teste de falha de vínculo.', key);
+      assert.equal(response.status, 503);
+      assert.equal(response.data.code, 'DOT_IDEMPOTENCY_RESERVATION_LINK_FAILED');
+      assert.equal(providerCalls, callsBefore, 'provedor não pode ser chamado sem vínculo durável');
+      const rows = await reservations(EMPRESA);
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].status, 'released');
+      const state = await db.get(
+        'SELECT status, reservation_id FROM dot_http_idempotency WHERE empresa_id = ? AND endpoint = ? AND idempotency_key = ?',
+        [EMPRESA, '/api/dot/explain', key],
+      );
+      assert.equal(state.status, 'failed_safe');
+      assert.equal(state.reservation_id, null);
+    } finally {
+      await db.exec('DROP TRIGGER IF EXISTS fail_explain_reservation_link');
+    }
+  });
+
+  test('explain: falha ao marcar envio libera reserva e não chama provedor', async () => {
+    const key = `explain-mark-failure-${crypto.randomUUID()}`;
+    const callsBefore = providerCalls;
+    await db.exec(`
+      CREATE TRIGGER fail_explain_mark_sent
+      BEFORE UPDATE OF sent_at ON dot_budget_reservations
+      WHEN NEW.sent_at IS NOT NULL AND OLD.sent_at IS NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated mark sent failure');
+      END;
+    `);
+    try {
+      const response = await callExplain('Teste de falha ao marcar envio.', key);
+      assert.equal(response.status, 503);
+      assert.equal(response.data.code, 'DOT_BUDGET_UNAVAILABLE');
+      assert.equal(providerCalls, callsBefore, 'provedor não pode ser chamado quando a marcação falha');
+      const rows = await reservations(EMPRESA);
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].status, 'released');
+      const state = await db.get(
+        'SELECT status, reservation_id FROM dot_http_idempotency WHERE empresa_id = ? AND endpoint = ? AND idempotency_key = ?',
+        [EMPRESA, '/api/dot/explain', key],
+      );
+      assert.equal(state.status, 'failed_safe');
+      assert.equal(state.reservation_id, null);
+    } finally {
+      await db.exec('DROP TRIGGER IF EXISTS fail_explain_mark_sent');
+    }
+  });
+
+  test('explain: recusa comprovada do provedor libera a chave para retry seguro', async () => {
+    mode = 'rejected';
+    const key = `explain-rejected-${crypto.randomUUID()}`;
+    const beforeCalls = providerCalls;
+
+    const first = await callExplain('Explique uma resposta recusada antes do processamento.', key);
+    assert.equal(first.status, 503);
+    assert.equal(providerCalls, beforeCalls + 1);
+    let rows = await reservations(EMPRESA);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].status, 'released');
+    let state = await db.get(
+      'SELECT status FROM dot_http_idempotency WHERE empresa_id = ? AND endpoint = ? AND idempotency_key = ?',
+      [EMPRESA, '/api/dot/explain', key],
+    );
+    assert.equal(state.status, 'failed_safe');
+
+    // A mesma chave/hash pode tentar novamente porque o provedor informou
+    // explicitamente que não processou a solicitação anterior.
+    const retry = await callExplain('Explique uma resposta recusada antes do processamento.', key);
+    assert.equal(retry.status, 503);
+    assert.equal(retry.data.code, undefined);
+    assert.equal(providerCalls, beforeCalls + 2);
+    rows = await reservations(EMPRESA);
+    assert.equal(rows.length, 2);
+    assert.ok(rows.every((row: { status: string }) => row.status === 'released'));
+    state = await db.get(
+      'SELECT status FROM dot_http_idempotency WHERE empresa_id = ? AND endpoint = ? AND idempotency_key = ?',
+      [EMPRESA, '/api/dot/explain', key],
+    );
+    assert.equal(state.status, 'failed_safe');
+  });
+
+  test('explain: resultado ambíguo bloqueia retry e não repete chamada ao provedor', async () => {
+    mode = 'ambiguous';
+    const key = `explain-ambiguous-${crypto.randomUUID()}`;
+    const first = await callExplain('Explique uma resposta cujo provedor expira.', key);
+    assert.equal(first.status, 503, JSON.stringify(first.data));
+    const callsAfterFirst = providerCalls;
+
+    const retry = await callExplain('Explique uma resposta cujo provedor expira.', key);
+    assert.equal(retry.status, 409);
+    assert.equal(retry.data.code, 'DOT_REQUEST_AMBIGUOUS');
+    assert.equal(providerCalls, callsAfterFirst, 'tentativa ambígua nunca pode ser reenviada');
+    const rows = await reservations(EMPRESA);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].status, 'pending');
+    assert.equal(Number(rows[0].ambiguous), 1);
   });
 
   test('GET /api/dot/budget não expõe dado sensível', async () => {

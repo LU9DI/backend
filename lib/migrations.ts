@@ -794,6 +794,13 @@ async function migrateDotHttpIdempotency(db: Database | PgDatabase): Promise<voi
     )`,
   );
 
+  // Reservation link enables platform operators to reconcile accounting for
+  // an ambiguous HTTP attempt without ever reopening its idempotency key.
+  await addColumnIfMissing(db, 'dot_http_idempotency', 'reservation_id', 'INTEGER');
+  // Per-execution generation prevents delayed callbacks from an older safe retry
+  // from mutating the currently processing attempt for the same key.
+  await addColumnIfMissing(db, 'dot_http_idempotency', 'attempt_id', 'TEXT');
+
   // Fail closed: a table from another schema must never be used with different
   // semantics (a missing column would turn the idempotency guarantee into a
   // best-effort). Reconciliation is explicit and manual.
@@ -810,6 +817,8 @@ async function migrateDotHttpIdempotency(db: Database | PgDatabase): Promise<voi
     'updated_at',
     'completed_at',
     'expires_at',
+    'reservation_id',
+    'attempt_id',
   ];
   const missing = required.filter((column) => !columns.includes(column));
   if (missing.length > 0 || columns.includes('tenant_id')) {
@@ -855,6 +864,29 @@ async function migrateDotHttpIdempotency(db: Database | PgDatabase): Promise<voi
 }
 
 /**
+ * Ledger e idempotência são privados do backend. Na Data API do Supabase,
+ * clientes anon/authenticated não devem ler nem gravar estas tabelas.
+ * O backend usa a conexão privilegiada; RLS permanece habilitado como defesa
+ * adicional contra grants acidentais.
+ */
+async function migrateDotPrivateLedgerRls(db: Database | PgDatabase): Promise<void> {
+  if (!isPgDatabase(db)) return;
+  await db.run('ALTER TABLE public.dot_budget_reservations ENABLE ROW LEVEL SECURITY');
+  await db.run('ALTER TABLE public.dot_http_idempotency ENABLE ROW LEVEL SECURITY');
+  await db.run(`REVOKE ALL ON TABLE public.dot_budget_reservations, public.dot_http_idempotency FROM PUBLIC`);
+  // PostgreSQL local de CI não necessariamente possui roles do Supabase.
+  // No Supabase, revoga explicitamente os grants dos papéis da Data API.
+  await db.run(`DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+      EXECUTE 'REVOKE ALL ON TABLE public.dot_budget_reservations, public.dot_http_idempotency FROM anon';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+      EXECUTE 'REVOKE ALL ON TABLE public.dot_budget_reservations, public.dot_http_idempotency FROM authenticated';
+    END IF;
+  END $$`);
+}
+
+/**
  * Sequência central de inicialização. Idempotente.
  * Em PostgreSQL roda inteira sob o advisory lock global, em uma conexão
  * dedicada, garantindo que processos concorrentes não executem DDL ao mesmo
@@ -871,6 +903,7 @@ export async function runCentralMigrations(db: Database | PgDatabase): Promise<v
     await migrateDotActionSchema(db);
     await migrateDotBudgetLedger(db);
     await migrateDotHttpIdempotency(db);
+    if (isPgDatabase(db)) await migrateDotPrivateLedgerRls(db);
   };
 
   if (isPgDatabase(db)) {

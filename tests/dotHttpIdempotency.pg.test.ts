@@ -50,6 +50,11 @@ test('PostgreSQL: migration creates the empresa/chave unique constraint', async 
       WHERE schemaname = 'public' AND indexname = 'ux_dot_http_idempotency_empresa_key'`,
   );
   assert.ok(index, 'unique empresa/chave index must exist');
+  const attemptColumn = await db.get(
+    `SELECT 1 AS ok FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'dot_http_idempotency' AND column_name = 'attempt_id'`,
+  );
+  assert.ok(attemptColumn, 'attempt generation column must exist');
 });
 
 test('PostgreSQL: concurrent transactions claim a logical message exactly once', async () => {
@@ -85,6 +90,38 @@ test('PostgreSQL: completed response is replayed without changing status or body
     assert.equal(replay.status, 200);
     assert.deepEqual(replay.body, body);
   }
+});
+
+test('PostgreSQL: callbacks from an old safe attempt cannot mutate its retry', async () => {
+  const input = {
+    empresaId,
+    endpoint,
+    key: `pg-dot-generation-${crypto.randomUUID()}`,
+    payload: { message: 'Retry generation', session_id: 'pg-session-generation' },
+  };
+  const first = await idempotency.claimDotHttpRequest(input);
+  assert.equal(first.kind, 'claimed');
+  if (first.kind !== 'claimed') return;
+  await idempotency.markDotHttpRequestFailedSafe(first.claim);
+
+  const second = await idempotency.claimDotHttpRequest(input);
+  assert.equal(second.kind, 'claimed');
+  if (second.kind !== 'claimed') return;
+  assert.notEqual(first.claim.attemptId, second.claim.attemptId);
+
+  assert.equal(await idempotency.completeDotHttpRequest(first.claim, 200, { ok: true, stale: true }), false);
+  await idempotency.markDotHttpRequestAmbiguous(first.claim);
+  await idempotency.markDotHttpRequestFailedSafe(first.claim);
+  assert.equal(await idempotency.attachDotHttpReservation(first.claim, 999001), false);
+
+  const persisted = await db.get(
+    'SELECT status, reservation_id, attempt_id FROM dot_http_idempotency WHERE empresa_id = ? AND idempotency_key = ?',
+    [empresaId, input.key],
+  );
+  assert.equal(persisted.status, 'processing');
+  assert.equal(persisted.reservation_id, null);
+  assert.equal(persisted.attempt_id, second.claim.attemptId);
+  assert.equal(await idempotency.completeDotHttpRequest(second.claim, 200, { ok: true, current: true }), true);
 });
 
 test('PostgreSQL: failed_safe retries once and then blocks the duplicate', async () => {

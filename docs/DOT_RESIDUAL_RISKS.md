@@ -11,7 +11,7 @@
 |---|---|---|---|---|
 | R1 | Histórico de conversa em memória por processo | **média** | contexto inconsistente entre instâncias/reinícios; memória cresce sem TTL | condicional (bloqueante se houver > 1 instância) |
 | R2 | Contadores/métricas por processo zeram no deploy | **baixa** | dashboards e alertas sem continuidade | não (operacional) |
-| R3 | `/api/dot/explain` sem idempotência HTTP | **média** | retry pode gerar nova reserva e nova chamada ao provedor | condicional (bloqueante se exposto a cliente com retry) |
+| R3 | `/api/dot/explain` sem integração cliente/validação final | **média** | contrato novo ainda precisa de validação e adoção pelo cliente | sim, antes de expor a rota |
 | R4 | Service worker cacheia APIs por URL | **baixa/média** | dados antigos de painel/assinatura offline; não afeta o Dot | não (fora do escopo do Dot) |
 | R5 | Consistência financeira em crash/reinício | **alta** | reserva ambígua exige reconciliação manual; orçamento temporariamente preso | sim, com runbook + alertas antes de ligar o Dot |
 | R6 | Build de produção atual difere do PR | **alta para ativação** | scheduler/worker já ativos no build antigo; `/api/dot/status` público 200 | sim (confirmar branch/autoDeploy e deploy controlado) |
@@ -46,20 +46,32 @@ histórico só existe se houver scraper externo.
 scraper externo, e aceitar que séries históricas são responsabilidade da
 plataforma. Sem correção de código.
 
-## R3 — `/api/dot/explain` sem idempotência HTTP
+## R3 — `/api/dot/explain`: idempotência implementada, validação pendente
 
-**Evidência:** apenas `/api/dot/chat` chama `claimDotHttpRequest`; `explain`
-cria reserva e chama o provedor sem chave de idempotência.
+**Evidência:** `/api/dot/explain` chama `claimDotHttpRequest` antes de
+carregar contexto ou criar reserva, exige chave em produção, inclui
+`response_text` no hash do payload, reproduz respostas concluídas e bloqueia
+chaves em processamento/ambíguas/expiradas. A reserva é vinculada ao claim
+antes da marcação de envio. Falhas de vínculo ou marcação antes do provedor
+tentam liberar a reserva com prova de não envio; falhas após possível chamada
+retornam 503 e mantêm a chave bloqueada. A rota também respeita
+`FILTRA_DOT_ENABLED` e retorna 404 em produção quando a flag está desligada.
 
-**Impacto:** um retry do cliente (ou duplo clique) pode gerar duas reservas e
-duas chamadas ao provedor para a mesma explicação — cobrança dupla real. O
-ledger impede consumo duplicado da **mesma** reserva, mas não deduplica
-requisições distintas. O frontend de conversa não usa `explain`.
+**Cobertura adicionada em** `tests/dotChatLedger.http.test.ts`: replay sem
+segunda chamada/débito, chave reutilizada com payload diferente, concorrência
+com mesma chave, resultado ambíguo sem retry, falha de vínculo e falha ao
+marcar envio. Os testes usam provedor simulado e não fazem chamadas externas.
 
-**Recomendação:** antes de expor o endpoint a clientes com retry, aplicar o
-mesmo contrato de chave do chat (recomendado) ou documentar formalmente que o
-cliente não deve repetir. Bloqueante se houver consumo externo; não bloqueante
-para o piloto da conversa.
+**Impacto residual:** os testes foram adicionados ao repositório, mas ainda
+não foram executados nem aprovados por CI no HEAD atual. O frontend de
+conversa não chama `explain`; qualquer cliente futuro precisa enviar a mesma
+chave e payload em retries. Falhas de persistência após possível chamada
+externa continuam conservadoramente ambíguas e exigem reconciliação manual.
+
+**Recomendação:** executar a suíte HTTP, build/typecheck, testes PostgreSQL
+multi-processo e CI no HEAD final; integrar o cabeçalho no cliente que vier a
+usar `explain`. Manter o endpoint indisponível a clientes com retry até essa
+validação.
 
 ## R4 — Service worker e cache de APIs
 
@@ -90,13 +102,16 @@ logout/troca de tenant e remover APIs sensíveis da allowlist. Não bloqueia o D
   processar com prova registrada;
 - sweep de reservas vencidas é **preguiçoso por tenant** (no próximo
   `reserve`/snapshot), não global no boot;
-- shutdown gracioso drena worker/scheduler (`stopDotAgentWorkerAndDrain`,
-  `stopDotMonitorScheduler`).
+- fila HTTP de reconciliação exclusiva de operador, com metadados mínimos e associação à reserva; settle/release nunca reabre a chave idempotente;
+- auditoria da decisão administrativa inserida na mesma transação da mutação financeira; falha de auditoria reverte ledger e consumo;
+- shutdown gracioso drena worker/scheduler (`stopDotAgentWorkerAndDrain`, `stopDotMonitorScheduler`).
 
 **Impacto residual:** após crash entre envio ao provedor e liquidação, a reserva
 fica ambígua e o orçamento comprometido até intervenção manual; a chamada já
-pode ter sido cobrada pelo provedor. Não há reconciliação automática nem alerta
-ativo hoje.
+pode ter sido cobrada pelo provedor. A rota administrativa permite reconciliar
+a reserva vinculada com evidência operacional e auditoria transacional, mas não
+consulta o provedor automaticamente nem substitui o julgamento do operador.
+Não há reconciliação automática nem alerta ativo hoje.
 
 **Recomendação (bloqueante antes de ligar o Dot):**
 
@@ -122,15 +137,7 @@ inexistentes, timers parados) não vale em produção. A causa do restart de
 fazer o primeiro deploy com as flags do Dot ausentes e validar
 `/api/dot/status` = 403/404 e `/api/health.dot` presente.
 
-**Atualização da Missão 4 (auditoria operacional):** o build em produção
-corresponde ao **master `feac3cd`** (fingerprint de CORS pós-#147), e a análise
-do boot + o estado observado mostram **`FILTRA_DOT_ENABLED=1` e
-`FILTRA_DOT_FORCE_ON=1`** — os timers estão ativos **por configuração**, não por
-bypass. Eles não chamam provedores e processam 0 empresas; o risco financeiro
-residual vem do chat HTTP sem ledger durável/idempotência. Detalhes, matriz de
-cenários e decisão em `docs/DOT_PRODUCTION_TIMER_AUDIT.md`. O PR #144 ganhou
-barreiras `dotSchedulerRuntimeEnabled`/`dotWorkerRuntimeEnabled` e 6 testes de
-regressão (`tests/dotTimerGates.test.ts`).
+**Atualização operacional (12/11/2026):** a verificação mais recente do serviço Render `filtra-ia-api` registrou o plano Free, uma instância e o deploy ativo `feac3cd6e3ccd757c81a706b45e594d6be22a5cd` (PR #147). As flags de contenção do Dot foram verificadas como `FILTRA_DOT_ENABLED=0` e `FILTRA_DOT_FORCE_ON=0`. Os PRs #144/#149 não foram implantados. Esta atualização substitui as afirmações anteriores deste documento sobre flags `1/1` e sobre o risco de produção então descrito. Revalidar o serviço e as flags antes de qualquer ativação; este documento não é uma leitura em tempo real do Render.
 
 ## Itens avaliados e considerados aceitáveis
 

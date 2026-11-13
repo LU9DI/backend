@@ -7,6 +7,7 @@
  * autorização de outras rotas: quem autoriza é a sessão emitida aqui.
  */
 import type { Express, Request, Response } from 'express';
+import { autenticarToken, isAdminUser, type AuthRequest } from '../lib/auth.js';
 import rateLimit from 'express-rate-limit';
 import { resolveDotGate, type DotGateResult } from '../services/dotAccessGate.js';
 import {
@@ -28,9 +29,11 @@ import { clientIp, writeAudit } from '../lib/auditLog.js';
 import { getDb } from '../lib/db.js';
 import {
   getDotBudgetSnapshot,
+  getDotReservation,
   listOpenDotReservations,
   reconcileDotBudget,
 } from '../services/dotLedger.js';
+import { getAmbiguousDotHttpRequest, listAmbiguousDotHttpRequests } from '../services/dotHttpIdempotency.js';
 
 const unlockLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -46,6 +49,15 @@ const pinSetupLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { ok: false, error: 'Muitas tentativas. Aguarde alguns minutos.' },
+});
+
+// Limite próprio para operações de reconciliação auditadas por operador.
+const reconcileLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Muitas reconciliações. Aguarde alguns minutos.' },
 });
 
 function adminFail(res: Response, error: unknown) {
@@ -255,21 +267,139 @@ export function mountDotAdminRoutes(app: Express) {
     }
   });
 
-  // Reconciliação explícita de reservas abertas/ambíguas. Exige a SESSÃO
-  // administrativa do Dot (PIN) além do JWT do proprietário — mesma barreira
-  // das demais operações sensíveis. Sem sessão, o Dot continua desbloqueável
-  // só pelo PIN, nunca por esta rota.
+  // Reconciliação por proprietário de tenant foi desativada: o proprietário
+  // é parte interessada no próprio orçamento e não pode declarar o consumo.
+  // A consulta continua disponível em GET /api/dot/admin/budget.
   app.post('/api/dot/admin/budget/reconcile', async (req: Request, res: Response) => {
+    const gate = await resolveDotGate(req);
+    if (!gate.allowed) return denyGate(res, gate);
+    ensureOwner(gate);
+    return res.status(403).json({
+      ok: false,
+      error: 'A reconciliação do ledger é exclusiva de operador da plataforma.',
+      code: 'DOT_RECONCILE_PLATFORM_ADMIN_REQUIRED',
+    });
+  });
+
+  // Fila operacional de tentativas HTTP ambíguas. Retorna somente metadados
+  // mínimos; nunca expõe chave completa, hash completo, prompt ou resposta.
+  app.get('/api/admin/dot/http-idempotency', autenticarToken, reconcileLimiter, async (req: AuthRequest, res: Response) => {
     try {
-      const gate = await resolveDotGate(req);
-      if (!gate.allowed) return denyGate(res, gate);
-      ensureOwner(gate);
-      const empresaId = gate.empresaId as string;
-      await requireDotAdminSession(req, empresaId, gate.userId || null);
+      if (!isAdminUser(req.user)) {
+        return res.status(403).json({ ok: false, error: 'Somente operador da plataforma.', code: 'DOT_RECONCILE_PLATFORM_ADMIN_REQUIRED' });
+      }
+      const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 100));
+      const records = await listAmbiguousDotHttpRequests(limit);
+      const enriched = await Promise.all(records.map(async (record) => {
+        const reservationId = Number(record.reservation_id);
+        const reservation = Number.isSafeInteger(reservationId) && reservationId > 0
+          ? await getDotReservation(record.empresa_id, reservationId)
+          : null;
+        const reservationStatus = reservation?.status || null;
+        const reservationAmbiguous = Number(reservation?.ambiguous) === 1;
+        return {
+          id: record.id,
+          empresa_id: record.empresa_id,
+          endpoint: record.endpoint,
+          key_prefix: record.key_prefix,
+          request_hash_prefix: record.request_hash_prefix,
+          created_at: record.created_at,
+          updated_at: record.updated_at,
+          reservation_id: record.reservation_id,
+          reservation_status: reservationStatus,
+          reservation_ambiguous: reservationAmbiguous,
+          accounting_reconcilable: reservationStatus === 'pending' && reservationAmbiguous,
+          accounting_resolved: reservationStatus === 'settled' || reservationStatus === 'released',
+        };
+      }));
+      return res.json({ ok: true, records: enriched });
+    } catch (error) {
+      return adminFail(res, error);
+    }
+  });
+
+  // Reconcilia somente o ledger vinculado à tentativa ambígua. A chave HTTP
+  // permanece ambígua permanentemente: a decisão financeira NUNCA autoriza
+  // replay nem nova execução do provedor.
+  app.post('/api/admin/dot/http-idempotency/reconcile', autenticarToken, reconcileLimiter, async (req: AuthRequest, res: Response) => {
+    try {
+      if (!isAdminUser(req.user)) {
+        return res.status(403).json({ ok: false, error: 'Somente operador da plataforma.', code: 'DOT_RECONCILE_PLATFORM_ADMIN_REQUIRED' });
+      }
+      ensureHeader(req);
+      const id = Number(req.body?.idempotency_id);
+      if (!Number.isSafeInteger(id) || id <= 0) {
+        return res.status(400).json({ ok: false, error: 'idempotency_id inválido.', code: 'DOT_HTTP_RECONCILE_BAD_ID' });
+      }
+      const decision = String(req.body?.decision || '');
+      if (decision !== 'settle' && decision !== 'release') {
+        return res.status(400).json({ ok: false, error: "decision deve ser 'settle' ou 'release'.", code: 'DOT_HTTP_RECONCILE_BAD_DECISION' });
+      }
+      const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 500) : '';
+      if (reason.length < 10) {
+        return res.status(400).json({ ok: false, error: 'Informe a evidência/motivo operacional (mínimo de 10 caracteres).', code: 'DOT_HTTP_RECONCILE_REASON_REQUIRED' });
+      }
+      const record = await getAmbiguousDotHttpRequest(id);
+      if (!record) {
+        return res.status(404).json({ ok: false, error: 'Registro ambíguo não encontrado.', code: 'DOT_HTTP_RECONCILE_NOT_FOUND' });
+      }
+      const reservationId = Number(record.reservation_id);
+      if (!Number.isSafeInteger(reservationId) || reservationId <= 0) {
+        return res.status(409).json({ ok: false, error: 'Esta tentativa não possui reserva financeira vinculada; permanece bloqueada para execução e exige investigação manual.', code: 'DOT_HTTP_RECONCILE_NO_RESERVATION' });
+      }
+      if (decision === 'release' && req.body?.confirm_not_sent !== true) {
+        return res.status(400).json({ ok: false, error: 'release exige confirmação operacional de que o envio não ocorreu.', code: 'DOT_HTTP_RECONCILE_NOT_SENT_CONFIRMATION_REQUIRED' });
+      }
+      const tokens = decision === 'settle' ? Number(req.body?.tokens) : null;
+      if (decision === 'settle' && (!Number.isSafeInteger(tokens) || Number(tokens) <= 0)) {
+        return res.status(400).json({ ok: false, error: 'settle exige tokens reais inteiros maiores que zero.', code: 'DOT_HTTP_RECONCILE_BAD_TOKENS' });
+      }
+      const provider = typeof req.body?.provider === 'string' ? req.body.provider.slice(0, 20) : null;
+      const result = await reconcileDotBudget({
+        empresaId: record.empresa_id,
+        reservationId,
+        decision: decision as 'settle' | 'release',
+        tokens,
+        provider,
+        reason,
+        audit: {
+          action: 'dot.http_idempotency_reconciled',
+          actorUserId: req.user?.id || null,
+          actorRole: 'admin',
+          ip: clientIp(req),
+          userAgent: String(req.headers['user-agent'] || '').slice(0, 200),
+          detail: {
+            idempotency_id: id,
+            confirm_not_sent: decision === 'release' ? true : undefined,
+            idempotency_key_remains_blocked: true,
+          },
+        },
+      });
+      if (!result.ok) {
+        return res.status(409).json({ ok: false, error: result.reason || 'Reconciliação recusada.', code: 'DOT_HTTP_RECONCILE_REFUSED' });
+      }
+      return res.json({ ok: true, idempotency_key_remains_blocked: true, result });
+    } catch (error) {
+      return adminFail(res, error);
+    }
+  });
+
+  // Reconciliação controlada por operador da plataforma. O tenant e a decisão
+  // são explicitados no corpo; o ledger ainda valida estado/ambiguidade sob lock.
+  app.post('/api/admin/dot/budget/reconcile', autenticarToken, reconcileLimiter, async (req: AuthRequest, res: Response) => {
+    try {
+      if (!isAdminUser(req.user)) {
+        return res.status(403).json({ ok: false, error: 'Somente operador da plataforma.', code: 'DOT_RECONCILE_PLATFORM_ADMIN_REQUIRED' });
+      }
+      ensureHeader(req);
       const body = req.body || {};
+      const empresaId = typeof body?.empresa_id === 'string' ? body.empresa_id.trim() : '';
+      if (!empresaId || empresaId.length > 128) {
+        return res.status(400).json({ ok: false, error: 'empresa_id inválido.', code: 'DOT_RECONCILE_BAD_TENANT' });
+      }
       const reservationId = Number(body?.reservation_id);
       const decision = String(body?.decision || '');
-      if (!Number.isFinite(reservationId) || reservationId <= 0 || !Number.isInteger(reservationId)) {
+      if (!Number.isSafeInteger(reservationId) || reservationId <= 0) {
         return res.status(400).json({ ok: false, error: 'reservation_id inválido (inteiro positivo obrigatório).', code: 'DOT_RECONCILE_BAD_ID' });
       }
       if (decision !== 'settle' && decision !== 'release') {
@@ -277,26 +407,15 @@ export function mountDotAdminRoutes(app: Express) {
       }
       const tokensRaw = decision === 'settle' ? body?.tokens : undefined;
       const tokens = tokensRaw === undefined || tokensRaw === null ? null : Number(tokensRaw);
-      if (tokens !== null && (!Number.isFinite(tokens) || tokens < 0)) {
-        return res.status(400).json({ ok: false, error: 'tokens deve ser um número >= 0.', code: 'DOT_RECONCILE_BAD_TOKENS' });
+      if (decision === 'settle' && (!Number.isSafeInteger(Number(tokens)) || Number(tokens) <= 0)) {
+        return res.status(400).json({ ok: false, error: 'settle exige tokens inteiros maiores que zero.', code: 'DOT_RECONCILE_BAD_TOKENS' });
       }
       const reason = typeof body?.reason === 'string' ? body.reason.trim().slice(0, 500) : '';
       if (reason.length < 10) {
-        return res.status(400).json({
-          ok: false,
-          error: 'Informe o motivo operacional da reconciliação (mínimo de 10 caracteres).',
-          code: 'DOT_RECONCILE_REASON_REQUIRED',
-        });
+        return res.status(400).json({ ok: false, error: 'Informe o motivo operacional (mínimo de 10 caracteres).', code: 'DOT_RECONCILE_REASON_REQUIRED' });
       }
-      // "release" é uma declaração operacional de que a chamada não foi
-      // enviada/processada. Exigir confirmação explícita evita liberar por
-      // engano uma reserva que pode representar cobrança real do provedor.
       if (decision === 'release' && body?.confirm_not_sent !== true) {
-        return res.status(400).json({
-          ok: false,
-          error: 'Para liberar, confirme explicitamente que a chamada não foi enviada ao provedor.',
-          code: 'DOT_RECONCILE_NOT_SENT_CONFIRMATION_REQUIRED',
-        });
+        return res.status(400).json({ ok: false, error: 'Confirme que a chamada não foi enviada ao provedor.', code: 'DOT_RECONCILE_NOT_SENT_CONFIRMATION_REQUIRED' });
       }
       const provider = typeof body?.provider === 'string' ? body.provider.slice(0, 20) : null;
       const result = await reconcileDotBudget({
@@ -306,15 +425,14 @@ export function mountDotAdminRoutes(app: Express) {
         tokens,
         reason,
         provider,
-      });
-      await writeAudit(getDb(), {
-        action: 'dot.budget_reconciled',
-        actor_user_id: gate.userId || null,
-        empresa_id: empresaId,
-        result: result.ok ? 'ok' : 'error',
-        ip: clientIp(req),
-        user_agent: String(req.headers['user-agent'] || '').slice(0, 200),
-        detail: { reservation_id: reservationId, decision, reason, confirm_not_sent: decision === 'release' ? true : undefined, ok: result.ok },
+        audit: {
+          action: 'dot.budget_reconciled',
+          actorUserId: req.user?.id || null,
+          actorRole: 'admin',
+          ip: clientIp(req),
+          userAgent: String(req.headers['user-agent'] || '').slice(0, 200),
+          detail: { confirm_not_sent: decision === 'release' ? true : undefined },
+        },
       });
       if (!result.ok) {
         return res.status(409).json({ ok: false, error: result.reason || 'Reconciliação recusada.', code: 'DOT_RECONCILE_REFUSED' });
