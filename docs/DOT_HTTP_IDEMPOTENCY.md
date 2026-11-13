@@ -55,7 +55,7 @@ O estado `processing` encontrado após reinício ou expiração de lease não po
 9. Se houver falha comprovadamente anterior ao envio, marcar `failed_safe` e aplicar política explícita de retry seguro.
 10. Nunca devolver sucesso ao cliente se não foi possível persistir o resultado reproduzível. Falha de persistência após chamada externa é ambígua.
 
-A gravação de resposta e a transição para `completed` devem ser atômicas. Não remover registros enquanto a chave ainda puder ser reutilizada por retries do cliente; retenção e expurgo exigem janela formal documentada.
+A gravação de resposta e a transição para `completed` devem ser atômicas. A janela de replay da resposta é de 24 horas; após esse prazo, o backend apaga somente `response_json` e preserva indefinidamente a tombstone (`empresa_id`, `endpoint`, `idempotency_key`, `request_hash`, `status`, timestamps). Uma repetição da mesma chave/hash recebe HTTP 409 `DOT_IDEMPOTENCY_RESULT_EXPIRED`; hash diferente continua recebendo `DOT_IDEMPOTENCY_KEY_REUSED`. Nunca apagar tombstones `completed`, `ambiguous` ou `failed_safe` automaticamente: isso reabriria a chave e poderia duplicar execução.
 
 ## Contrato de resposta
 
@@ -63,7 +63,7 @@ A gravação de resposta e a transição para `completed` devem ser atômicas. N
 - Conflitos/in-flight/ambiguous usam códigos estáveis e mensagens que não revelem dados de outro tenant.
 - O corpo armazenado não pode conter segredos, credenciais ou dados de outro tenant. Aplicar o mesmo controle de acesso e sanitização da resposta original.
 
-## Testes de aceitação obrigatórios
+## Retenção e reconciliação operacional (estado atual)\n\n- `completed`: resposta reproduzível por 24 horas; depois, somente o corpo é apagado e a chave permanece terminal.\n- `failed_safe`: permanece registrada; retry é permitido somente pela transição condicional existente que registra prova de não envio.\n- `ambiguous`: permanece bloqueada e não é expurgada. **Ainda falta uma rota de reconciliação HTTP exclusiva de operador** que consulte evidências do provedor, vincule a decisão à reserva financeira quando existir e grave auditoria imutável. Até essa rota existir, não há procedimento HTTP automatizado para liberar/recuperar a chave ambígua; ela permanece bloqueada.\n\n## Testes de aceitação obrigatórios
 
 1. Duas chamadas concorrentes, mesma chave/hash: uma única chamada ao provedor e uma única reserva.
 2. Mesmo retry após conclusão: mesma resposta HTTP/JSON e nenhuma segunda chamada/reserva/linha `ai_usage`.
