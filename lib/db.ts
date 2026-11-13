@@ -156,7 +156,7 @@ export async function initDB(): Promise<Database> {
 
     const adminMail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
     const adminPass = process.env.ADMIN_PASSWORD || '';
-    if (adminMail && adminPass.length >= 12) {
+    if (adminMail) {
       const adminExiste = await created.get(
         'SELECT id, empresa_id FROM usuarios WHERE LOWER(TRIM(email)) = LOWER(TRIM(?))',
         [adminMail]
@@ -166,16 +166,16 @@ export async function initDB(): Promise<Database> {
           'ADMIN_EMAIL já pertence a uma conta de tenant. Por segurança, o backend não promoverá essa conta automaticamente; mova a identidade administrativa para um usuário dedicado com empresa_id=admin.'
         );
       }
-      if (!adminExiste) {
+      if (!adminExiste && adminPass.length >= 12) {
         const hash = await bcrypt.hash(adminPass, 12);
         await created.run(
           'INSERT INTO usuarios (id, cnpj, nome_funcionario, empresa_id, senha_hash, email) VALUES (?, ?, ?, ?, ?, ?)',
           [crypto.randomUUID(), '00000000000000', 'Admin', 'admin', hash, adminMail]
         );
         console.log(`🔑 Admin criado: ${adminMail}`);
+      } else if (!adminExiste && isProd && adminPass.length > 0 && adminPass.length < 12) {
+        console.warn('⚠️  ADMIN_PASSWORD curta (<12) — admin não será seedado automaticamente.');
       }
-    } else if (isProd && adminMail && adminPass.length > 0 && adminPass.length < 12) {
-      console.warn('⚠️  ADMIN_PASSWORD curta (<12) — admin não será seedado automaticamente.');
     }
 
     _db = created;
