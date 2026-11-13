@@ -25,13 +25,15 @@ export function buildCorsOptions(): CorsOptions {
     .split(',')
     .map((s) => s.trim().replace(/\/$/, ''))
     .filter(Boolean);
-  // Origins exatas dos dois frontends ativos no Render e do domínio público.
+  // Origins exatas dos dois frontends ativos no Render, do domínio público
+  // e do deployment Vercel de produção observado nos logs da API.
   // Não libera curingas nem previews temporários.
   const renderFrontendOrigins = [
     'https://filtra-ai-web-cloud.onrender.com',
     'https://filtra-ai-web-runtime.onrender.com',
     'https://filtraai.com',
     'https://www.filtraai.com',
+    'https://saas-reputacao-l4uo3uqrd-lu9di.vercel.app',
   ];
   const defaults = [process.env.APP_URL, process.env.FRONTEND_URL]
     .filter(Boolean)
