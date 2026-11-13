@@ -115,6 +115,82 @@ test('PostgreSQL: reconciliação exige ambiguidade e liquida tokens dentro da t
   assert.equal(Number(usage.t), 333);
 });
 
+
+test('PostgreSQL: falha na auditoria reverte consumo e liquidação da reconciliação', async () => {
+  await reset(EMPRESA);
+  const audit = await import('../lib/auditLog.js');
+  await audit.ensureAuditSchema(db);
+  const reserved = await ledger.reserveDotExecution({ empresaId: EMPRESA, plan: 'rei' });
+  assert.equal(reserved.ok, true);
+  const id = reserved.reservation!.id;
+  const ambiguous = await ledger.finalizeDotReservation({
+    empresaId: EMPRESA,
+    reservationId: id,
+    ambiguous: true,
+    ambiguousReason: 'resposta do provedor não confirmada',
+  });
+  assert.equal(ambiguous.ok, true);
+
+  const usageBefore = await db.get(
+    'SELECT COUNT(*) AS c FROM ai_usage WHERE empresa_id = ? AND feature = ?',
+    [EMPRESA, 'dot'],
+  );
+  const auditBefore = await db.get(
+    "SELECT COUNT(*) AS c FROM audit_logs WHERE empresa_id = ? AND action = 'dot.http_idempotency_reconciled'",
+    [EMPRESA],
+  );
+
+  await db.run(`
+    CREATE OR REPLACE FUNCTION fail_dot_reconcile_audit_test()
+    RETURNS trigger AS $$
+    BEGIN
+      RAISE EXCEPTION 'simulated audit persistence failure';
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+  await db.run(`
+    CREATE TRIGGER fail_dot_reconcile_audit_test
+    BEFORE INSERT ON audit_logs
+    FOR EACH ROW
+    WHEN (NEW.action = 'dot.http_idempotency_reconciled')
+    EXECUTE FUNCTION fail_dot_reconcile_audit_test()
+  `);
+
+  try {
+    const result = await ledger.reconcileDotBudget({
+      empresaId: EMPRESA,
+      reservationId: id,
+      decision: 'settle',
+      tokens: 456,
+      provider: 'groq',
+      reason: 'uso confirmado no extrato do provedor',
+      audit: {
+        action: 'dot.http_idempotency_reconciled',
+        actorUserId: 'platform-admin-test',
+        actorRole: 'admin',
+        ip: '127.0.0.1',
+        userAgent: 'dot-ledger-pg-test',
+        detail: { idempotency_id: 123, idempotency_key_remains_blocked: true },
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.equal((await ledger.getDotReservation(EMPRESA, id))?.status, 'pending');
+    const usageAfter = await db.get(
+      'SELECT COUNT(*) AS c FROM ai_usage WHERE empresa_id = ? AND feature = ?',
+      [EMPRESA, 'dot'],
+    );
+    assert.equal(Number(usageAfter.c), Number(usageBefore.c));
+    const auditAfter = await db.get(
+      "SELECT COUNT(*) AS c FROM audit_logs WHERE empresa_id = ? AND action = 'dot.http_idempotency_reconciled'",
+      [EMPRESA],
+    );
+    assert.equal(Number(auditAfter.c), Number(auditBefore.c));
+  } finally {
+    await db.run('DROP TRIGGER IF EXISTS fail_dot_reconcile_audit_test ON audit_logs');
+    await db.run('DROP FUNCTION IF EXISTS fail_dot_reconcile_audit_test()');
+  }
+});
+
 test('PostgreSQL: reserva e finalização gravam consumo real e liberam a reserva', async () => {
   await reset(EMPRESA);
   const reserved = await ledger.reserveDotExecution({ empresaId: EMPRESA, plan: 'rei' });
