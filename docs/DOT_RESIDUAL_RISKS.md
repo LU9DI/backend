@@ -48,24 +48,24 @@ plataforma. Sem correção de código.
 
 ## R3 — `/api/dot/explain` sem idempotência HTTP
 
-**Evidência:** apenas `/api/dot/chat` chama `claimDotHttpRequest`; `explain`
-cria reserva e chama o provedor sem chave de idempotência. O handler foi
-endurecido para liberar reserva quando `markDotReservationSent` falha antes
-do envio e para retornar 503 (sem apresentar sucesso) quando a liquidação
-falha após a resposta do provedor; tenta registrar a reserva como ambígua com
-os tokens reais e reconhece uma liquidação já confirmada.
+**Evidência:** `/api/dot/explain` agora chama `claimDotHttpRequest` antes
+de carregar contexto ou criar reserva, exige chave em produção, inclui
+`response_text` no hash do payload, reproduz respostas concluídas e bloqueia
+chaves em processamento/ambíguas/expiradas. A reserva é vinculada ao claim
+antes da marcação de envio. O handler também libera a reserva se a marcação
+falhar antes do envio e retorna 503 (sem apresentar sucesso) quando a
+liquidação falha após a resposta do provedor.
 
-**Impacto residual:** um retry do cliente (ou duplo clique) ainda pode gerar
-duas reservas e duas chamadas ao provedor para a mesma explicação — cobrança
-dupla real. O ledger impede consumo duplicado da **mesma** reserva, mas não
-deduplica requisições distintas. O frontend de conversa não usa `explain`.
-A proteção contra resposta HTTP falsa não substitui a idempotência da
-requisição.
+**Impacto residual:** a implementação foi registrada, mas ainda não foi
+validada por testes HTTP de integração, typecheck ou CI no HEAD atual. A
+idempotência depende da disponibilidade do banco; falhas de persistência
+após possível chamada externa permanecem conservadoramente ambíguas. O
+frontend de conversa não usa `explain`, portanto o contrato do cliente
+dessa rota ainda precisa ser integrado antes de sua exposição.
 
-**Recomendação:** antes de expor o endpoint a clientes com retry, aplicar o
-mesmo contrato de chave do chat (recomendado) ou desabilitar a rota para
-clientes até essa implementação. Bloqueante se houver consumo externo; não
-bloqueante para o piloto da conversa enquanto a rota não for usada.
+**Recomendação:** adicionar testes cobrindo replay, chave reutilizada com
+payload diferente, concorrência, timeout ambíguo, falha de vínculo da reserva
+e liquidação falha; executar typecheck e CI antes de qualquer ativação.
 
 ## R4 — Service worker e cache de APIs
 
