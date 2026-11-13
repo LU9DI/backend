@@ -22,6 +22,7 @@ export type JwtPayload = {
   nome_funcionario: string;
   empresa_id: string;
   role?: string;
+  platform_admin?: boolean;
   kid?: string;
 };
 

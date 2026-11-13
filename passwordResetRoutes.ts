@@ -25,12 +25,7 @@ function emailValido(email: string): boolean {
 }
 
 function isAdminAccount(usuario: any): boolean {
-  if (!usuario) return false;
-  const adminMail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
-  const email = String(usuario.email || '').trim().toLowerCase();
-  if (usuario.empresa_id === 'admin') return true;
-  if (adminMail && email === adminMail) return true;
-  return false;
+  return usuario?.empresa_id === 'admin';
 }
 
 export async function invalidatePasswordResetTokens(

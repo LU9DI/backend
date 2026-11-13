@@ -50,10 +50,7 @@ const adminResetLimiter = rateLimit({
 });
 
 export function isAdminUsuario(usuario: any): boolean {
-  if (!usuario) return false;
-  const email = String(usuario.email || '').trim().toLowerCase();
-  const adm = adminEmail();
-  return usuario.empresa_id === 'admin' || (adm !== '' && email === adm);
+  return usuario?.empresa_id === 'admin';
 }
 
 export function mountAdminPasswordResetRoutes(app: Express, getDb: () => Database) {

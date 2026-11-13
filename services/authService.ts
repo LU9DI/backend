@@ -126,9 +126,6 @@ export async function loginEmpresa(
     id: usuario.id,
     nome_funcionario: usuario.nome_funcionario,
     empresa_id: usuario.empresa_id,
-    role:
-      usuario.role ||
-      (String(usuario.empresa_id) === 'admin' ? 'admin' : 'empresa'),
   };
   const token = signAccessToken(tokenPayload);
   setAuthCookie(res, token);

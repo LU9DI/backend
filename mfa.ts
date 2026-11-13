@@ -111,8 +111,7 @@ export async function ensureMfaColumns(db: Database): Promise<void> {
 }
 
 function isAdminUser(u: any): boolean {
-  const adminMail = (process.env.ADMIN_EMAIL || 'admin@seusaas.com').trim().toLowerCase();
-  return u?.empresa_id === 'admin' || String(u?.email || '').trim().toLowerCase() === adminMail;
+  return u?.empresa_id === 'admin';
 }
 
 const mfaLimiter = rateLimit({
@@ -306,6 +305,7 @@ export function mountMfaRoutes(
           nome_funcionario: usuario.nome_funcionario,
           empresa_id: usuario.empresa_id,
           role: 'admin',
+          platform_admin: true,
           mfa: true,
         },
         opts.JWT_SECRET,
