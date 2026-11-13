@@ -104,6 +104,7 @@ suite('Dot HTTP idempotency — claim, replay and ambiguity', () => {
       'completed_at',
       'expires_at',
       'reservation_id',
+      'attempt_id',
     ]) {
       assert.ok(columns.includes(required), `coluna obrigatória ausente: ${required}`);
     }
@@ -288,6 +289,39 @@ suite('Dot HTTP idempotency — claim, replay and ambiguity', () => {
     if (retried.kind !== 'claimed') return;
     assert.equal((await row(input.key)).status, 'processing');
     assert.equal((await idempotency.claimDotHttpRequest(input)).kind, 'in_progress');
+  });
+
+  test('late callbacks from failed_safe attempt cannot mutate its retry generation', async () => {
+    const input = {
+      empresaId,
+      endpoint,
+      key: 'dot-chat-key-generation-race-01',
+      payload: { message: 'Retry generation', session_id: 'session-generation' },
+    };
+    const first = await idempotency.claimDotHttpRequest(input);
+    assert.equal(first.kind, 'claimed');
+    if (first.kind !== 'claimed') return;
+
+    await idempotency.markDotHttpRequestFailedSafe(first.claim);
+    const second = await idempotency.claimDotHttpRequest(input);
+    assert.equal(second.kind, 'claimed');
+    if (second.kind !== 'claimed') return;
+
+    // Delayed callbacks from the first request must not mutate the retry.
+    assert.equal(await idempotency.completeDotHttpRequest(first.claim, 200, { ok: true, source: 'stale' }), false);
+    await idempotency.markDotHttpRequestAmbiguous(first.claim);
+    await idempotency.markDotHttpRequestFailedSafe(first.claim);
+    assert.equal(await idempotency.attachDotHttpReservation(first.claim, 987654), false);
+
+    const persisted = await row(input.key);
+    assert.equal(persisted.status, 'processing');
+    assert.equal(persisted.reservation_id, null);
+    assert.equal(persisted.attempt_id, second.claim.attemptId);
+
+    assert.equal(await idempotency.completeDotHttpRequest(second.claim, 200, { ok: true, source: 'current' }), true);
+    const replay = await idempotency.claimDotHttpRequest(input);
+    assert.equal(replay.kind, 'replay');
+    if (replay.kind === 'replay') assert.deepEqual(replay.body, { ok: true, source: 'current' });
   });
 
   test('multi-tenant isolation: the same key in another empresa is independent', async () => {
