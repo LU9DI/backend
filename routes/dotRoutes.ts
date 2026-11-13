@@ -28,6 +28,7 @@ import {
   dotResponseTokenLimit,
   emitDotBudgetAlert,
   finalizeDotReservation,
+  getDotReservation,
   getDotBudgetSnapshot,
   listOpenDotReservations,
   markDotReservationSent,
@@ -1145,17 +1146,31 @@ Entregue uma resposta completa dentro desse orçamento. Priorize, nesta ordem: c
             provider: result.provider,
             ambiguousReason: 'Resposta recebida do provedor, mas a liquidação do consumo falhou: ' + String(finalized.reason || 'erro desconhecido').slice(0, 300),
           });
-          incCounter('dot_ledger_finalize_failed');
-          logEvent('error', 'dot_ledger_finalize_failed', {
-            reason: finalized.reason,
-            ambiguity_recorded: ambiguity.ok && Number(ambiguity.reservation?.ambiguous) === 1,
-          });
-          console.error('[dot-ledger] finalização falhou; resposta não será concluída como sucesso idempotente:', finalized.reason);
-          return res.status(503).json({
-            ok: false,
-            error: 'A resposta foi processada, mas o registro seguro do consumo está pendente de reconciliação. Não reenvie esta mensagem.',
-            code: 'DOT_LEDGER_FINALIZE_PENDING_RECONCILIATION',
-          });
+          // A primeira transação pode ter sido COMMITada mesmo que a
+          // confirmação ao chamador tenha falhado. finalizeDotReservation é
+          // idempotente: a segunda chamada devolve duplicate=true quando já
+          // liquidada. Nesse caso, não deixe a chave HTTP ambígua sem motivo.
+          const settled = ambiguity.reservation?.status === 'settled'
+            ? ambiguity.reservation
+            : await getDotReservation(companyId, activeReservation.id).catch(() => null);
+          if (settled?.status === 'settled') {
+            logEvent('warn', 'dot_ledger_finalize_ack_recovered', {
+              reservation_id: activeReservation.id,
+              provider: result.provider,
+            });
+          } else {
+            incCounter('dot_ledger_finalize_failed');
+            logEvent('error', 'dot_ledger_finalize_failed', {
+              reason: finalized.reason,
+              ambiguity_recorded: ambiguity.ok && Number(ambiguity.reservation?.ambiguous) === 1,
+            });
+            console.error('[dot-ledger] finalização falhou; resposta não será concluída como sucesso idempotente:', finalized.reason);
+            return res.status(503).json({
+              ok: false,
+              error: 'A resposta foi processada, mas o registro seguro do consumo está pendente de reconciliação. Não reenvie esta mensagem.',
+              code: 'DOT_LEDGER_FINALIZE_PENDING_RECONCILIATION',
+            });
+          }
         }
       }
       incCounter('dot_chat_completed');
