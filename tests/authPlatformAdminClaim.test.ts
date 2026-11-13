@@ -25,11 +25,11 @@ test('platform admin claim is accepted only when explicitly present in signed pr
 
 test('reserved platform tenant remains an admin identity', () => {
   process.env.ADMIN_EMAIL = 'platform@example.test';
-  assert.equal(isPlatformAdminPrincipal({ id: 'admin-user', empresa_id: 'admin', role: 'empresa' }), true);
+  assert.equal(isPlatformAdminPrincipal({ empresa_id: 'admin', role: 'empresa' }), true);
 });
 
 test('configured platform administrator email is recognized for database-backed checks', () => {
   process.env.ADMIN_EMAIL = 'platform@example.test';
-  assert.equal(isAdminUser({ id: 'admin-user', empresa_id: 'legacy-admin-tenant', email: 'PLATFORM@example.test' }), true);
-  assert.equal(isAdminUser({ id: 'tenant-user', empresa_id: 'tenant-a', email: 'user@example.test', role: 'admin' }), false);
+  assert.equal(isAdminUser({ empresa_id: 'legacy-admin-tenant', email: 'PLATFORM@example.test' }), true);
+  assert.equal(isAdminUser({ empresa_id: 'tenant-a', email: 'user@example.test', role: 'admin' }), false);
 });
