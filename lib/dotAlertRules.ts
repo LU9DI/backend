@@ -202,12 +202,21 @@ const RULES: Rule[] = [
     evaluate: (ctx) => {
       const entry = cfg(ctx, 'A3');
       const delta = deltaSum(ctx, Number(entry.window_seconds), ['dot_ledger_finalize_error']);
-      const pending = numberOrNull(at(ctx.cur.metrics, 'dot.pending_sent_over_grace')) ?? 0;
+      const pendingMetric = at(ctx.cur.metrics, 'dot.pending_sent_over_grace');
+      const pending = numberOrNull(pendingMetric);
+      // Campo ausente = API antiga (compatibilidade); null/inválido explícito =
+      // a consulta da gauge falhou, portanto não pode ser tratado como zero.
+      const gaugeUnavailable = pendingMetric !== undefined && pending === null;
       const firedByCounter = delta !== null && delta > Number(entry.threshold);
-      if (firedByCounter || pending > 0) {
-        return hit('A3', entry, firedByCounter ? (delta as number) : pending, Number(entry.threshold),
-          'Liquidação falhou ou há reserva enviada além da carência',
-          'Inspecionar dot_budget_reservations e executar a reconciliação manual.');
+      if (firedByCounter || gaugeUnavailable || (pending !== null && pending > 0)) {
+        const value = firedByCounter
+          ? (delta as number)
+          : gaugeUnavailable ? 'gauge_unavailable' : (pending as number);
+        return hit('A3', entry, value, Number(entry.threshold),
+          gaugeUnavailable
+            ? 'Gauge de reservas enviadas indisponível; não foi possível verificar a divergência'
+            : 'Liquidação falhou ou há reserva enviada além da carência',
+          'Verificar /api/metrics e dot_budget_reservations; reconciliar manualmente se necessário.');
       }
       return null;
     },
