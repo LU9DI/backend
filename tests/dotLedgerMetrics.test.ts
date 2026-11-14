@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { countPendingSentOverGrace } from '../lib/dotLedgerMetrics.js';
 
-test('conta apenas reservas pending enviadas, não ambíguas e além da carência', async () => {
+test('conta reservas pending enviadas além da carência, inclusive as já marcadas ambíguas', async () => {
   const now = Date.parse('2026-11-13T12:00:00.000Z');
   let query = '';
   let params: unknown[] = [];
@@ -18,7 +18,7 @@ test('conta apenas reservas pending enviadas, não ambíguas e além da carênci
 
   assert.equal(count, 4);
   assert.match(query, /status = 'pending'/);
-  assert.match(query, /ambiguous = 0/);
+  assert.doesNotMatch(query, /ambiguous = 0/);
   assert.match(query, /sent_at IS NOT NULL/);
   assert.deepEqual(params, [
     '2026-11-13T12:00:00.000Z',
