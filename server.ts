@@ -15,6 +15,7 @@ import { buildCorsOptions } from './lib/cors.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import { requestIdMiddleware, securityHeaders } from './middleware/security.js';
 import { latencyMiddleware, getHttpMetrics, getCounters } from './lib/metrics.js';
+import { countPendingSentOverGrace } from './lib/dotLedgerMetrics.js';
 import { runWithObservability, logEvent } from './lib/observability.js';
 import { mountTrialRoutes } from './routes/trialRoutes.js';
 import { mountLeadRoutes } from './routes/leadRoutes.js';
@@ -241,7 +242,7 @@ app.get('/api/health', async (_req, res) => {
   res.status(dbPing.ok ? 200 : 503).json(body);
 });
 
-app.get('/api/metrics', (req, res) => {
+app.get('/api/metrics', async (req, res) => {
   if (isProductionRuntime()) {
     const secret = (process.env.METRICS_TOKEN || process.env.JOBS_SECRET || '').trim();
     const got = String(req.headers['x-metrics-token'] || req.headers['x-jobs-secret'] || '');
@@ -258,6 +259,7 @@ app.get('/api/metrics', (req, res) => {
     dot: {
       enabled: dotRuntimeEnabled(),
       ledger_ready: dotLedgerReady,
+      pending_sent_over_grace: await countPendingSentOverGrace(getDb()),
       scheduler: getDotSchedulerStatus(),
       agent_worker: getDotAgentWorkerStatus(),
     },

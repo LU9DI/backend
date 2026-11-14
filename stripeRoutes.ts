@@ -309,7 +309,8 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
     try {
       if (!stripeConfigured()) {
         return res.status(503).json({
-          error: 'Pagamentos não configurados (STRIPE_SECRET_KEY).',
+          error: 'Pagamentos não configurados. O checkout de cartão está temporariamente indisponível.',
+          code: 'PAYMENTS_NOT_CONFIGURED',
         });
       }
 
@@ -352,7 +353,10 @@ export function mountStripeRoutes(app: Express, getDb: () => Database) {
   app.post('/api/billing-portal', autenticarToken, async (req: AuthRequest, res: Response) => {
     try {
       if (!stripeConfigured()) {
-        return res.status(503).json({ error: 'Pagamentos não configurados.' });
+        return res.status(503).json({
+          error: 'Pagamentos não configurados. O portal de pagamento está temporariamente indisponível.',
+          code: 'PAYMENTS_NOT_CONFIGURED',
+        });
       }
       const empresaId = String(req.body.empresa_id || '').trim();
       if (!empresaId) return res.status(400).json({ error: 'empresa_id obrigatório.' });
