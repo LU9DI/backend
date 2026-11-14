@@ -241,7 +241,32 @@ app.get('/api/health', async (_req, res) => {
   res.status(dbPing.ok ? 200 : 503).json(body);
 });
 
-app.get('/api/metrics', (req, res) => {
+/**
+ * Gauge read-only: reservas enviadas ao provedor que ultrapassaram a carência.
+ * Usa exatamente os predicados do sweep do ledger; não altera reservas.
+ */
+async function getPendingSentOverGraceMetric(): Promise<number | null> {
+  if (!dotLedgerReady) return null;
+  const configuredGrace = Number(process.env.DOT_SENT_GRACE_MS || 10 * 60_000);
+  const graceMs = Number.isFinite(configuredGrace) ? Math.max(0, configuredGrace) : 10 * 60_000;
+  const now = new Date().toISOString();
+  const graceCutoff = new Date(Date.now() - graceMs).toISOString();
+  try {
+    const row = await getDb().get(
+      `SELECT COUNT(*) AS c FROM dot_budget_reservations
+        WHERE status = 'pending' AND ambiguous = 0 AND sent_at IS NOT NULL
+          AND expires_at <= ? AND sent_at <= ?`,
+      [now, graceCutoff],
+    );
+    const count = Number(row?.c);
+    return Number.isFinite(count) ? count : null;
+  } catch {
+    // Métrica indisponível não deve derrubar /api/metrics nem expor erro interno.
+    return null;
+  }
+}
+
+app.get('/api/metrics', async (req, res) => {
   if (isProductionRuntime()) {
     const secret = (process.env.METRICS_TOKEN || process.env.JOBS_SECRET || '').trim();
     const got = String(req.headers['x-metrics-token'] || req.headers['x-jobs-secret'] || '');
@@ -258,6 +283,7 @@ app.get('/api/metrics', (req, res) => {
     dot: {
       enabled: dotRuntimeEnabled(),
       ledger_ready: dotLedgerReady,
+      pending_sent_over_grace: await getPendingSentOverGraceMetric(),
       scheduler: getDotSchedulerStatus(),
       agent_worker: getDotAgentWorkerStatus(),
     },
