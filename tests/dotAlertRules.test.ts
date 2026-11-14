@@ -103,6 +103,18 @@ test('A3 dispara com reserva enviada além da carência (campo opcional)', () =>
   assert.ok(ids(run(null, cur)).includes('A3'));
 });
 
+test('A3 não trata gauge explicitamente null como zero', () => {
+  const cur = snapshot(T0, { dot: { pending_sent_over_grace: null } });
+  const hit = run(null, cur).find((item) => item.id === 'A3');
+  assert.ok(hit, 'gauge indisponível deve gerar sinal operacional');
+  assert.equal(hit.value, 'gauge_unavailable');
+});
+
+test('A3 mantém compatibilidade quando a API antiga não expõe a gauge', () => {
+  const cur = snapshot(T0, { dot: { enabled: false } });
+  assert.ok(!ids(run(null, cur)).includes('A3'));
+});
+
 test('A4 dispara acima de 10 orçamentos excedidos na janela', () => {
   const prev = snapshot(T0 - HOUR, { counters: { dot_budget_exceeded: 1 } });
   const cur = snapshot(T0, { counters: { dot_budget_exceeded: 12 } });
