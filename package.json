@@ -34,7 +34,7 @@
     "nodemailer": "^10.0.1",
     "pg": "^8.23.1",
     "tsx": "^4.23.15",
-    "web-push": "^3.6.7",
+    "web-push": "^4.0.0",
     "zod": "^4.1.0"
   },
   "devDependencies": {
